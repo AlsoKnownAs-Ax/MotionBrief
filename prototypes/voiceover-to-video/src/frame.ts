@@ -74,7 +74,8 @@ export function iconSvg(name: string): string | null {
   if (!file || !existsSync(file)) return null;
   let svg = readFileSync(file, "utf8").replace(/<!--[\s\S]*?-->/g, "").trim();
   if (set === "brand") svg = svg.replace("<svg ", '<svg fill="currentColor" ');
-  return svg.replace(/\s(width|height|class)="[^"]*"/g, "");
+  // strip sizing/class from the root <svg> tag only (inner <rect width=..> must keep theirs)
+  return svg.replace(/^<svg\b[^>]*>/, (tag) => tag.replace(/\s(width|height|class)="[^"]*"/g, ""));
 }
 // <i data-icon="lucide:server" id=".." class=".." style=".."></i>  ->  inline <svg class="mb-icon ..">
 export function inlineIcons(html: string): { html: string; errors: string[] } {

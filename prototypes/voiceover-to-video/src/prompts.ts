@@ -67,7 +67,8 @@ THE CONTRACT (checked automatically; failures come back to you):
 1. Every Storyboard element exists in the DOM with id "<sceneId>-<elementId>" (e.g. s03-origin), is clearly arriving (effective opacity ≥ 0.3, inside the frame, non-zero size) by its anchor + 0.1 s and stays visible, and is NOT visible before its anchor − 0.3 s. MB.reveal already starts 50 ms early so it lands on the word. Use at("<sceneId>-<elementId>") for its reveal time. Never write absolute seconds for a Storyboard element.
 2. Your JS runs with these in scope: tl (the paused GSAP timeline to add to), at(id) (seconds, relative to this unit's start), S (S.dur = unit length in s, S.words = [[word, seconds], ...] for extra word-sync, S.sceneStarts = {sceneId: seconds}). Build synchronously. Do not create or register another timeline.
 3. Seek-safe GSAP only: entrances with fromTo (or the MB helpers); no repeat/yoyo, no Math.random, no Date, no CSS transitions or @keyframes, no setTimeout. Never tween display/visibility. No exit animations — our Transitions are the exit. Don't put a CSS transform on an element you animate with GSAP (use fromTo from-values instead). Don't use the class name "clip". Don't style #root.
-4. No narration sentences as on-screen text. Copy comes from the Storyboard content.
+4. Every line that connects two elements (edges, arrows, leader lines to callouts, return paths) is an SVG <path> placed with MB.connect — never hand-computed coordinates; hand-placed lines end up detached from their nodes. Labels for a connector sit next to its midpoint.
+5. No narration sentences as on-screen text. Copy comes from the Storyboard content.
 
 HELPERS (window.MB — prefer them):
 - MB.reveal(tl, target, t, style, {duration, stagger, ease, from}) — style: rise|drop|left|right|pop|fade|blur|wipe.
