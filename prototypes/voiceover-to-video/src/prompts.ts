@@ -68,7 +68,8 @@ THE CONTRACT (checked automatically; failures come back to you):
 2. Your JS runs with these in scope: tl (the paused GSAP timeline to add to), at(id) (seconds, relative to this unit's start), S (S.dur = unit length in s, S.words = [[word, seconds], ...] for extra word-sync, S.sceneStarts = {sceneId: seconds}). Build synchronously. Do not create or register another timeline.
 3. Seek-safe GSAP only: entrances with fromTo (or the MB helpers); no repeat/yoyo, no Math.random, no Date, no CSS transitions or @keyframes, no setTimeout. Never tween display/visibility. No exit animations — our Transitions are the exit. Don't put a CSS transform on an element you animate with GSAP (use fromTo from-values instead). Don't use the class name "clip". Don't style #root.
 4. Every line that connects two elements (edges, arrows, leader lines to callouts, return paths) is an SVG <path> placed with MB.connect — never hand-computed coordinates; hand-placed lines end up detached from their nodes. Labels for a connector sit next to its midpoint.
-5. No narration sentences as on-screen text. Copy comes from the Storyboard content.
+5. Text must not overlap other text unless deliberately layered (e.g. a flip/stack effect): then mark the layered element with data-layout-allow-overlap. Calling getTotalLength() on a path needs its d set first (MB.connect sets it).
+6. No narration sentences as on-screen text. Copy comes from the Storyboard content.
 
 HELPERS (window.MB — prefer them):
 - MB.reveal(tl, target, t, style, {duration, stagger, ease, from}) — style: rise|drop|left|right|pop|fade|blur|wipe.

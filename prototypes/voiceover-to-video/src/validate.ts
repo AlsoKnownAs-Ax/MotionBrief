@@ -34,7 +34,7 @@ export function lintAndCheck(projDir: string): { problems: Problem[]; raw: { lin
   const check = hfJson(["check", ".", "--no-contrast", "--samples", "15"], projDir);
   for (const sec of ["runtime", "layout", "motion"]) {
     const arr = check?.[sec]?.findings ?? (Array.isArray(check?.[sec]) ? check[sec] : []);
-    for (const f of arr) if (f.severity === "error") problems.push({ unit: unitOf(f.source ?? f.file ?? f.compositionSrc ?? f.composition), source: "check", msg: `${f.code}: ${f.message ?? ""}${f.selector ? ` (${f.selector})` : ""}${f.time !== undefined ? ` @${f.time}s` : ""}` });
+    for (const f of arr) if (f.severity === "error") problems.push({ unit: unitOf(f.sourceFile ?? f.source ?? f.file ?? f.compositionSrc ?? f.composition), source: "check", msg: `${f.code}: ${f.message ?? ""}${f.selector ? ` (${f.selector})` : ""}${f.time !== undefined ? ` @${f.time}s` : ""}` });
   }
   return { problems, raw: { lint, check } };
 }
@@ -78,11 +78,21 @@ export async function contractAndStills(projDir: string, units: UnitSpec[], W: n
             if (cs.display === "none" || cs.visibility === "hidden") return { exists: true, visible: false, inFrame: false };
             op *= Number(cs.opacity);
           }
+          // an SVG connector may be revealed by a stroke draw-on instead of opacity; a straight line has a ~0 px side
+          const isPath = typeof (el as any).getTotalLength === "function";
+          let drawn = 1;
+          if (isPath) {
+            const len = (el as any).getTotalLength() || 0;
+            const off = parseFloat(getComputedStyle(el).strokeDashoffset || "0") || 0;
+            const dash = getComputedStyle(el).strokeDasharray;
+            if (len > 0 && dash && dash !== "none") drawn = 1 - Math.min(1, Math.abs(off) / len);
+          }
           const r = el.getBoundingClientRect();
-          const inFrame = r.width > 1 && r.height > 1 && r.right > 0 && r.bottom > 0 && r.left < w && r.top < h;
+          const sized = isPath ? r.width > 1 || r.height > 1 : r.width > 1 && r.height > 1;
+          const inFrame = sized && r.right > 0 && r.bottom > 0 && r.left < w && r.top < h;
           const clip = getComputedStyle(el).clipPath;
           const clipped = clip && /inset\(0(px|%)? 100%|inset\(100%/.test(clip);
-          return { exists: true, visible: op >= 0.3 && inFrame && !clipped, inFrame, op };
+          return { exists: true, visible: op >= 0.3 && drawn >= 0.3 && inFrame && !clipped, inFrame, op };
         },
         sel, W, H,
       );

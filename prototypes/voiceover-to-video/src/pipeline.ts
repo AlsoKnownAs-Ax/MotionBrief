@@ -1,8 +1,8 @@
-// PROTOTYPE: the whole spike pipeline. Transcript -> Storyboard -> Scene code (parallel) -> assemble ->
+﻿// PROTOTYPE: the whole spike pipeline. Transcript -> Storyboard -> Scene code (parallel) -> assemble ->
 // lint/check/contract -> retries -> visual review -> fallback -> MP4, with metrics.
 // usage: node src/pipeline.ts <runName> <horizontal|vertical> [--tag x] [--reuse-storyboard] [--fallback-only]
 //        [--no-review] [--concurrency 4] [--retries 2] [--tolerance 0.1]
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
 import { ask, calls, setCallLog } from "./agent.ts";
@@ -20,6 +20,7 @@ const { positionals, values: o } = parseArgs({
     tag: { type: "string", default: "" },
     "reuse-storyboard": { type: "boolean", default: false },
     "fallback-only": { type: "boolean", default: false },
+    "reuse-code": { type: "boolean", default: false },
     "no-review": { type: "boolean", default: false },
     "no-render": { type: "boolean", default: false },
     concurrency: { type: "string", default: "4" },
@@ -83,6 +84,11 @@ const history: Record<string, { attempt: number; problems: string[] }[]> = {};
 const status: Record<string, "ok" | "fallback" | "review-flagged"> = {};
 const genUnit = async (u: (typeof units)[number], attempt: number, feedback?: string) => {
   if (o["fallback-only"]) return fallbackCode(u);
+  if (o["reuse-code"] && attempt === 0) {
+    // re-check previously generated code without agent calls: take the latest attempt on disk
+    const files = readdirSync(join(outDir, "code")).filter((f) => f.startsWith(`${u.id}.attempt`) && !f.includes("attempt9")).sort();
+    if (files.length) return JSON.parse(readFileSync(join(outDir, "code", files[files.length - 1]), "utf8")) as UnitCode;
+  }
   const prev = code.get(u.id);
   const r = await ask<UnitCode>(`scene:${u.id}#${attempt}`, {
     system: sceneSystem(format),
