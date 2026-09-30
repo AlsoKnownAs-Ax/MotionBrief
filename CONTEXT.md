@@ -17,8 +17,16 @@ _Avoid_: Script, captions, subtitles
 ### Look
 
 **Style Preset**:
-A named combination of tone, color palette, and style that steers how a video looks and moves.
-_Avoid_: Theme, template, settings
+A named set of choices that steers how a video looks and moves, the same in either Format: a Palette, typography and other visual treatments, a Motion, a written direction, the Transitions a video may use, how readily it uses a Canvas, and how Captions look.
+_Avoid_: Theme, template, settings, tone
+
+**Palette**:
+The colors of a Style Preset, each with a fixed role (background, surface, text, accents, positive and negative).
+_Avoid_: Color scheme, colors
+
+**Motion**:
+How energetically and in what manner the elements of a video move, as set by its Style Preset.
+_Avoid_: Tone, animation style, energy
 
 **Format**:
 The aspect ratio of a video: vertical (9:16) or horizontal (16:9).
