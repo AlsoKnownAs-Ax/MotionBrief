@@ -26,6 +26,10 @@ _Avoid_: Orientation, resolution, layout
 
 ### Structure
 
+**Storyboard**:
+The ordered Scenes of one video in one Format, with each Scene's Transcript span, Scene Type, content, and the words its elements appear on, plus the Transitions and Canvas groupings between them; written by the agent before any Scene is animated.
+_Avoid_: Plan, outline, script, timeline
+
 **Scene**:
 A contiguous span of the Transcript shown as one visual composition; a video is a sequence of Scenes.
 _Avoid_: Shot, slide, frame, segment, clip
