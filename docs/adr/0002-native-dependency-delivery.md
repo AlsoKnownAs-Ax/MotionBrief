@@ -13,5 +13,6 @@ MotionBrief bundles every native executable it spawns (the Claude Code binary, c
 
 - FFmpeg is GPL, shipped as a separate executable run as a subprocess, so MotionBrief's own code stays MIT. Every release must attach the matching FFmpeg source and the GPL text. H.264 patent licensing is not addressed in v1.
 - whisper.cpp publishes no macOS CLI and no Vulkan build, so a `native-deps` CI workflow builds whisper-cli (macOS arm64 Metal; Windows x64 Vulkan + CPU via `GGML_BACKEND_DL`) and publishes it on a MotionBrief GitHub Release.
+- **Amended (Packaging & distribution):** the `native-deps` workflow also builds FFmpeg/FFprobe: a minimal GPL build with libx264/libx265 for both platforms. It replaces the BtbN and osxexperts prebuilts. osxexperts can't be made GPL-compliant (its linked source doesn't match the binary), and BtbN deletes its builds after 14 days. Building it ourselves gives us the exact source and build scripts to attach to each release.
 - Supported platforms are Windows x64 and macOS arm64 only.
 - The Claude Code binary keeps Anthropic's signature (excluded from our re-signing), and MotionBrief never sets `CLAUDE_CONFIG_DIR`, so it shares the user's Claude Code login.
