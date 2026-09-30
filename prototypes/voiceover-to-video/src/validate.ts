@@ -10,7 +10,7 @@ import { ROOT, run } from "./lib.ts";
 const HF = join(ROOT, "node_modules", "hyperframes", "bin", "hyperframes.mjs");
 process.env.HYPERFRAMES_NO_TELEMETRY = "1";
 
-export type Problem = { unit: string; source: "lint" | "check" | "contract" | "icons" | "runtime"; msg: string };
+export type Problem = { unit: string; source: "lint" | "check" | "contract" | "icons" | "tokens" | "runtime"; msg: string };
 
 function unitOf(file: string | undefined): string {
   const m = file?.match(/compositions[\\/]([a-z0-9-]+)\.html/);

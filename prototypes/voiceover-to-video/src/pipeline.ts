@@ -1,22 +1,30 @@
 ﻿// PROTOTYPE: the whole spike pipeline. Transcript -> Storyboard -> Scene code (parallel) -> assemble ->
 // lint/check/contract -> retries -> visual review -> fallback -> MP4, with metrics.
-// usage: node src/pipeline.ts <runName> <horizontal|vertical> [--tag x] [--reuse-storyboard] [--fallback-only]
+// usage: node src/pipeline.ts <runName> <horizontal|vertical> [--preset blueprint] [--tag x] [--reuse-storyboard] [--fallback-only]
 //        [--no-review] [--concurrency 4] [--retries 2] [--tolerance 0.1]
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+// Palette / typography swap without the agent (re-renders an existing run's code under new tokens):
+//        node src/pipeline.ts <runName> <format> --preset x --from <tag> --palette <id> --type <id> --tag swap --reuse-storyboard --reuse-code --no-review
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
-import { ask, calls, setCallLog } from "./agent.ts";
+import { REVIEW_MODEL, ask, calls, setCallLog } from "./agent.ts";
 import { assemble, buildUnits } from "./assemble.ts";
-import { DIMS, fallbackCode, iconSvg, inlineIcons, type Format, type UnitCode } from "./frame.ts";
+import { DIMS, fallbackCode, iconSvg, inlineIcons, usePreset, type Format, type UnitCode } from "./frame.ts";
 import { ROOT } from "./lib.ts";
-import { reviewPrompt, reviewSystem, scenePrompt, sceneSystem, storyboardPrompt, storyboardSystem } from "./prompts.ts";
+import { PALETTES, PRESETS, TYPOGRAPHY, pacingFor } from "./preset.ts";
+import { allowedStoryboardTransitions, reviewPrompt, reviewSystem, scenePrompt, sceneSystem, storyboardPrompt, storyboardSystem } from "./prompts.ts";
 import { anchorsOf, storyboardJsonSchema, validateStoryboard, type Storyboard } from "./storyboard.ts";
+import { tokenLint } from "./tokens.ts";
 import type { Transcript } from "./transcribe.ts";
 import { contractAndStills, lintAndCheck, render, type Problem } from "./validate.ts";
 
 const { positionals, values: o } = parseArgs({
   allowPositionals: true,
   options: {
+    preset: { type: "string", default: "blueprint" },
+    palette: { type: "string" },
+    type: { type: "string" },
+    from: { type: "string" },
     tag: { type: "string", default: "" },
     "reuse-storyboard": { type: "boolean", default: false },
     "fallback-only": { type: "boolean", default: false },
@@ -33,12 +41,26 @@ const runDir = join(ROOT, "runs", name);
 const outDir = join(runDir, format + (o.tag ? `-${o.tag}` : ""));
 const projDir = join(outDir, "project");
 mkdirSync(join(outDir, "code"), { recursive: true });
+// the video's Preset (a snapshot: overrides replace copied values, never link)
+const P = structuredClone(PRESETS[o.preset!]);
+if (!P) throw new Error(`unknown preset ${o.preset}`);
+if (o.palette) P.palette = structuredClone(PALETTES[o.palette]);
+if (o.type) P.typography = TYPOGRAPHY[o.type].id;
+usePreset(P);
+writeFileSync(join(outDir, "preset.json"), JSON.stringify(P, null, 1));
+if (o.from) {
+  // reuse another run's Storyboard and Scene code (for the Palette / typography swap test)
+  const src = join(runDir, o.from);
+  copyFileSync(join(src, "storyboard.json"), join(outDir, "storyboard.json"));
+  const final = JSON.parse(readFileSync(join(src, "final-code.json"), "utf8")) as Record<string, UnitCode>;
+  for (const [id, c] of Object.entries(final)) writeFileSync(join(outDir, "code", `${id}.attempt0.json`), JSON.stringify(c, null, 1));
+}
 setCallLog(join(outDir, "calls.jsonl"));
 const t: Transcript = JSON.parse(readFileSync(join(runDir, "transcript.json"), "utf8"));
 const concurrency = Number(o.concurrency);
 const retries = Number(o.retries);
 const tolerance = Number(o.tolerance);
-const pacing = format === "vertical" ? { minScene: 2.5, maxScene: 7 } : { minScene: 3, maxScene: 10 };
+const pacing = pacingFor(format, P.motion.energy);
 const stage: Record<string, number> = {};
 const t0 = performance.now();
 const mark = (k: string, since: number) => (stage[k] = +((performance.now() - since) / 1000).toFixed(1));
@@ -61,9 +83,15 @@ else {
   let feedback: string | undefined;
   for (let a = 0; a < 3 && !sb; a++) {
     log(`storyboard attempt ${a + 1}`);
-    const raw = await ask<unknown>(`storyboard#${a + 1}`, { system: storyboardSystem(format), prompt: storyboardPrompt(t, format, feedback), schema: storyboardJsonSchema(), effort: "high" });
+    const raw = await ask<unknown>(`storyboard#${a + 1}`, { system: storyboardSystem(format, P), prompt: storyboardPrompt(t, format, feedback), schema: storyboardJsonSchema(), effort: "high" });
     writeFileSync(join(outDir, `storyboard.attempt${a + 1}.json`), JSON.stringify(raw, null, 1));
     const v = validateStoryboard(raw, t, pacing);
+    // the Preset's allowed Transitions and Canvas preference
+    const allowed = allowedStoryboardTransitions(P);
+    for (const s of (raw as Storyboard).scenes ?? []) {
+      if (s.transitionIn !== "cut" && !allowed.includes(s.transitionIn)) v.errors.push(`${s.id}: transition "${s.transitionIn}" is not allowed in this style (allowed: ${allowed.join(", ")})`);
+      if (P.canvas === "never" && s.canvas) v.errors.push(`${s.id}: this style never uses Canvases; remove "canvas"`);
+    }
     const icons = JSON.stringify(raw).match(/"(lucide|brand):[a-z0-9-]+"/g) ?? [];
     for (const ic of icons) if (!iconSvg(ic.slice(1, -1))) v.errors.push(`unknown icon ${ic}`);
     sbAttempts.push({ errors: v.errors, warnings: v.warnings });
@@ -91,7 +119,7 @@ const genUnit = async (u: (typeof units)[number], attempt: number, feedback?: st
   }
   const prev = code.get(u.id);
   const r = await ask<UnitCode>(`scene:${u.id}#${attempt}`, {
-    system: sceneSystem(format),
+    system: sceneSystem(format, P),
     prompt: scenePrompt(u, sb!, t, feedback && prev ? { previous: JSON.stringify(prev, null, 1), problems: feedback } : undefined),
     schema: { type: "object", properties: { css: { type: "string" }, html: { type: "string" }, js: { type: "string" } }, required: ["css", "html", "js"], additionalProperties: false },
     effort: "high",
@@ -100,9 +128,13 @@ const genUnit = async (u: (typeof units)[number], attempt: number, feedback?: st
   return r;
 };
 const iconProblems = new Map<string, string[]>();
+const tokenProblems = new Map<string, string[]>();
+const rawCode = new Map<string, UnitCode>(); // as the agent wrote it (before icon inlining), for the swap test
 const setCode = (id: string, c: UnitCode) => {
   const { html, errors } = inlineIcons(c.html);
   iconProblems.set(id, errors);
+  tokenProblems.set(id, tokenLint(c));
+  rawCode.set(id, c);
   code.set(id, { ...c, html });
 };
 
@@ -128,6 +160,7 @@ async function checkAll(label: string, stills = false) {
   contractStats = cs.stats;
   const problems: Problem[] = [...lc.problems, ...cs.problems];
   for (const [id, errs] of iconProblems) for (const e of errs) problems.push({ unit: id, source: "icons", msg: e });
+  for (const [id, errs] of tokenProblems) for (const e of errs) problems.push({ unit: id, source: "tokens", msg: e });
   const byUnit = new Map<string, Problem[]>();
   for (const p of problems) byUnit.set(p.unit, [...(byUnit.get(p.unit) ?? []), p]);
   stage[`check.${label}`] = +((performance.now() - tc) / 1000).toFixed(1);
@@ -166,7 +199,8 @@ if (!o["no-review"] && !o["fallback-only"]) {
   const reviewable = units.filter((u) => status[u.id] !== "fallback");
   await limit(reviewable, concurrency, async (u) => {
     reviews[u.id] = await ask(`review:${u.id}`, {
-      system: reviewSystem,
+      system: reviewSystem(P),
+      model: REVIEW_MODEL,
       prompt: reviewPrompt(u, result.stills[u.id] ?? []),
       images: (result.stills[u.id] ?? []).map((s) => s.path),
       cwd: outDir,
@@ -177,13 +211,13 @@ if (!o["no-review"] && !o["fallback-only"]) {
   const flagged = reviewable.filter((u) => !reviews[u.id].pass && reviews[u.id].issues.length);
   log(`review: ${flagged.length}/${reviewable.length} flagged`, flagged.map((u) => u.id).join(", "));
   if (flagged.length) {
-    const before = new Map(flagged.map((u) => [u.id, code.get(u.id)!]));
+    const before = new Map(flagged.map((u) => [u.id, rawCode.get(u.id)!]));
     await limit(flagged, concurrency, async (u) => setCode(u.id, await genUnit(u, 9, reviews[u.id].issues.map((x) => `- [visual] ${x}`).join("\n"))));
     result = await checkAll("post-review", true);
     for (const u of flagged) {
       if (result.byUnit.has(u.id)) {
         log(`  ${u.id}: repair broke checks, reverting`);
-        code.set(u.id, before.get(u.id)!);
+        setCode(u.id, before.get(u.id)!);
         status[u.id] = "review-flagged";
       }
     }
@@ -192,6 +226,7 @@ if (!o["no-review"] && !o["fallback-only"]) {
   mark("visualReview", ts);
 }
 for (const u of units) status[u.id] ??= "ok";
+writeFileSync(join(outDir, "final-code.json"), JSON.stringify(Object.fromEntries(rawCode), null, 1));
 
 // ---------- 6. render ----------
 let renderSecs = 0;
@@ -207,7 +242,7 @@ const total = (performance.now() - t0) / 1000;
 const minutes = t.duration / 60;
 const sum = (k: "costUsd" | "inTok" | "outTok" | "cacheRead" | "cacheWrite") => calls.reduce((a, c) => a + c[k], 0);
 const metrics = {
-  run: name, format, tag: o.tag, model: process.env.SPIKE_MODEL ?? "claude-opus-5-5", durationSec: t.duration, scenes: sb.scenes.length, units: units.length,
+  run: name, format, tag: o.tag, preset: P.id, palette: P.palette.id, typography: P.typography, model: process.env.SPIKE_MODEL ?? "claude-opus-5-5", reviewModel: REVIEW_MODEL, durationSec: t.duration, scenes: sb.scenes.length, units: units.length,
   canvases: units.filter((u) => u.scenes.length > 1).length, transitionSet: sb.transitionSet,
   sceneTypes: Object.fromEntries(sb.scenes.reduce((m, s) => m.set(s.type, (m.get(s.type) ?? 0) + 1), new Map<string, number>())),
   sceneLengths: units.flatMap((u) => u.scenes.map((s, k) => +((u.scenes[k + 1] ? u.sceneStarts[u.scenes[k + 1].id] : u.duration - u.tail) - u.sceneStarts[s.id]).toFixed(2))),

@@ -3,7 +3,8 @@
 import { copyFileSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ROOT } from "./lib.ts";
-import { DIMS, MB_RUNTIME, STYLE, frameCss, wrapUnit, type Format, type Unit, type UnitCode } from "./frame.ts";
+import { DIMS, MB_RUNTIME, SKETCH_DEFS, frameCss, preset, textureCss, wrapUnit, type Format, type Unit, type UnitCode } from "./frame.ts";
+import { FONT_FILES, motionSpec } from "./preset.ts";
 import { sceneTimings, type Storyboard } from "./storyboard.ts";
 import type { Transcript } from "./transcribe.ts";
 
@@ -40,6 +41,8 @@ export function buildUnits(sb: Storyboard, t: Transcript): (Unit & { anchors: Re
 function transitionJs(kind: string, from: string, to: string, T: number, W: number, H: number): string[] {
   const d = TRANSITION_DUR[kind] ?? 0;
   const O = `"#el-${from}"`, N = `"#el-${to}"`;
+  const m = motionSpec(preset().motion);
+  const pushEase = m.character === "springy" ? "back.inOut(1.2)" : m.character === "snappy" ? "expo.inOut" : "power3.inOut";
   switch (kind) {
     case "crossfade":
       return [`tl.to(${O}, { opacity: 0, duration: ${d}, ease: "power2.inOut" }, ${T});`, `tl.fromTo(${N}, { opacity: 0 }, { opacity: 1, duration: ${d}, ease: "power2.inOut" }, ${T});`];
@@ -57,8 +60,8 @@ function transitionJs(kind: string, from: string, to: string, T: number, W: numb
       const size = axis === "x" ? W : H;
       const out = dir === "left" || dir === "up" ? -size : size;
       return [
-        `tl.to(${O}, { ${axis}: ${out}, duration: ${d}, ease: "power3.inOut" }, ${T});`,
-        `tl.fromTo(${N}, { ${axis}: ${-out} }, { ${axis}: 0, duration: ${d}, ease: "power3.inOut" }, ${T});`,
+        `tl.to(${O}, { ${axis}: ${out}, duration: ${d}, ease: "${pushEase}" }, ${T});`,
+        `tl.fromTo(${N}, { ${axis}: ${-out} }, { ${axis}: 0, duration: ${d}, ease: "${pushEase}" }, ${T});`,
       ];
     }
     default:
@@ -86,12 +89,22 @@ function captionsFile(t: Transcript, format: Format, total: number): string {
     const e = next ? Math.min(next.words[0].s, c.words[c.words.length - 1].e + 0.6) : c.words[c.words.length - 1].e + 0.6;
     html.push(`<div class="cap" id="cap-${i}">${c.words.map((w, j) => `<span id="cap-${i}-${j}">${w.w.replace(/[<>&]/g, "")}</span>`).join(" ")}</div>`);
     js.push(`tl.set("#cap-${i}", { opacity: 1 }, ${s.toFixed(3)}); tl.set("#cap-${i}", { opacity: 0 }, ${e.toFixed(3)});`);
-    c.words.forEach((w, j) => js.push(`tl.set("#cap-${i}-${j}", { color: "${STYLE.accent}" }, ${w.s.toFixed(3)}); tl.set("#cap-${i}-${j}", { color: "${STYLE.ink}" }, ${(next && j === c.words.length - 1 ? e : c.words[j + 1]?.s ?? e).toFixed(3)});`));
+    // caption style from the Preset: highlight = current word in accent; pop = accent + scale bump; plain = no per-word change
+    const style = preset().captions;
+    if (style !== "plain")
+      c.words.forEach((w, j) => {
+        const off = (next && j === c.words.length - 1 ? e : c.words[j + 1]?.s ?? e).toFixed(3);
+        js.push(`tl.set("#cap-${i}-${j}", { color: "var(--accent)" }, ${w.s.toFixed(3)}); tl.set("#cap-${i}-${j}", { color: "var(--ink)" }, ${off});`);
+        if (style === "pop") js.push(`tl.fromTo("#cap-${i}-${j}", { scale: 1 }, { scale: 1.18, duration: 0.08, ease: "power2.out" }, ${w.s.toFixed(3)}); tl.to("#cap-${i}-${j}", { scale: 1, duration: 0.18, ease: "back.out(2)" }, ${(w.s + 0.08).toFixed(3)});`);
+      });
   });
+  const dark = preset().palette.mode === "dark";
   return `<template>
 <style>${frameCss(format)}
 .cap { position: absolute; left: 60px; right: 60px; top: ${d.safe.bottom + 90}px; text-align: center; opacity: 0;
-  font-size: 64px; font-weight: 800; letter-spacing: -0.01em; text-shadow: 0 4px 24px rgba(0,0,0,.8); color: var(--ink); }
+  font-family: var(--font-display); font-size: 64px; font-weight: 800; letter-spacing: -0.01em; color: var(--ink);
+  text-shadow: ${dark ? "0 4px 24px rgba(0,0,0,.8)" : "0 0 18px var(--bg), 0 0 6px var(--bg)"}; }
+.cap span { display: inline-block; }
 </style>
 <div id="root" data-composition-id="captions" data-width="${d.W}" data-height="${d.H}" data-duration="${total}">
 ${html.join("\n")}
@@ -113,14 +126,9 @@ export function copyAssets(projDir: string) {
   mkdirSync(join(a, "fonts"), { recursive: true });
   const nm = join(ROOT, "node_modules");
   copyFileSync(join(nm, "gsap", "dist", "gsap.min.js"), join(a, "gsap.min.js"));
-  const fonts: [string, string][] = [
-    ["@fontsource/inter/files/inter-latin-400-normal.woff2", "inter-400.woff2"],
-    ["@fontsource/inter/files/inter-latin-600-normal.woff2", "inter-600.woff2"],
-    ["@fontsource/inter/files/inter-latin-800-normal.woff2", "inter-800.woff2"],
-    ["@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2", "jbm-400.woff2"],
-    ["@fontsource/jetbrains-mono/files/jetbrains-mono-latin-700-normal.woff2", "jbm-700.woff2"],
-  ];
-  for (const [src, dst] of fonts) copyFileSync(join(nm, src), join(a, "fonts", dst));
+  // every bundled font, so a typography swap needs no new assets
+  for (const [pkg, weights] of Object.values(FONT_FILES))
+    for (const w of weights) copyFileSync(join(nm, "@fontsource", pkg, "files", `${pkg}-latin-${w}-normal.woff2`), join(a, "fonts", `${pkg}-${w}.woff2`));
   writeFileSync(join(a, "mb.js"), MB_RUNTIME);
 }
 
@@ -141,7 +149,12 @@ export function assemble(opts: {
 
   const units = buildUnits(sb, t);
   const total = +(t.duration + 0.6).toFixed(3);
-  const mbData = { width: W, height: H, format, safe, units: {} as Record<string, unknown> };
+  const P = preset();
+  const mbData = {
+    width: W, height: H, format, safe, units: {} as Record<string, unknown>,
+    motion: { ...motionSpec(P.motion), character: P.motion.character },
+    connector: { curve: P.treatments.connector.curve, sketchy: P.treatments.line === "sketchy" },
+  };
   const body: string[] = [];
   const tjs: string[] = [];
   units.forEach((u, i) => {
@@ -174,13 +187,16 @@ export function assemble(opts: {
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { width: ${W}px; height: ${H}px; overflow: hidden; background: #000; }
-#root { position: relative; width: ${W}px; height: ${H}px; overflow: hidden; background: ${STYLE.bg}; }
+#root { position: relative; width: ${W}px; height: ${H}px; overflow: hidden; background: ${P.palette.colors.bg}; }
 .scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+${textureCss()}
 </style>
 </head>
 <body>
+${SKETCH_DEFS}
 <div id="root" data-composition-id="main" data-start="0" data-duration="${total}" data-width="${W}" data-height="${H}">
 ${body.join("\n")}
+${P.treatments.texture !== "none" ? `<div id="mb-texture" class="mb-texture" data-layout-ignore></div>` : ""}
 </div>
 <script>
 window.__timelines["main"] = gsap.timeline({ paused: true });

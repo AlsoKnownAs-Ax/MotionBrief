@@ -3,20 +3,22 @@ import { query } from "@anthropic-ai/claude-agent-sdk";
 import { appendFileSync } from "node:fs";
 
 export const MODEL = process.env.SPIKE_MODEL ?? "claude-opus-5-5";
+// model per agent role (decided in "Prototype: Voiceover to video spike"): review runs on Sonnet 5.5 by default
+export const REVIEW_MODEL = process.env.SPIKE_REVIEW_MODEL ?? "claude-sonnet-5-5";
 
 export type CallLog = { label: string; ms: number; costUsd: number; inTok: number; outTok: number; cacheRead: number; cacheWrite: number; turns: number; ok: boolean };
 export const calls: CallLog[] = [];
 let logFile: string | undefined;
 export const setCallLog = (f: string) => (logFile = f);
 
-export async function ask<T>(label: string, opts: { system: string; prompt: string; schema: Record<string, unknown>; images?: string[]; cwd?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max" }): Promise<T> {
+export async function ask<T>(label: string, opts: { system: string; prompt: string; schema: Record<string, unknown>; images?: string[]; cwd?: string; model?: string; effort?: "low" | "medium" | "high" | "xhigh" | "max" }): Promise<T> {
   const t0 = performance.now();
   const imageNote = opts.images?.length ? `\n\nFirst use the Read tool to look at these images:\n${opts.images.map((p) => `- ${p}`).join("\n")}` : "";
   let result: any;
   for await (const m of query({
     prompt: opts.prompt + imageNote,
     options: {
-      model: MODEL,
+      model: opts.model ?? MODEL,
       systemPrompt: opts.system,
       effort: opts.effort ?? "high",
       tools: opts.images?.length ? ["Read"] : [],
