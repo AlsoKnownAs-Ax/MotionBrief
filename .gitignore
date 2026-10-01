@@ -1,0 +1,4 @@
+# impeccable engine binaries; the launcher downloads them on first run
+.agents/skills/impeccable/scripts/bin/
+.claude/skills/impeccable/scripts/bin/
+.opencode/skills/impeccable/scripts/bin/
