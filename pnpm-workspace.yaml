@@ -1,0 +1,5 @@
+allowBuilds:
+  esbuild: true
+  unrs-resolver: true
+minimumReleaseAgeExclude:
+  - globals@17.13.0

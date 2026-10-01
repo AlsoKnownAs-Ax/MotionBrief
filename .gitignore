@@ -2,3 +2,8 @@
 .agents/skills/impeccable/scripts/bin/
 .claude/skills/impeccable/scripts/bin/
 .opencode/skills/impeccable/scripts/bin/
+
+# Dependencies and build output
+node_modules/
+out/
+dist/

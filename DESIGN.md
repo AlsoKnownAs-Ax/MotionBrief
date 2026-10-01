@@ -20,6 +20,17 @@ colors:
   gradient-amber: "#ffb23d"
   gradient-coral: "#ff5577"
   semantic-success: "#22c55e"
+  surface-3: "#262626"
+  status-working: "#6a4cf5"
+  status-working-ink: "#b3a4ff"
+  status-flagged: "#ffb23d"
+  status-fallback: "#ff5577"
+  status-fallback-ink: "#ff8aa1"
+  status-success: "#22c55e"
+  status-working-tint: "#18142f"
+  status-flagged-tint: "#261d0f"
+  status-fallback-tint: "#2b1418"
+  status-success-tint: "#0c2013"
 
 typography:
   display-xxl:
@@ -104,6 +115,41 @@ typography:
     lineHeight: 1.0
     letterSpacing: -0.14px
     fontFeature: cv11
+  app-display:
+    fontFamily: Inter Variable
+    fontSize: 32px
+    fontWeight: 500
+    lineHeight: 1.13
+    letterSpacing: -1px
+    fontFeature: cv11
+  app-title:
+    fontFamily: Inter Variable
+    fontSize: 20px
+    fontWeight: 600
+    lineHeight: 1.2
+    letterSpacing: -0.5px
+    fontFeature: cv11
+  app-body:
+    fontFamily: Inter Variable
+    fontSize: 14px
+    fontWeight: 400
+    lineHeight: 1.4
+    letterSpacing: -0.14px
+    fontFeature: cv11
+  app-sm:
+    fontFamily: Inter Variable
+    fontSize: 13px
+    fontWeight: 400
+    lineHeight: 1.4
+    letterSpacing: -0.1px
+    fontFeature: cv11
+  app-xs:
+    fontFamily: Inter Variable
+    fontSize: 12px
+    fontWeight: 500
+    lineHeight: 1.2
+    letterSpacing: -0.05px
+    fontFeature: cv11
 
 rounded:
   xs: 4px
@@ -114,6 +160,11 @@ rounded:
   xxl: 30px
   pill: 100px
   full: 9999px
+  app-xs: 4px
+  app-sm: 6px
+  app-md: 10px
+  app-lg: 12px
+  app-xl: 16px
 
 spacing:
   hair: 1px
@@ -256,6 +307,106 @@ components:
     typography: "{typography.caption}"
     rounded: "{rounded.xs}"
     padding: 64px 32px
+  app-title-bar:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-sm}"
+    height: 52px
+  app-button-primary:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.on-primary}"
+    typography: "{typography.app-body}"
+    rounded: "{rounded.pill}"
+    height: 34px
+    padding: 0 15px
+  app-button-tertiary:
+    backgroundColor: "{colors.surface-2}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-body}"
+    rounded: "{rounded.pill}"
+    height: 34px
+    padding: 0 15px
+  app-button-tertiary-hover:
+    backgroundColor: "{colors.surface-3}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-body}"
+    rounded: "{rounded.pill}"
+    height: 34px
+  app-button-ghost:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink-muted}"
+    typography: "{typography.app-body}"
+    rounded: "{rounded.pill}"
+    height: 34px
+    padding: 0 15px
+  app-button-sm:
+    backgroundColor: "{colors.surface-2}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-sm}"
+    rounded: "{rounded.pill}"
+    height: 28px
+    padding: 0 11px
+  app-icon-button:
+    backgroundColor: "{colors.canvas}"
+    textColor: "{colors.ink-muted}"
+    rounded: "{rounded.full}"
+    size: 34px
+  app-input:
+    backgroundColor: "{colors.surface-1}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-body}"
+    rounded: "{rounded.app-md}"
+    height: 36px
+    padding: 0 12px
+  app-panel:
+    backgroundColor: "{colors.surface-1}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-sm}"
+    rounded: "{rounded.app-lg}"
+    padding: 12px
+  app-dialog:
+    backgroundColor: "{colors.surface-1}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-body}"
+    rounded: "{rounded.app-xl}"
+    padding: 20px
+  app-kbd:
+    backgroundColor: "{colors.surface-2}"
+    textColor: "{colors.ink}"
+    typography: "{typography.app-xs}"
+    rounded: "{rounded.app-sm}"
+    height: 20px
+  app-badge:
+    backgroundColor: "{colors.surface-2}"
+    textColor: "{colors.ink-muted}"
+    typography: "{typography.app-xs}"
+    rounded: "{rounded.app-sm}"
+    height: 20px
+    padding: 0 7px
+  app-badge-working:
+    backgroundColor: "{colors.status-working-tint}"
+    textColor: "{colors.status-working-ink}"
+    typography: "{typography.app-xs}"
+    rounded: "{rounded.app-sm}"
+    height: 20px
+  app-badge-flagged:
+    backgroundColor: "{colors.status-flagged-tint}"
+    textColor: "{colors.status-flagged}"
+    typography: "{typography.app-xs}"
+    rounded: "{rounded.app-sm}"
+    height: 20px
+  app-badge-fallback:
+    backgroundColor: "{colors.status-fallback-tint}"
+    textColor: "{colors.status-fallback-ink}"
+    typography: "{typography.app-xs}"
+    rounded: "{rounded.app-sm}"
+    height: 20px
+  app-badge-success:
+    backgroundColor: "{colors.status-success-tint}"
+    textColor: "{colors.status-success}"
+    typography: "{typography.app-xs}"
+    rounded: "{rounded.app-sm}"
+    height: 20px
 ---
 
 ## Overview
@@ -482,6 +633,17 @@ The defining decorative surface of Framer's marketing — oversized atmospheric 
 
 **`footer`** — Dense link grid on `{colors.canvas}` with the Framer wordmark left and 5–6 columns of caption-sized links.
 - Background `{colors.canvas}`, text `{colors.ink-muted}`, type `{typography.caption}`, padding 64px 32px.
+
+## App Scale
+
+MotionBrief is a desktop app, not a marketing page, so it uses a denser scale on the same brand: canvas, surface lifts, white ink, one orange signal, Inter with its character variants. The `app-*` tokens in the front matter are that scale. The marketing tokens above stay as the brand reference; app UI uses the `app-*` tokens. They are wired into Tailwind and shadcn/ui in `src/renderer/src/styles/globals.css` (shadcn's roles `background`, `card`, `primary`, `muted`, `accent`, `border`, `ring` map onto canvas, surface-1, primary, ink-muted, surface-3, hairline and primary).
+
+- **Type**: `{typography.app-body}` 14px is the default; `{typography.app-sm}` 13px for dense rows and secondary text; `{typography.app-xs}` 12px for badges, keys and meta; `{typography.app-title}` 20px for dialog and panel titles; `{typography.app-display}` 32px for at most one screen heading. No display sizes above 32px in the app.
+- **Radii**: denser than the marketing cards. `{rounded.app-sm}` 6px badges and keys, `{rounded.app-md}` 10px inputs and menus, `{rounded.app-lg}` 12px panels, `{rounded.app-xl}` 16px dialogs. Buttons stay pills (`{rounded.pill}`); icon buttons stay circles.
+- **Sizes**: title bar 52px (`{components.app-title-bar}`), buttons 34px or 28px small, inputs 36px, badges and keys 20px. The window's minimum size is 1024×640.
+- **Surfaces**: canvas → `{colors.surface-1}` panels and dialogs → `{colors.surface-2}` resting controls → `{colors.surface-3}` hover lift. Hover is a lift, not a color.
+- **Status colors**: working (violet), flagged (amber), fallback (coral) and success (green). A status badge is the status color as text on a 12–16% tint of itself (`{colors.status-*-tint}` is that tint over canvas), with a dot. Use the `-ink` variants for text where the base color is too dark to read (`{colors.status-working-ink}`, `{colors.status-fallback-ink}`). Status colors never fill buttons and never replace the orange signal.
+- **Title bar**: the window has no native title bar. The app's own bar drags the window; macOS keeps its traffic lights on the left, Windows its caption buttons on the right, with an app-menu button on the left because Windows shows no menu bar.
 
 ## Do's and Don'ts
 

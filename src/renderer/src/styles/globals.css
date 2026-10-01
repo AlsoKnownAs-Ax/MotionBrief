@@ -1,0 +1,179 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/*
+ * Tokens come from DESIGN.md: the brand colors plus its app scale (denser radii and
+ * sizes, status colors). shadcn/ui's semantic roles are mapped onto them below.
+ * MotionBrief is dark only.
+ */
+:root {
+  --canvas: #090909;
+  --surface-1: #141414;
+  --surface-2: #1c1c1c;
+  --surface-3: #262626;
+  --hairline: #262626;
+  --hairline-soft: #1a1a1a;
+  --ink: #ffffff;
+  --ink-muted: #999999;
+  --brand: #ff7a3d;
+  --on-brand: #000000;
+
+  --status-working: #6a4cf5;
+  --status-working-ink: #b3a4ff;
+  --status-flagged: #ffb23d;
+  --status-fallback: #ff5577;
+  --status-fallback-ink: #ff8aa1;
+  --status-success: #22c55e;
+
+  /* shadcn/ui roles */
+  --background: var(--canvas);
+  --foreground: var(--ink);
+  --card: var(--surface-1);
+  --card-foreground: var(--ink);
+  --popover: var(--surface-1);
+  --popover-foreground: var(--ink);
+  --primary: var(--brand);
+  --primary-foreground: var(--on-brand);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--ink);
+  --muted: var(--surface-1);
+  --muted-foreground: var(--ink-muted);
+  --accent: var(--surface-3);
+  --accent-foreground: var(--ink);
+  --destructive: var(--status-fallback);
+  --border: var(--hairline);
+  --input: var(--hairline);
+  --ring: var(--brand);
+
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --color-canvas: var(--canvas);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-hairline: var(--hairline);
+  --color-hairline-soft: var(--hairline-soft);
+  --color-ink: var(--ink);
+  --color-ink-muted: var(--ink-muted);
+  --color-status-working: var(--status-working);
+  --color-status-working-ink: var(--status-working-ink);
+  --color-status-flagged: var(--status-flagged);
+  --color-status-fallback: var(--status-fallback);
+  --color-status-fallback-ink: var(--status-fallback-ink);
+  --color-status-success: var(--status-success);
+}
+
+@theme {
+  --font-sans: "Inter Variable", Inter, system-ui, sans-serif;
+
+  /* DESIGN.md app scale: rounded.app-* */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 100px;
+
+  /* DESIGN.md app scale: typography.app-* */
+  --text-app-display: 32px;
+  --text-app-display--line-height: 1.13;
+  --text-app-display--letter-spacing: -1px;
+  --text-app-display--font-weight: 500;
+  --text-app-title: 20px;
+  --text-app-title--line-height: 1.2;
+  --text-app-title--letter-spacing: -0.5px;
+  --text-app-title--font-weight: 600;
+  --text-app-body: 14px;
+  --text-app-body--line-height: 1.4;
+  --text-app-body--letter-spacing: -0.14px;
+  --text-app-sm: 13px;
+  --text-app-sm--line-height: 1.4;
+  --text-app-sm--letter-spacing: -0.1px;
+  --text-app-xs: 12px;
+  --text-app-xs--line-height: 1.2;
+  --text-app-xs--letter-spacing: -0.05px;
+
+  /* DESIGN.md app scale: component heights. title-bar matches TITLE_BAR_HEIGHT in src/shared/window.ts. */
+  --spacing-title-bar: 52px;
+  --spacing-control: 34px;
+  --spacing-control-sm: 28px;
+  --spacing-input: 36px;
+  --spacing-badge: 20px;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-background text-foreground text-app-body font-sans antialiased;
+    overflow: hidden;
+    user-select: none;
+    font-feature-settings: "cv01", "cv05", "cv09", "cv11", "ss03";
+    caret-color: var(--brand);
+  }
+
+  ::selection {
+    background: rgb(255 122 61 / 0.35);
+    color: var(--ink);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--brand);
+    outline-offset: 2px;
+  }
+
+  input,
+  textarea,
+  [contenteditable] {
+    user-select: text;
+  }
+}
+
+@utility drag-region {
+  -webkit-app-region: drag;
+}
+
+@utility no-drag-region {
+  -webkit-app-region: no-drag;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
