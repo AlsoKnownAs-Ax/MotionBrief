@@ -27,10 +27,10 @@ function openCorePort(): CorePort {
   return { port: port1, link: new RPCLink({ port: port1 }) };
 }
 
-let current = openCorePort();
+let corePort = openCorePort();
 
 /** The typed core API. Calls always go to the current port, so a reconnect is invisible to callers. */
-export const core: CoreClient = createORPCClient(new DynamicLink(() => current.link));
+export const core: CoreClient = createORPCClient(new DynamicLink(() => corePort.link));
 export const orpc = createTanstackQueryUtils(core);
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { refetchOnWindowFocus: false } },
@@ -51,11 +51,11 @@ async function confirmConnected() {
 export function startCoreConnection() {
   window.motionbrief.onCoreExited(() => {
     useCoreConnection.setState({ status: "reconnecting" });
-    current.port.close();
+    corePort.port.close();
   });
 
   window.motionbrief.onCoreRestarted(() => {
-    current = openCorePort();
+    corePort = openCorePort();
     // Re-runs every query and stream against the new core.
     void queryClient.invalidateQueries();
     void confirmConnected();

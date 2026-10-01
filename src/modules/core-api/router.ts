@@ -10,12 +10,12 @@ export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
 export function createCoreRouter({ system }: CoreRouterDeps) {
-  const os = implement(coreContract);
+  const api = implement(coreContract);
 
-  return os.router({
+  return api.router({
     system: {
-      info: os.system.info.handler(() => system.info()),
-      heartbeat: os.system.heartbeat.handler(({ signal }) => system.heartbeat(signal)),
+      info: api.system.info.handler(() => system.info()),
+      heartbeat: api.system.heartbeat.handler(({ signal }) => system.heartbeat(signal)),
     },
   });
 }

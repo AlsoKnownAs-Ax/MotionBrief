@@ -17,8 +17,17 @@ export const IPC = {
 /** window.postMessage tag the renderer uses to hand its core port to the preload. */
 export const CORE_PORT_MESSAGE = "motionbrief:core-port";
 
+/** Command-line flag main passes the app version to the core process with. */
+export const CORE_APP_VERSION_FLAG = "--app-version=";
+
 /** Commands the app menu sends to the focused window. */
 export type AppCommand = "shortcuts.show";
+
+/** Where to pop up a menu, in window coordinates. */
+export type MenuPosition = {
+  x: number;
+  y: number;
+};
 
 export type ContextMenuItem = {
   id: string;

@@ -1,4 +1,5 @@
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
+import { CORE_APP_VERSION_FLAG } from "../shared/ipc";
 
 type CoreProcessOptions = {
   entry: string;
@@ -21,11 +22,10 @@ export function startCoreProcess({ entry, appVersion, onExit, onRestart }: CoreP
   let isRunning = true;
   let isStopping = false;
   let crashTimes: number[] = [];
-  let waitingPorts: MessagePortMain[] = [];
   let child = fork();
 
   function fork(): UtilityProcess {
-    const proc = utilityProcess.fork(entry, [`--app-version=${appVersion}`], {
+    const proc = utilityProcess.fork(entry, [`${CORE_APP_VERSION_FLAG}${appVersion}`], {
       serviceName: "MotionBrief Core",
       stdio: "inherit",
     });
@@ -56,16 +56,17 @@ export function startCoreProcess({ entry, appVersion, onExit, onRestart }: CoreP
 
     child = fork();
     isRunning = true;
-    waitingPorts.forEach((port) => child.postMessage(null, [port]));
-    waitingPorts = [];
     onRestart();
   }
 
   return {
-    /** Hands a window's port to the core; held until the core is back if it is restarting. */
+    /**
+     * Hands a window's port to the core. While the core is down the port is dropped:
+     * every window reconnects with a fresh port when onRestart fires.
+     */
     connect(port: MessagePortMain) {
       if (!isRunning) {
-        waitingPorts = [...waitingPorts, port];
+        port.close();
         return;
       }
 

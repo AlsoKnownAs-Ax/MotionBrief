@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { CORE_PORT_MESSAGE, IPC, type AppCommand, type ContextMenuItem } from "../shared/ipc";
-import type { Platform } from "../shared/shortcuts";
+import { CORE_PORT_MESSAGE, IPC, type AppCommand } from "../shared/ipc";
+import { toPlatform } from "../shared/shortcuts";
 import type { Bridge } from "./bridge";
 
 // MessagePorts can't cross the context bridge, so the renderer posts its core port to
@@ -23,12 +23,12 @@ function subscribe<T extends unknown[]>(channel: string, callback: (...args: T) 
 }
 
 const bridge: Bridge = {
-  platform: process.platform as Platform,
+  platform: toPlatform(process.platform),
   onCoreExited: (callback) => subscribe(IPC.coreExited, callback),
   onCoreRestarted: (callback) => subscribe(IPC.coreRestarted, callback),
   onCommand: (callback) => subscribe<[AppCommand]>(IPC.command, callback),
   showAppMenu: (position) => ipcRenderer.send(IPC.showAppMenu, position),
-  showContextMenu: (items: ContextMenuItem[]) => ipcRenderer.invoke(IPC.showContextMenu, items),
+  showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
 };
 
 contextBridge.exposeInMainWorld("motionbrief", bridge);

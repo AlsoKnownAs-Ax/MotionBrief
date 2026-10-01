@@ -1,11 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { Kbd, KbdGroup } from "@renderer/components/ui/kbd";
+import { ShortcutKeys } from "@renderer/components/shortcut-keys";
 import { orpc } from "@renderer/core/connection";
-import { acceleratorFor, acceleratorKeys, SHORTCUTS } from "../../../shared/shortcuts";
-
-const { platform } = window.motionbrief;
-const SHORTCUTS_KEYS = acceleratorKeys(acceleratorFor(SHORTCUTS.showShortcuts, platform), platform);
+import { SHORTCUTS } from "../../../shared/shortcuts";
 
 const NO_VALUE = "–";
 
@@ -25,20 +22,13 @@ function uptimeLabel(startedAt?: number, now?: number) {
   return `${minutes}m ${seconds}s`;
 }
 
-function pidLabel(pid?: number) {
-  if (pid === undefined) {
+/** `format(value)`, or a dash while the value hasn't arrived. */
+function labelOrDash<T>(value: T | undefined, format: (value: T) => string) {
+  if (value === undefined) {
     return NO_VALUE;
   }
 
-  return `pid ${pid}`;
-}
-
-function heartbeatLabel(seq?: number) {
-  if (seq === undefined) {
-    return NO_VALUE;
-  }
-
-  return `#${seq}`;
+  return format(value);
 }
 
 function Fact({ label, children }: { label: string; children: ReactNode }) {
@@ -59,26 +49,20 @@ export function Home() {
     <main className="flex flex-1 flex-col items-center justify-center gap-8 p-10">
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
         <h1 className="text-app-display">MotionBrief</h1>
-        <p className="text-app-body text-ink-muted">
-          The app shell is running. Home, Projects and generation arrive in later tickets.
-        </p>
+        <p className="text-app-body text-ink-muted">The app is running. Projects and generation come next.</p>
       </div>
 
-      <section aria-label="Core API" className="w-full max-w-sm rounded-lg bg-surface-1 px-4 py-2">
+      <section aria-label="Core" className="w-full max-w-sm rounded-lg bg-surface-1 px-3 py-1">
         <dl className="flex flex-col">
-          <Fact label="App version">{info.data?.appVersion ?? NO_VALUE}</Fact>
-          <Fact label="Core process">{pidLabel(info.data?.pid)}</Fact>
+          <Fact label="App version">{labelOrDash(info.data?.appVersion, (version) => version)}</Fact>
+          <Fact label="Core process">{labelOrDash(info.data?.pid, (pid) => `pid ${pid}`)}</Fact>
           <Fact label="Core uptime">{uptimeLabel(info.data?.startedAt, heartbeat.data?.at)}</Fact>
-          <Fact label="Heartbeat">{heartbeatLabel(heartbeat.data?.seq)}</Fact>
+          <Fact label="Heartbeat">{labelOrDash(heartbeat.data?.seq, (seq) => `#${seq}`)}</Fact>
         </dl>
       </section>
 
       <p className="flex items-center gap-2 text-app-xs text-ink-muted">
-        <KbdGroup>
-          {SHORTCUTS_KEYS.map((key) => (
-            <Kbd key={key}>{key}</Kbd>
-          ))}
-        </KbdGroup>
+        <ShortcutKeys shortcut={SHORTCUTS.showShortcuts} />
         Keyboard shortcuts
       </p>
     </main>

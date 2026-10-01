@@ -1,6 +1,6 @@
 /**
  * App keyboard shortcuts. The app menu binds these accelerators and the Keyboard
- * Shortcuts dialog lists them, so the two can't drift apart.
+ * Shortcuts dialog lists them, so the keys can't drift apart.
  */
 
 export type Shortcut = {
@@ -21,7 +21,16 @@ export const SHORTCUTS = {
   resetZoom: { label: "Actual size", accelerator: "CmdOrCtrl+0" },
 } satisfies Record<string, Shortcut>;
 
+/** The platforms MotionBrief ships on, plus Linux for contributors. */
 export type Platform = "darwin" | "win32" | "linux";
+
+export function toPlatform(nodePlatform: string): Platform {
+  if (nodePlatform === "darwin" || nodePlatform === "win32") {
+    return nodePlatform;
+  }
+
+  return "linux";
+}
 
 export function acceleratorFor(shortcut: Shortcut, platform: Platform) {
   if (platform === "darwin") {
@@ -31,33 +40,31 @@ export function acceleratorFor(shortcut: Shortcut, platform: Platform) {
   return shortcut.accelerator;
 }
 
-const MAC_KEY_LABELS: Record<string, string> = {
-  CmdOrCtrl: "⌘",
-  Cmd: "⌘",
-  Command: "⌘",
-  Ctrl: "⌃",
-  Control: "⌃",
-  Shift: "⇧",
-  Alt: "⌥",
-  Option: "⌥",
-};
-
-const OTHER_KEY_LABELS: Record<string, string> = {
+const PC_KEY_LABELS: Record<string, string> = {
   CmdOrCtrl: "Ctrl",
   Control: "Ctrl",
 };
 
-function keyLabelsFor(platform: Platform) {
-  if (platform === "darwin") {
-    return MAC_KEY_LABELS;
-  }
+const KEY_LABELS = {
+  darwin: {
+    CmdOrCtrl: "⌘",
+    Cmd: "⌘",
+    Command: "⌘",
+    Ctrl: "⌃",
+    Control: "⌃",
+    Shift: "⇧",
+    Alt: "⌥",
+    Option: "⌥",
+  },
+  win32: PC_KEY_LABELS,
+  linux: PC_KEY_LABELS,
+} satisfies Record<Platform, Record<string, string>>;
 
-  return OTHER_KEY_LABELS;
-}
+/** The key labels to show for `shortcut` on `platform`, in order. */
+export function shortcutKeys(shortcut: Shortcut, platform: Platform) {
+  const labels: Record<string, string> = KEY_LABELS[platform];
 
-/** Splits an accelerator into the key labels shown to the user on `platform`. */
-export function acceleratorKeys(accelerator: string, platform: Platform) {
-  const labels = keyLabelsFor(platform);
-
-  return accelerator.split("+").map((key) => labels[key] ?? key);
+  return acceleratorFor(shortcut, platform)
+    .split("+")
+    .map((key) => labels[key] ?? key);
 }

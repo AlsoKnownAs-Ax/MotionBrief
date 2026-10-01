@@ -1,6 +1,6 @@
 import { app, BrowserWindow, dialog, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { IPC, type AppCommand } from "../shared/ipc";
-import { acceleratorFor, SHORTCUTS, type Platform, type Shortcut } from "../shared/shortcuts";
+import { acceleratorFor, SHORTCUTS, toPlatform, type Shortcut } from "../shared/shortcuts";
 
 const REPOSITORY_URL = "https://github.com/AlsoKnownAs-Ax/MotionBrief";
 
@@ -13,7 +13,7 @@ type AppMenuActions = {
 const isMac = process.platform === "darwin";
 
 function accelerator(shortcut: Shortcut) {
-  return acceleratorFor(shortcut, process.platform as Platform);
+  return acceleratorFor(shortcut, toPlatform(process.platform));
 }
 
 function sendCommand(command: AppCommand) {

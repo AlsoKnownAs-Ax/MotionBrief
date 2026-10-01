@@ -1,14 +1,7 @@
 import { useEffect, useState } from "react";
+import { ShortcutKeys } from "@renderer/components/shortcut-keys";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
-import { Kbd, KbdGroup } from "@renderer/components/ui/kbd";
-import { acceleratorFor, acceleratorKeys, SHORTCUTS } from "../../../shared/shortcuts";
-
-const { platform } = window.motionbrief;
-
-const ROWS = Object.values(SHORTCUTS).map((shortcut) => ({
-  label: shortcut.label,
-  keys: acceleratorKeys(acceleratorFor(shortcut, platform), platform),
-}));
+import { SHORTCUTS } from "../../../shared/shortcuts";
 
 /** Lists the app's keyboard shortcuts; opened from Help › Keyboard Shortcuts. */
 export function ShortcutsDialog() {
@@ -32,15 +25,14 @@ export function ShortcutsDialog() {
           <DialogDescription>Also listed next to each command in the app menu.</DialogDescription>
         </DialogHeader>
         <dl className="flex flex-col">
-          {ROWS.map(({ label, keys }) => (
-            <div key={label} className="flex h-9 items-center justify-between border-b border-hairline-soft last:border-0">
-              <dt className="text-app-sm">{label}</dt>
+          {Object.values(SHORTCUTS).map((shortcut) => (
+            <div
+              key={shortcut.label}
+              className="flex h-9 items-center justify-between border-b border-hairline-soft last:border-0"
+            >
+              <dt className="text-app-sm">{shortcut.label}</dt>
               <dd>
-                <KbdGroup>
-                  {keys.map((key) => (
-                    <Kbd key={key}>{key}</Kbd>
-                  ))}
-                </KbdGroup>
+                <ShortcutKeys shortcut={shortcut} />
               </dd>
             </div>
           ))}

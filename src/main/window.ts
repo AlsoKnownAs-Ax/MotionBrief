@@ -44,14 +44,19 @@ export function createWindow() {
   window.once("ready-to-show", () => window.show());
   lockNavigation(window);
   window.webContents.on("context-menu", (_event, params) => showEditContextMenu(window, params));
-
-  if (RENDERER_DEV_URL) {
-    void window.loadURL(RENDERER_DEV_URL);
-  } else {
-    void window.loadFile(join(import.meta.dirname, "../renderer/index.html"));
-  }
+  loadRenderer(window);
 
   return window;
+}
+
+/** The Vite dev server in development, the built files otherwise. */
+function loadRenderer(window: BrowserWindow) {
+  if (RENDERER_DEV_URL) {
+    void window.loadURL(RENDERER_DEV_URL);
+    return;
+  }
+
+  void window.loadFile(join(import.meta.dirname, "../renderer/index.html"));
 }
 
 /** The window only ever shows the app; links open in the user's browser. */

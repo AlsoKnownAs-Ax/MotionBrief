@@ -3,11 +3,18 @@
  * process lifecycle. Product logic lives in the core, never here.
  */
 import { app, BrowserWindow, ipcMain, Menu } from "electron";
+import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
-import { IPC, type ContextMenuItem } from "../shared/ipc";
+import { IPC, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
 import { createWindow } from "./window";
+
+// IPC payloads come from the renderer, so they are checked before use.
+const MenuPositionSchema = z.object({ x: z.number(), y: z.number() }) satisfies z.ZodType<MenuPosition>;
+const ContextMenuItemsSchema = z.array(
+  z.object({ id: z.string(), label: z.string(), enabled: z.boolean().optional() }),
+) satisfies z.ZodType<ContextMenuItem[]>;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -41,20 +48,22 @@ function handleIpc(core: CoreProcess) {
     event.ports.forEach((port) => core.connect(port));
   });
 
-  ipcMain.on(IPC.showAppMenu, (event, position: { x: number; y: number }) => {
+  ipcMain.on(IPC.showAppMenu, (event, payload: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: position } = MenuPositionSchema.safeParse(payload);
 
-    if (!window) {
+    if (!window || !success) {
       return;
     }
 
     Menu.getApplicationMenu()?.popup({ window, x: Math.round(position.x), y: Math.round(position.y) });
   });
 
-  ipcMain.handle(IPC.showContextMenu, (event, items: ContextMenuItem[]) => {
+  ipcMain.handle(IPC.showContextMenu, (event, payload: unknown) => {
     const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: items } = ContextMenuItemsSchema.safeParse(payload);
 
-    if (!window) {
+    if (!window || !success) {
       return null;
     }
 

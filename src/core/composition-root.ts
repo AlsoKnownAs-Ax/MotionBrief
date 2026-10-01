@@ -1,7 +1,10 @@
 import { createCoreRouter } from "../modules/core-api";
 import { createSystem, realClock, type Clock } from "../modules/system";
 
-/** The implementations behind swappable boundaries. Tests replace these; nothing else does. */
+/**
+ * The implementations behind swappable boundaries. Tests replace these; nothing else does.
+ * The clock is the time boundary (it paces streams); the Connector and Transcriber join it here.
+ */
 export type Adapters = {
   clock: Clock;
 };

@@ -10,7 +10,7 @@ const buttonVariants = cva(
     variants: {
       variant: {
         primary: "bg-primary text-primary-foreground hover:not-disabled:brightness-108",
-        secondary: "bg-ink text-canvas hover:not-disabled:bg-[#e6e6e6]",
+        secondary: "bg-ink text-canvas hover:not-disabled:bg-ink/90",
         tertiary: "bg-surface-2 text-ink hover:not-disabled:bg-surface-3",
         ghost: "bg-transparent text-ink-muted hover:not-disabled:bg-surface-2 hover:not-disabled:text-ink",
       },

@@ -9,10 +9,10 @@ const badgeVariants = cva(
     variants: {
       status: {
         neutral: "bg-surface-2 text-ink-muted",
-        working: "bg-status-working/16 text-status-working-ink",
-        flagged: "bg-status-flagged/12 text-status-flagged",
-        fallback: "bg-status-fallback/14 text-status-fallback-ink",
-        success: "bg-status-success/12 text-status-success",
+        working: "bg-status-working-tint text-status-working-ink",
+        flagged: "bg-status-flagged-tint text-status-flagged",
+        fallback: "bg-status-fallback-tint text-status-fallback-ink",
+        success: "bg-status-success-tint text-status-success",
       },
     },
     defaultVariants: {
