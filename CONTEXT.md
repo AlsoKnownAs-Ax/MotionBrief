@@ -4,6 +4,12 @@ An agentic video editor: it turns a spoken recording into a motion-graphics YouT
 
 ## Language
 
+### Project
+
+**Project**:
+One Voiceover, its Transcript, and at most one video in each Format.
+_Avoid_: Workspace, document, file
+
 ### Input
 
 **Voiceover**:
@@ -63,3 +69,7 @@ _Avoid_: Subtitles, kinetic text
 **Revision**:
 A change to a generated video made by prompting the agent, not by manual editing.
 _Avoid_: Edit, regeneration, iteration
+
+**Version**:
+A saved state of a video, produced by its first generation, by a Revision, or by a style change; earlier Versions can be restored.
+_Avoid_: Snapshot, revision, history entry, checkpoint
