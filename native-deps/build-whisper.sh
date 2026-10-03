@@ -53,12 +53,12 @@ case "$platform" in
       -DGGML_BACKEND_DL=ON \
       -DGGML_CPU_ALL_VARIANTS=ON \
       -DGGML_VULKAN=ON
+    # With GGML_BACKEND_DL the ggml target depends on every backend DLL, so
+    # this also builds the Vulkan backend and all CPU variants.
     cmake --build "$(native_path "$build")" --config Release --target whisper-cli -j "$NUMBER_OF_PROCESSORS"
-    # Backends are runtime-loaded, so whisper-cli doesn't depend on them and
-    # building its target alone skips them. Build everything that ends up
-    # next to it.
-    cmake --build "$(native_path "$build")" --config Release -j "$NUMBER_OF_PROCESSORS"
-    cp "$build/bin/Release/whisper-cli.exe" "$build/bin/Release/"*.dll "$pkg/"
+    release="$build/bin/Release"
+    [ -f "$release/ggml-vulkan.dll" ] || die "the Vulkan backend wasn't built"
+    cp "$release/whisper-cli.exe" "$release/whisper.dll" "$release/"ggml*.dll "$pkg/"
 
     # Ship the MSVC runtime next to the binaries (app-local deployment), so
     # machines without the VC++ Redistributable can run them.

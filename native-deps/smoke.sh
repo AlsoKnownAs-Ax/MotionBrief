@@ -18,13 +18,23 @@ unzip_to "$dist/whisper-cli-$WHISPER_CPP_TAG-$platform.zip" "$work/whisper"
 
 exe=""
 [ "$platform" = win-x64 ] && exe=".exe"
-ffmpeg="$work/ffmpeg/ffmpeg$exe"
-ffprobe="$work/ffmpeg/ffprobe$exe"
-whisper="$work/whisper/whisper-cli$exe"
+
+# Git Bash puts MinGW DLLs on PATH, which would hide a missing static link,
+# so on Windows the binaries run with only the Windows folders on PATH.
+isolated() {
+  if is_windows; then
+    PATH="/c/Windows/System32:/c/Windows" "$@"
+  else
+    "$@"
+  fi
+}
+ffmpeg() { isolated "$work/ffmpeg/ffmpeg$exe" "$@"; }
+ffprobe() { isolated "$work/ffmpeg/ffprobe$exe" "$@"; }
+whisper() { isolated "$work/whisper/whisper-cli$exe" "$@"; }
 
 if [ "$platform" = mac-arm64 ]; then
   log "Checking that only system libraries are linked"
-  for bin in "$ffmpeg" "$ffprobe" "$whisper"; do
+  for bin in "$work/ffmpeg/ffmpeg" "$work/ffmpeg/ffprobe" "$work/whisper/whisper-cli"; do
     otool -L "$bin"
     if otool -L "$bin" | tail -n +2 | grep -Ev '^[[:space:]]+(/usr/lib/|/System/Library/)'; then
       die "$(basename "$bin") links a non-system library"
@@ -33,11 +43,11 @@ if [ "$platform" = mac-arm64 ]; then
 fi
 
 log "ffmpeg -version"
-"$ffmpeg" -hide_banner -version
-ffprobe_version="$("$ffprobe" -hide_banner -version)"
+ffmpeg -hide_banner -version
+ffprobe_version="$(ffprobe -hide_banner -version)"
 echo "${ffprobe_version%%$'\n'*}"
 
-encoders="$("$ffmpeg" -hide_banner -encoders)"
+encoders="$(ffmpeg -hide_banner -encoders)"
 for encoder in libx264 libx265; do
   grep -q " $encoder " <<< "$encoders" || die "ffmpeg lacks the $encoder encoder"
 done
@@ -45,7 +55,7 @@ done
 # expect_codec <file> <codec>
 expect_codec() {
   local codec
-  codec="$("$ffprobe" -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$1" | tr -d '\r')"
+  codec="$(ffprobe -v error -select_streams v:0 -show_entries stream=codec_name -of csv=p=0 "$1" | tr -d '\r')"
   [ "$codec" = "$2" ] || die "$1 has video codec '$codec', expected '$2'"
   echo "$(basename "$1"): $codec"
 }
@@ -54,7 +64,7 @@ log "Tiny transcodes"
 cd "$work"
 for pair in libx264:h264 libx265:hevc; do
   encoder="${pair%%:*}"
-  "$ffmpeg" -hide_banner -loglevel error -y \
+  ffmpeg -hide_banner -loglevel error -y \
     -f lavfi -i testsrc2=size=320x240:rate=30:duration=1 \
     -f lavfi -i sine=frequency=440:duration=1 \
     -c:v "$encoder" -pix_fmt yuv420p -c:a aac -shortest "$encoder.mp4"
@@ -62,21 +72,21 @@ for pair in libx264:h264 libx265:hevc; do
 done
 
 # The way HyperFrames encodes: PNG frames piped into ffmpeg's stdin.
-"$ffmpeg" -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=30 \
+ffmpeg -hide_banner -loglevel error -f lavfi -i testsrc2=size=320x240:rate=30 \
   -frames:v 15 -c:v png -f image2pipe - |
-  "$ffmpeg" -hide_banner -loglevel error -y -f image2pipe -c:v png -framerate 30 -i - \
+  ffmpeg -hide_banner -loglevel error -y -f image2pipe -c:v png -framerate 30 -i - \
     -c:v libx264 -pix_fmt yuv420p piped.mp4
 expect_codec piped.mp4 h264
 
 log "whisper-cli --version"
-version="$("$whisper" --version)"
+version="$(whisper --version)"
 echo "$version"
 grep -q "${WHISPER_CPP_TAG#v}" <<< "$version" || die "whisper-cli reports '$version', expected $WHISPER_CPP_TAG"
 
 log "Tiny transcription"
 fetch_verified "$SMOKE_MODEL_URL" "$SMOKE_MODEL_SHA256" "$work/model.bin"
 tar -xzf "$sources/$WHISPER_SRC_TARBALL" -C "$work" "whisper.cpp-$WHISPER_CPP_TAG/samples/jfk.wav"
-"$whisper" -m model.bin -f "whisper.cpp-$WHISPER_CPP_TAG/samples/jfk.wav" -l en \
+whisper -m model.bin -f "whisper.cpp-$WHISPER_CPP_TAG/samples/jfk.wav" -l en \
   --dtw tiny.en -ojf -of transcript 2> whisper.log || {
   cat whisper.log
   die "whisper-cli failed"
