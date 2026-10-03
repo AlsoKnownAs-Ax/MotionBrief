@@ -1,0 +1,6 @@
+.diagram { display: flex; align-items: center; justify-content: space-between; padding: 0 40px; }
+.node { display: flex; align-items: center; gap: 22px; padding: 26px 36px; min-width: 360px; }
+.node-icon { font-size: 64px; color: var(--accent2); }
+.node-key .node-icon { color: var(--accent); }
+/* A stamp deliberately laid over the label. */
+.badge { position: absolute; left: 110px; top: 34px; padding: 4px 14px; border-radius: 999px; background: var(--accent); color: var(--bg); transform: rotate(-8deg); }
