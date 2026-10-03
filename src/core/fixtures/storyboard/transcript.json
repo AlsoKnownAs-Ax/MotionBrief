@@ -1,0 +1,565 @@
+{
+  "duration": 45.5,
+  "words": [
+    {
+      "text": "Every",
+      "start": 0.5,
+      "end": 0.85
+    },
+    {
+      "text": "website",
+      "start": 0.9,
+      "end": 1.25
+    },
+    {
+      "text": "you",
+      "start": 1.3,
+      "end": 1.65
+    },
+    {
+      "text": "open",
+      "start": 1.7,
+      "end": 2.05
+    },
+    {
+      "text": "sends",
+      "start": 2.1,
+      "end": 2.45
+    },
+    {
+      "text": "a",
+      "start": 2.5,
+      "end": 2.85
+    },
+    {
+      "text": "request",
+      "start": 2.9,
+      "end": 3.25
+    },
+    {
+      "text": "further",
+      "start": 3.3,
+      "end": 3.65
+    },
+    {
+      "text": "than",
+      "start": 3.7,
+      "end": 4.05
+    },
+    {
+      "text": "you",
+      "start": 4.1,
+      "end": 4.45
+    },
+    {
+      "text": "think.",
+      "start": 4.5,
+      "end": 4.85
+    },
+    {
+      "text": "That",
+      "start": 4.9,
+      "end": 5.25
+    },
+    {
+      "text": "delay",
+      "start": 5.3,
+      "end": 5.65
+    },
+    {
+      "text": "has",
+      "start": 5.7,
+      "end": 6.05
+    },
+    {
+      "text": "a",
+      "start": 6.1,
+      "end": 6.45
+    },
+    {
+      "text": "name:",
+      "start": 6.5,
+      "end": 6.85
+    },
+    {
+      "text": "latency,",
+      "start": 6.9,
+      "end": 7.25
+    },
+    {
+      "text": "the",
+      "start": 7.3,
+      "end": 7.65
+    },
+    {
+      "text": "time",
+      "start": 7.7,
+      "end": 8.05
+    },
+    {
+      "text": "between",
+      "start": 8.1,
+      "end": 8.45
+    },
+    {
+      "text": "asking",
+      "start": 8.5,
+      "end": 8.85
+    },
+    {
+      "text": "and",
+      "start": 8.9,
+      "end": 9.25
+    },
+    {
+      "text": "getting",
+      "start": 9.3,
+      "end": 9.65
+    },
+    {
+      "text": "an",
+      "start": 9.7,
+      "end": 10.05
+    },
+    {
+      "text": "answer.",
+      "start": 10.1,
+      "end": 10.45
+    },
+    {
+      "text": "Your",
+      "start": 10.5,
+      "end": 10.85
+    },
+    {
+      "text": "browser",
+      "start": 10.9,
+      "end": 11.25
+    },
+    {
+      "text": "talks",
+      "start": 11.3,
+      "end": 11.65
+    },
+    {
+      "text": "to",
+      "start": 11.7,
+      "end": 12.05
+    },
+    {
+      "text": "a",
+      "start": 12.1,
+      "end": 12.45
+    },
+    {
+      "text": "load",
+      "start": 12.5,
+      "end": 12.85
+    },
+    {
+      "text": "balancer,",
+      "start": 12.9,
+      "end": 13.25
+    },
+    {
+      "text": "which",
+      "start": 13.3,
+      "end": 13.65
+    },
+    {
+      "text": "picks",
+      "start": 13.7,
+      "end": 14.05
+    },
+    {
+      "text": "one",
+      "start": 14.1,
+      "end": 14.45
+    },
+    {
+      "text": "of",
+      "start": 14.5,
+      "end": 14.85
+    },
+    {
+      "text": "three",
+      "start": 14.9,
+      "end": 15.25
+    },
+    {
+      "text": "servers.",
+      "start": 15.3,
+      "end": 15.65
+    },
+    {
+      "text": "The",
+      "start": 15.7,
+      "end": 16.05
+    },
+    {
+      "text": "server",
+      "start": 16.1,
+      "end": 16.45
+    },
+    {
+      "text": "checks",
+      "start": 16.5,
+      "end": 16.85
+    },
+    {
+      "text": "its",
+      "start": 16.9,
+      "end": 17.25
+    },
+    {
+      "text": "cache",
+      "start": 17.3,
+      "end": 17.65
+    },
+    {
+      "text": "first,",
+      "start": 17.7,
+      "end": 18.05
+    },
+    {
+      "text": "then",
+      "start": 18.1,
+      "end": 18.45
+    },
+    {
+      "text": "asks",
+      "start": 18.5,
+      "end": 18.85
+    },
+    {
+      "text": "the",
+      "start": 18.9,
+      "end": 19.25
+    },
+    {
+      "text": "database,",
+      "start": 19.3,
+      "end": 19.65
+    },
+    {
+      "text": "and",
+      "start": 19.7,
+      "end": 20.05
+    },
+    {
+      "text": "sends",
+      "start": 20.1,
+      "end": 20.45
+    },
+    {
+      "text": "the",
+      "start": 20.5,
+      "end": 20.85
+    },
+    {
+      "text": "answer",
+      "start": 20.9,
+      "end": 21.25
+    },
+    {
+      "text": "back.",
+      "start": 21.3,
+      "end": 21.65
+    },
+    {
+      "text": "In",
+      "start": 21.7,
+      "end": 22.05
+    },
+    {
+      "text": "code,",
+      "start": 22.1,
+      "end": 22.45
+    },
+    {
+      "text": "it",
+      "start": 22.5,
+      "end": 22.85
+    },
+    {
+      "text": "is",
+      "start": 22.9,
+      "end": 23.25
+    },
+    {
+      "text": "one",
+      "start": 23.3,
+      "end": 23.65
+    },
+    {
+      "text": "line:",
+      "start": 23.7,
+      "end": 24.05
+    },
+    {
+      "text": "await",
+      "start": 24.1,
+      "end": 24.45
+    },
+    {
+      "text": "fetch,",
+      "start": 24.5,
+      "end": 24.85
+    },
+    {
+      "text": "and",
+      "start": 24.9,
+      "end": 25.25
+    },
+    {
+      "text": "a",
+      "start": 25.3,
+      "end": 25.65
+    },
+    {
+      "text": "URL.",
+      "start": 25.7,
+      "end": 26.05
+    },
+    {
+      "text": "Without",
+      "start": 26.1,
+      "end": 26.45
+    },
+    {
+      "text": "a",
+      "start": 26.5,
+      "end": 26.85
+    },
+    {
+      "text": "cache,",
+      "start": 26.9,
+      "end": 27.25
+    },
+    {
+      "text": "every",
+      "start": 27.3,
+      "end": 27.65
+    },
+    {
+      "text": "request",
+      "start": 27.7,
+      "end": 28.05
+    },
+    {
+      "text": "waits",
+      "start": 28.1,
+      "end": 28.45
+    },
+    {
+      "text": "on",
+      "start": 28.5,
+      "end": 28.85
+    },
+    {
+      "text": "the",
+      "start": 28.9,
+      "end": 29.25
+    },
+    {
+      "text": "database;",
+      "start": 29.3,
+      "end": 29.65
+    },
+    {
+      "text": "with",
+      "start": 29.7,
+      "end": 30.05
+    },
+    {
+      "text": "one,",
+      "start": 30.1,
+      "end": 30.45
+    },
+    {
+      "text": "most",
+      "start": 30.5,
+      "end": 30.85
+    },
+    {
+      "text": "answers",
+      "start": 30.9,
+      "end": 31.25
+    },
+    {
+      "text": "come",
+      "start": 31.3,
+      "end": 31.65
+    },
+    {
+      "text": "from",
+      "start": 31.7,
+      "end": 32.05
+    },
+    {
+      "text": "memory.",
+      "start": 32.1,
+      "end": 32.45
+    },
+    {
+      "text": "Three",
+      "start": 32.5,
+      "end": 32.85
+    },
+    {
+      "text": "habits",
+      "start": 32.9,
+      "end": 33.25
+    },
+    {
+      "text": "cut",
+      "start": 33.3,
+      "end": 33.65
+    },
+    {
+      "text": "latency:",
+      "start": 33.7,
+      "end": 34.05
+    },
+    {
+      "text": "caching,",
+      "start": 34.1,
+      "end": 34.45
+    },
+    {
+      "text": "a",
+      "start": 34.5,
+      "end": 34.85
+    },
+    {
+      "text": "CDN,",
+      "start": 34.9,
+      "end": 35.25
+    },
+    {
+      "text": "and",
+      "start": 35.3,
+      "end": 35.65
+    },
+    {
+      "text": "fewer",
+      "start": 35.7,
+      "end": 36.05
+    },
+    {
+      "text": "round",
+      "start": 36.1,
+      "end": 36.45
+    },
+    {
+      "text": "trips.",
+      "start": 36.5,
+      "end": 36.85
+    },
+    {
+      "text": "Done",
+      "start": 36.9,
+      "end": 37.25
+    },
+    {
+      "text": "well,",
+      "start": 37.3,
+      "end": 37.65
+    },
+    {
+      "text": "pages",
+      "start": 37.7,
+      "end": 38.05
+    },
+    {
+      "text": "load",
+      "start": 38.1,
+      "end": 38.45
+    },
+    {
+      "text": "in",
+      "start": 38.5,
+      "end": 38.85
+    },
+    {
+      "text": "under",
+      "start": 38.9,
+      "end": 39.25
+    },
+    {
+      "text": "two",
+      "start": 39.3,
+      "end": 39.65
+    },
+    {
+      "text": "hundred",
+      "start": 39.7,
+      "end": 40.05
+    },
+    {
+      "text": "milliseconds,",
+      "start": 40.1,
+      "end": 40.45
+    },
+    {
+      "text": "four",
+      "start": 40.5,
+      "end": 40.85
+    },
+    {
+      "text": "times",
+      "start": 40.9,
+      "end": 41.25
+    },
+    {
+      "text": "faster.",
+      "start": 41.3,
+      "end": 41.65
+    },
+    {
+      "text": "Subscribe",
+      "start": 41.7,
+      "end": 42.05
+    },
+    {
+      "text": "now",
+      "start": 42.1,
+      "end": 42.45
+    },
+    {
+      "text": "for",
+      "start": 42.5,
+      "end": 42.85
+    },
+    {
+      "text": "the",
+      "start": 42.9,
+      "end": 43.25
+    },
+    {
+      "text": "next",
+      "start": 43.3,
+      "end": 43.65
+    },
+    {
+      "text": "deep",
+      "start": 43.7,
+      "end": 44.05
+    },
+    {
+      "text": "dive",
+      "start": 44.1,
+      "end": 44.45
+    },
+    {
+      "text": "on",
+      "start": 44.5,
+      "end": 44.85
+    },
+    {
+      "text": "networking.",
+      "start": 44.9,
+      "end": 45.25
+    }
+  ]
+}

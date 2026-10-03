@@ -1,0 +1,124 @@
+{
+  "format": "vertical",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "hook",
+      "from": 0,
+      "to": 10,
+      "transition": "cut",
+      "content": {
+        "headline": { "id": "headline", "text": "Further than you think", "at": 7 }
+      }
+    },
+    {
+      "id": "s02",
+      "type": "key-term",
+      "from": 11,
+      "to": 24,
+      "transition": "push-up",
+      "content": {
+        "term": { "id": "term", "text": "Latency", "at": 16 }
+      }
+    },
+    {
+      "id": "s03",
+      "type": "architecture-diagram",
+      "from": 25,
+      "to": 37,
+      "canvas": "c1",
+      "transition": "camera",
+      "content": {
+        "nodes": [
+          { "id": "browser", "label": "Browser", "icon": "lucide:laptop", "at": 26 },
+          { "id": "balancer", "label": "Load balancer", "icon": "lucide:network", "at": 30 },
+          { "id": "servers", "label": "3 servers", "icon": "lucide:server", "at": 36 }
+        ],
+        "edges": [
+          { "id": "browser-balancer", "from": "browser", "to": "balancer", "at": 27 },
+          { "id": "balancer-servers", "from": "balancer", "to": "servers", "at": 33 }
+        ]
+      }
+    },
+    {
+      "id": "s04",
+      "type": "flow",
+      "from": 38,
+      "to": 52,
+      "canvas": "c1",
+      "transition": "crossfade",
+      "content": {
+        "steps": [
+          { "id": "cache", "label": "Cache", "icon": "lucide:zap", "at": 42 },
+          { "id": "database", "label": "Database", "icon": "lucide:database", "at": 47 }
+        ],
+        "edges": [{ "id": "cache-database", "from": "cache", "to": "database", "at": 45 }],
+        "packets": [{ "id": "answer", "label": "Answer", "path": ["database", "cache"], "at": 51 }]
+      }
+    },
+    {
+      "id": "s05",
+      "type": "code",
+      "from": 53,
+      "to": 63,
+      "transition": "cut",
+      "content": {
+        "language": "ts",
+        "mode": "editor",
+        "lines": ["await fetch(url);"],
+        "reveal": "typing",
+        "highlights": [{ "id": "fetch-call", "lines": [1], "at": 59 }]
+      }
+    },
+    {
+      "id": "s06",
+      "type": "comparison",
+      "from": 64,
+      "to": 79,
+      "transition": "carry-over",
+      "content": {
+        "left": { "id": "without", "title": "No cache", "at": 64, "items": [] },
+        "right": { "id": "with", "title": "Cache", "at": 73, "items": [{ "id": "memory", "text": "From memory", "at": 78 }] },
+        "verdict": { "id": "caching", "text": "Cache wins", "at": 75 }
+      }
+    },
+    {
+      "id": "s07",
+      "type": "list",
+      "from": 80,
+      "to": 90,
+      "transition": "push-up",
+      "content": {
+        "items": [
+          { "id": "caching", "text": "Caching", "icon": "lucide:zap", "at": 84 },
+          { "id": "cdn", "text": "CDN", "icon": "brand:cloudflare", "at": 86 },
+          { "id": "round-trips", "text": "Fewer round trips", "at": 88 }
+        ]
+      }
+    },
+    {
+      "id": "s08",
+      "type": "stat-chart",
+      "from": 91,
+      "to": 102,
+      "transition": "cut",
+      "content": {
+        "kind": "bars",
+        "bars": [
+          { "id": "before", "label": "Before", "value": 800, "unit": "ms", "at": 93 },
+          { "id": "after", "label": "After", "value": 200, "unit": "ms", "at": 97 }
+        ],
+        "caption": { "id": "faster", "text": "4x faster", "at": 100 }
+      }
+    },
+    {
+      "id": "s09",
+      "type": "outro",
+      "from": 103,
+      "to": 111,
+      "content": {
+        "headline": { "id": "headline", "text": "Subscribe", "at": 103 }
+      }
+    }
+  ]
+}
