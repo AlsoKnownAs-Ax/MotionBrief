@@ -20,6 +20,9 @@ export const CORE_PORT_MESSAGE = "motionbrief:core-port";
 /** Command-line flag main passes the app version to the core process with. */
 export const CORE_APP_VERSION_FLAG = "--app-version=";
 
+/** Command-line flag main passes the app's per-user data folder to the core process with. */
+export const CORE_APP_DATA_FLAG = "--app-data=";
+
 /** Commands the app menu sends to the focused window. */
 export type AppCommand = "shortcuts.show";
 

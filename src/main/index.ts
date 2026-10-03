@@ -32,6 +32,7 @@ function start() {
   const core = startCoreProcess({
     entry: coreEntry,
     appVersion: app.getVersion(),
+    appDataDir: app.getPath("userData"),
     onExit: () => broadcast(IPC.coreExited),
     onRestart: () => broadcast(IPC.coreRestarted),
   });

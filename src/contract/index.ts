@@ -60,6 +60,26 @@ export const StoryboardIssueSchema = z.object({
   message: z.string(),
 });
 
+/** Why the transcription model isn't in place. Each variant carries what the UI needs to say so. */
+export const TranscriptionModelErrorSchema = z.discriminatedUnion("code", [
+  z.object({ code: z.literal("NOT_ENOUGH_SPACE"), requiredBytes: z.number(), freeBytes: z.number() }),
+  /** Hugging Face couldn't be reached, or the connection broke; the part already downloaded is kept. */
+  z.object({ code: z.literal("DOWNLOAD_FAILED"), url: z.string(), message: z.string() }),
+  /** The download didn't match the pinned SHA-256, even after one fresh retry. */
+  z.object({ code: z.literal("HASH_MISMATCH"), expected: z.string(), actual: z.string() }),
+  /** The file the user chose isn't the pinned model. */
+  z.object({ code: z.literal("IMPORT_MISMATCH"), path: z.string() }),
+  z.object({ code: z.literal("FILE_FAILED"), path: z.string(), message: z.string() }),
+]);
+
+export const TranscriptionModelStatusSchema = z.object({
+  /** `idle` until a download starts in this session, even if part of the model is already on disk. */
+  state: z.enum(["idle", "downloading", "paused", "verifying", "ready", "failed"]),
+  receivedBytes: z.number().int().nonnegative(),
+  totalBytes: z.number().int().positive(),
+  error: TranscriptionModelErrorSchema.optional(),
+});
+
 export const coreContract = {
   system: {
     info: oc.output(CoreInfoSchema),
@@ -78,6 +98,19 @@ export const coreContract = {
       )
       .output(z.object({ issues: z.array(StoryboardIssueSchema) })),
   },
+  /** The Whisper model the Transcriber runs, downloaded once during first-run setup. */
+  transcriptionModel: {
+    status: oc.output(TranscriptionModelStatusSchema),
+    /** Streams the status now and after every change, including download progress. */
+    watch: oc.output(eventIterator(TranscriptionModelStatusSchema)),
+    /** Starts the download after a free-space check, unless it has started, failed or been paused this session. */
+    start: oc,
+    pause: oc,
+    /** Continues after a pause, or tries again after a failure: Resume and Retry. */
+    resume: oc,
+    /** Installs a copy of a model file the user already has, if it matches the pinned SHA-256. */
+    import: oc.input(z.object({ path: z.string() })),
+  },
 };
 
 export type CoreContract = typeof coreContract;
@@ -90,3 +123,5 @@ export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;
 export type StoryboardTranscript = z.infer<typeof StoryboardTranscriptSchema>;
 export type StoryboardIssue = z.infer<typeof StoryboardIssueSchema>;
+export type TranscriptionModelError = z.infer<typeof TranscriptionModelErrorSchema>;
+export type TranscriptionModelStatus = z.infer<typeof TranscriptionModelStatusSchema>;
