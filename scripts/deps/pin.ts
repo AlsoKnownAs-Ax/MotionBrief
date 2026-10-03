@@ -1,25 +1,34 @@
 // Re-pins one native dependency: `pnpm deps:pin <name> <version>` fetches it for every platform,
 // computes our own SHA-256 and rewrites its entry in deps.json (ADR 0002).
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
-import { AGENT_SDK, CLAUDE_PACKAGES } from "./claude.ts";
 import { describeError } from "./errors.ts";
-import { download, extract, fetchJson, sha256File, type DownloadError, type ExtractError } from "./files.ts";
+import {
+  download,
+  extract,
+  fetchJson,
+  fileStep,
+  readJsonFile,
+  sha256File,
+  type DownloadError,
+  type ExtractError,
+  type FileError,
+} from "./files.ts";
 import {
   DEP_NAMES,
   isDepName,
   MANIFEST_FILE,
-  PLATFORMS,
   readPartialManifest,
   writeManifest,
   type DepName,
   type Manifest,
   type ManifestError,
-  type Platform,
-  type Result,
+  type PartialManifest,
 } from "./manifest.ts";
+import { AGENT_SDK, perPlatform, PLATFORMS, type Platform } from "./platforms.ts";
+import type { Result } from "./result.ts";
 
 /** Where each upstream lives; tests point them at a local server. */
 export type Sources = {
@@ -40,9 +49,11 @@ export type PinError =
   | ManifestError
   | DownloadError
   | ExtractError
+  | FileError
   | { code: "UNKNOWN_DEPENDENCY"; name: string }
   | { code: "INVALID_VERSION"; name: DepName; version: string; expected: string }
-  | { code: "RELEASE_ASSET_MISSING"; release: string; name: DepName; platform: Platform };
+  | { code: "RELEASE_ASSET_MISSING"; release: string; name: DepName; platform: Platform }
+  | { code: "PACKAGE_JSON_INVALID"; path: string; issues: z.core.$ZodIssue[] };
 
 export type PinOptions = {
   rootDir: string;
@@ -64,21 +75,17 @@ export async function pin({ rootDir, name, version, sources = UPSTREAM, log }: P
     return { data: null, error };
   }
 
-  const workDir = await mkdtemp(join(tmpdir(), "motionbrief-pin-"));
+  const { data: workDir, error: workDirError } = await fileStep(tmpdir(), () => mkdtemp(join(tmpdir(), "motionbrief-pin-")));
 
-  try {
-    const { data: entry, error: pinError } = await PINNERS[name]({ version, sources, workDir, rootDir, log });
-
-    if (pinError) {
-      return { data: null, error: pinError };
-    }
-
-    await writeManifest(path, { ...manifest, [name]: entry });
-
-    return { data: null, error: null };
-  } finally {
-    await rm(workDir, { recursive: true, force: true });
+  if (workDirError) {
+    return { data: null, error: workDirError };
   }
+
+  const pinned = await pinInto({ path, manifest, name, context: { version, sources, workDir, rootDir, log } });
+  // Best effort: the OS clears its temp folder in the end.
+  await fileStep(workDir, () => rm(workDir, { recursive: true, force: true }));
+
+  return pinned;
 }
 
 type PinContext = {
@@ -89,6 +96,24 @@ type PinContext = {
   log: (line: string) => void;
 };
 
+type PinIntoOptions = { path: string; manifest: PartialManifest; name: DepName; context: PinContext };
+
+async function pinInto({ path, manifest, name, context }: PinIntoOptions): Promise<Result<null, PinError>> {
+  const { data: entry, error } = await PINNERS[name](context);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const { error: writeError } = await writeManifest(path, { ...manifest, [name]: entry });
+
+  if (writeError) {
+    return { data: null, error: writeError };
+  }
+
+  return { data: null, error: null };
+}
+
 const PINNERS = {
   "chrome-headless-shell": pinChrome,
   ffmpeg: (context) => pinReleaseAssets("ffmpeg", context),
@@ -97,22 +122,19 @@ const PINNERS = {
   "whisper-model": pinWhisperModel,
 } satisfies { [Name in DepName]: (context: PinContext) => Promise<Result<Manifest[Name], PinError>> };
 
-/** Chrome for Testing's names for our platforms. */
-const CHROME_PLATFORMS = { "win-x64": "win64", "mac-arm64": "mac-arm64" } satisfies Record<Platform, string>;
-
 /** `version` is a Chrome for Testing version; pick the one the pinned Puppeteer expects. */
 async function pinChrome({ version, sources, workDir, log }: PinContext): Promise<Result<Manifest["chrome-headless-shell"], PinError>> {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(version)) {
     return invalidVersion("chrome-headless-shell", version, "a full Chrome for Testing version, such as 154.0.8037.57");
   }
 
-  const url = (platform: Platform) => {
-    const chromePlatform = CHROME_PLATFORMS[platform];
+  const urlFor = (platform: Platform) => {
+    const { chromeForTesting } = PLATFORMS[platform];
 
-    return `${sources.chromeForTesting}/${version}/${chromePlatform}/chrome-headless-shell-${chromePlatform}.zip`;
+    return `${sources.chromeForTesting}/${version}/${chromeForTesting}/chrome-headless-shell-${chromeForTesting}.zip`;
   };
 
-  return pinArchives({ version, workDir, log, urls: { "win-x64": url("win-x64"), "mac-arm64": url("mac-arm64") } });
+  return pinArchives({ version, workDir, log, urlFor });
 }
 
 /** The repo whose native-deps releases hold our FFmpeg and whisper-cli builds. */
@@ -133,46 +155,54 @@ async function pinReleaseAssets(name: "ffmpeg" | "whisper-cli", { version, sourc
   }
 
   const assets = ReleaseSchema.safeParse(json).data?.assets ?? [];
-  const found = PLATFORMS.map((platform) => {
+  // Every platform's asset is looked up before anything is downloaded.
+  const { data: urls, error: assetError } = await perPlatform(async (platform): Promise<Result<string, PinError>> => {
     const asset = assets.find((candidate) => candidate.name.startsWith(`${name}-`) && candidate.name.endsWith(`-${platform}.zip`));
 
-    return { platform, url: asset?.browser_download_url };
-  });
-  const missing = found.find(({ url }) => !url);
+    if (!asset) {
+      return { data: null, error: { code: "RELEASE_ASSET_MISSING", release: version, name, platform } };
+    }
 
-  if (missing) {
-    return { data: null, error: { code: "RELEASE_ASSET_MISSING" as const, release: version, name, platform: missing.platform } };
+    return { data: asset.browser_download_url, error: null };
+  });
+
+  if (assetError) {
+    return { data: null, error: assetError };
   }
 
-  const urls = Object.fromEntries(found.map(({ platform, url }) => [platform, url])) as Record<Platform, string>;
-
-  return pinArchives({ version, workDir, log, urls });
+  return pinArchives({ version, workDir, log, urlFor: (platform) => urls[platform] });
 }
 
 type PinArchivesOptions = {
   version: string;
   workDir: string;
   log: (line: string) => void;
-  urls: Record<Platform, string>;
+  urlFor: (platform: Platform) => string;
 };
 
-async function pinArchives({ version, workDir, log, urls }: PinArchivesOptions) {
-  const platforms: Partial<Record<Platform, { url: string; sha256: string }>> = {};
+type Archive = { url: string; sha256: string };
 
-  for (const platform of PLATFORMS) {
-    const url = urls[platform];
+async function pinArchives({ version, workDir, log, urlFor }: PinArchivesOptions) {
+  const { data: platforms, error } = await perPlatform(async (platform): Promise<Result<Archive, PinError>> => {
+    const url = urlFor(platform);
     log(`Hashing ${url}`);
-    const { data: sha256, error } = await download(url, join(workDir, platform));
+    const { data: sha256, error: downloadError } = await download(url, join(workDir, platform));
 
-    if (error) {
-      return { data: null, error };
+    if (downloadError) {
+      return { data: null, error: downloadError };
     }
 
-    platforms[platform] = { url, sha256 };
+    return { data: { url, sha256 }, error: null };
+  });
+
+  if (error) {
+    return { data: null, error };
   }
 
-  return { data: { version, platforms: platforms as Record<Platform, { url: string; sha256: string }> }, error: null };
+  return { data: { version, platforms }, error: null };
 }
+
+type ClaudeBinary = Manifest["claude"]["platforms"][Platform];
 
 /**
  * `version` is the Agent SDK version. The hashes come from the SDK's per-platform npm packages, and the SDK in
@@ -183,22 +213,28 @@ async function pinClaude({ version, sources, workDir, rootDir, log }: PinContext
     return invalidVersion("claude", version, "an exact Agent SDK version, such as 0.3.288");
   }
 
-  const platforms: Partial<Manifest["claude"]["platforms"]> = {};
+  const { data: platforms, error } = await perPlatform(async (platform): Promise<Result<ClaudeBinary, PinError>> => {
+    const { package: packageName, binary } = PLATFORMS[platform].claude;
+    const { data: sha256, error: hashError } = await hashPackageFile({ packageName, file: binary, version, sources, workDir, log });
 
-  for (const platform of PLATFORMS) {
-    const { package: packageName, binary } = CLAUDE_PACKAGES[platform];
-    const { data: sha256, error } = await hashPackageFile({ packageName, file: binary, version, sources, workDir, log });
-
-    if (error) {
-      return { data: null, error };
+    if (hashError) {
+      return { data: null, error: hashError };
     }
 
-    platforms[platform] = { package: packageName, binary, sha256 };
+    return { data: { package: packageName, binary, sha256 }, error: null };
+  });
+
+  if (error) {
+    return { data: null, error };
   }
 
-  await setAgentSdkVersion(rootDir, version);
+  const { error: sdkError } = await setAgentSdkVersion(rootDir, version);
 
-  return { data: { version, platforms: platforms as Manifest["claude"]["platforms"] }, error: null };
+  if (sdkError) {
+    return { data: null, error: sdkError };
+  }
+
+  return { data: { version, platforms }, error: null };
 }
 
 type HashPackageFileOptions = {
@@ -223,7 +259,12 @@ async function hashPackageFile({ packageName, file, version, sources, workDir, l
   }
 
   const unpacked = join(workDir, unscoped);
-  await mkdir(unpacked);
+  const { error: mkdirError } = await fileStep(unpacked, () => mkdir(unpacked));
+
+  if (mkdirError) {
+    return { data: null, error: mkdirError };
+  }
+
   // npm tarballs hold the package under package/.
   const { error: extractError } = await extract(tarball, unpacked, [`package/${file}`]);
 
@@ -231,14 +272,39 @@ async function hashPackageFile({ packageName, file, version, sources, workDir, l
     return { data: null, error: extractError };
   }
 
-  return { data: await sha256File(join(unpacked, "package", file)), error: null };
+  const path = join(unpacked, "package", file);
+
+  return fileStep(path, () => sha256File(path));
 }
 
-async function setAgentSdkVersion(rootDir: string, version: string) {
+/** Kept as a record, which keeps package.json's key order on rewrite. */
+const PackageJsonSchema = z.record(z.string(), z.unknown());
+
+const DependenciesSchema = z.record(z.string(), z.string());
+
+async function setAgentSdkVersion(rootDir: string, version: string): Promise<Result<void, PinError>> {
   const path = join(rootDir, "package.json");
-  const packageJson = JSON.parse(await readFile(path, "utf8")) as { dependencies: Record<string, string> };
-  packageJson.dependencies[AGENT_SDK] = version;
-  await writeFile(path, `${JSON.stringify(packageJson, null, 2)}\n`);
+  const { data: json, error } = await readJsonFile(path);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const { success, data: packageJson, error: parseError } = PackageJsonSchema.safeParse(json);
+
+  if (!success) {
+    return { data: null, error: { code: "PACKAGE_JSON_INVALID", path, issues: parseError.issues } };
+  }
+
+  const deps = DependenciesSchema.safeParse(packageJson.dependencies);
+
+  if (!deps.success) {
+    return { data: null, error: { code: "PACKAGE_JSON_INVALID", path, issues: deps.error.issues } };
+  }
+
+  const updated = { ...packageJson, dependencies: { ...deps.data, [AGENT_SDK]: version } };
+
+  return fileStep(path, () => writeFile(path, `${JSON.stringify(updated, null, 2)}\n`));
 }
 
 const WHISPER_MODEL = { repo: "ggerganov/whisper.cpp", file: "ggml-large-v3-turbo-q5_0.bin" };
@@ -258,7 +324,13 @@ async function pinWhisperModel({ version, sources, workDir, log }: PinContext): 
     return { data: null, error };
   }
 
-  return { data: { version, url, sha256, size: (await stat(file)).size }, error: null };
+  const { data: stats, error: statError } = await fileStep(file, () => stat(file));
+
+  if (statError) {
+    return { data: null, error: statError };
+  }
+
+  return { data: { version, url, sha256, size: stats.size }, error: null };
 }
 
 function invalidVersion(name: DepName, version: string, expected: string) {

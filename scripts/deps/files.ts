@@ -1,14 +1,31 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { Result } from "./manifest.ts";
+import type { Result } from "./result.ts";
 
 export type DownloadError = { code: "DOWNLOAD_FAILED"; url: string; message: string };
 
 export type ExtractError = { code: "EXTRACT_FAILED"; archive: string; message: string };
+
+export type FileError = { code: "FILE_FAILED"; path: string; message: string };
+
+/** Runs a filesystem step on path, turning its rejection into a FileError. */
+export async function fileStep<T>(path: string, step: () => Promise<T>): Promise<Result<T, FileError>> {
+  try {
+    return { data: await step(), error: null };
+  } catch (error) {
+    return { data: null, error: { code: "FILE_FAILED", path, message: String(error) } };
+  }
+}
+
+/** Reads and parses a JSON file; the caller validates the result. */
+export function readJsonFile(path: string): Promise<Result<unknown, FileError>> {
+  return fileStep(path, async () => JSON.parse(await readFile(path, "utf8")));
+}
 
 /** Streams url into dest and returns the SHA-256 of the bytes written. */
 export async function download(url: string, dest: string): Promise<Result<string, DownloadError>> {

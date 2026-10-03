@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { chmod, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { pin, type Sources } from "./pin.ts";
@@ -111,14 +111,7 @@ describe("deps:pin", () => {
 
   it("pins the Claude Code binary from the Agent SDK's per-platform packages, and the SDK to the same version", async () => {
     await writeFile(join(rootDir, "package.json"), JSON.stringify(PACKAGE_JSON, null, 2));
-    server.serve(
-      "/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-0.4.1.tgz",
-      await packTarball({ "package/claude.exe": "claude for win", "package/package.json": "{}" }),
-    );
-    server.serve(
-      "/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-0.4.1.tgz",
-      await packTarball({ "package/claude": "claude for mac", "package/package.json": "{}" }),
-    );
+    await serveClaudePackages("0.4.1");
 
     const { error } = await pinDep("claude", "0.4.1");
 
@@ -134,6 +127,25 @@ describe("deps:pin", () => {
       ...PACKAGE_JSON,
       dependencies: { ...PACKAGE_JSON.dependencies, "@anthropic-ai/claude-agent-sdk": "0.4.1" },
     });
+  });
+
+  it("fails without touching deps.json when package.json has no dependencies to pin the Agent SDK in", async () => {
+    await writeFile(join(rootDir, "package.json"), JSON.stringify({ name: "motionbrief" }));
+    await serveClaudePackages("0.4.1");
+
+    const { error } = await pinDep("claude", "0.4.1");
+
+    expect(error).toMatchObject({ code: "PACKAGE_JSON_INVALID" });
+    expect(await manifest()).toEqual(EXISTING);
+  });
+
+  it("returns a coded error when deps.json can't be written", async () => {
+    server.serve(`/ggerganov/whisper.cpp/resolve/${MODEL_COMMIT}/ggml-large-v3-turbo-q5_0.bin`, "the model");
+    await chmod(join(rootDir, "deps.json"), 0o444);
+
+    const { error } = await pinDep("whisper-model", MODEL_COMMIT);
+
+    expect(error).toMatchObject({ code: "FILE_FAILED", path: join(rootDir, "deps.json") });
   });
 
   it("fails without touching deps.json when a version doesn't exist upstream", async () => {
@@ -156,6 +168,18 @@ const PACKAGE_JSON = {
   name: "motionbrief",
   dependencies: { "@anthropic-ai/claude-agent-sdk": "0.3.0", zod: "4.0.0" },
 };
+
+/** Serves the Agent SDK's per-platform npm tarballs at version, each holding its Claude Code binary. */
+async function serveClaudePackages(version: string) {
+  server.serve(
+    `/@anthropic-ai/claude-agent-sdk-win32-x64/-/claude-agent-sdk-win32-x64-${version}.tgz`,
+    await packTarball({ "package/claude.exe": "claude for win", "package/package.json": "{}" }),
+  );
+  server.serve(
+    `/@anthropic-ai/claude-agent-sdk-darwin-arm64/-/claude-agent-sdk-darwin-arm64-${version}.tgz`,
+    await packTarball({ "package/claude": "claude for mac", "package/package.json": "{}" }),
+  );
+}
 
 /** Answers GitHub's release API for tag with assets downloadable under /download/. */
 function serveRelease(tag: string, assets: string[]) {

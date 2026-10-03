@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type { PinError } from "./pin.ts";
 import type { PostinstallError } from "./postinstall.ts";
 
@@ -9,9 +10,9 @@ export function describeError(error: DepsError) {
 }
 
 const MESSAGES = {
-  MANIFEST_UNREADABLE: (error) => `Can't read ${error.path}: ${error.message}`,
-  MANIFEST_INVALID: (error) =>
-    `${error.path} is invalid: ${error.issues.map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`,
+  FILE_FAILED: (error) => `${error.path}: ${error.message}`,
+  MANIFEST_INVALID: (error) => `${error.path} is invalid: ${describeIssues(error.issues)}`,
+  PACKAGE_JSON_INVALID: (error) => `Can't pin the Agent SDK in ${error.path}: ${describeIssues(error.issues)}`,
   DOWNLOAD_FAILED: (error) => `Downloading ${error.url} failed: ${error.message}`,
   EXTRACT_FAILED: (error) => `Couldn't unpack ${error.archive}: ${error.message}`,
   HASH_MISMATCH: (error) =>
@@ -27,3 +28,7 @@ const MESSAGES = {
   INVALID_VERSION: (error) => `"${error.version}" can't pin ${error.name}: expected ${error.expected}.`,
   RELEASE_ASSET_MISSING: (error) => `Release ${error.release} has no ${error.name} build for ${error.platform}.`,
 } satisfies { [Code in DepsError["code"]]: (error: Extract<DepsError, { code: Code }>) => string };
+
+function describeIssues(issues: z.core.$ZodIssue[]) {
+  return issues.map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`).join("; ");
+}

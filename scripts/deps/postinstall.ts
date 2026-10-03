@@ -5,18 +5,10 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { checkClaude, type ClaudeError } from "./claude.ts";
 import { describeError } from "./errors.ts";
-import { download, extract, type DownloadError, type ExtractError } from "./files.ts";
-import {
-  ARCHIVE_NAMES,
-  MANIFEST_FILE,
-  platformOf,
-  readManifest,
-  type ArchiveName,
-  type Manifest,
-  type ManifestError,
-  type Platform,
-  type Result,
-} from "./manifest.ts";
+import { download, extract, fileStep, type DownloadError, type ExtractError } from "./files.ts";
+import { ARCHIVE_NAMES, MANIFEST_FILE, readManifest, type ArchiveName, type Manifest, type ManifestError } from "./manifest.ts";
+import { platformOf, type Platform } from "./platforms.ts";
+import type { Result } from "./result.ts";
 
 export type PostinstallOptions = {
   rootDir: string;
@@ -85,24 +77,37 @@ async function installArchive({ manifest, name, platform, rootDir, log }: Instal
   }
 
   const staging = join(vendorDir, `.${name}`);
-  await rm(staging, { recursive: true, force: true });
-  await mkdir(join(staging, "unpacked"), { recursive: true });
+  const { error: stagingError } = await fileStep(staging, async () => {
+    await rm(staging, { recursive: true, force: true });
+    await mkdir(join(staging, "unpacked"), { recursive: true });
+  });
+
+  if (stagingError) {
+    return { data: null, error: stagingError };
+  }
 
   log(`Fetching ${name} ${manifest[name].version}`);
   const { error } = await unpackVerified({ name, url, sha256, staging });
 
   if (error) {
-    await rm(staging, { recursive: true, force: true });
+    // Best effort: the next run clears a staging folder left behind.
+    await fileStep(staging, () => rm(staging, { recursive: true, force: true }));
 
     return { data: null, error };
   }
 
   const dest = join(vendorDir, name);
-  await rm(pinFile, { force: true });
-  await rm(dest, { recursive: true, force: true });
-  await rename(join(staging, "unpacked"), dest);
-  await rm(staging, { recursive: true, force: true });
-  await writeFile(pinFile, `${sha256}\n`);
+  const { error: swapError } = await fileStep(dest, async () => {
+    await rm(pinFile, { force: true });
+    await rm(dest, { recursive: true, force: true });
+    await rename(join(staging, "unpacked"), dest);
+    await rm(staging, { recursive: true, force: true });
+    await writeFile(pinFile, `${sha256}\n`);
+  });
+
+  if (swapError) {
+    return { data: null, error: swapError };
+  }
 
   return { data: null, error: null };
 }
@@ -124,12 +129,11 @@ async function unpackVerified({ name, url, sha256, staging }: UnpackVerifiedOpti
   return extract(archive, join(staging, "unpacked"));
 }
 
+/** The archive hash vendor/<name> was installed from; `undefined` when nothing is installed. */
 async function readPin(pinFile: string) {
-  try {
-    return (await readFile(pinFile, "utf8")).trim();
-  } catch {
-    return undefined;
-  }
+  const { data: pin } = await fileStep(pinFile, () => readFile(pinFile, "utf8"));
+
+  return pin?.trim();
 }
 
 if (import.meta.main) {

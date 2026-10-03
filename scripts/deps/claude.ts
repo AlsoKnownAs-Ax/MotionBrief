@@ -1,17 +1,11 @@
 import { existsSync } from "node:fs";
-import { readFile, realpath } from "node:fs/promises";
+import { realpath } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { sha256File } from "./files.ts";
-import type { Manifest, Platform, Result } from "./manifest.ts";
-
-/** The Claude Code binary ships inside this package's per-platform optional dependencies. */
-export const AGENT_SDK = "@anthropic-ai/claude-agent-sdk";
-
-/** npm's name for the Agent SDK's package on each platform, and the binary in it. */
-export const CLAUDE_PACKAGES = {
-  "win-x64": { package: `${AGENT_SDK}-win32-x64`, binary: "claude.exe" },
-  "mac-arm64": { package: `${AGENT_SDK}-darwin-arm64`, binary: "claude" },
-} satisfies Record<Platform, { package: string; binary: string }>;
+import { z } from "zod";
+import { fileStep, readJsonFile, sha256File } from "./files.ts";
+import type { Manifest } from "./manifest.ts";
+import { AGENT_SDK, type Platform } from "./platforms.ts";
+import type { Result } from "./result.ts";
 
 export type ClaudeError =
   | { code: "CLAUDE_SDK_MISSING"; message: string }
@@ -38,7 +32,7 @@ export async function checkClaude({ dep, platform, rootDir }: CheckClaudeOptions
   }
 
   const pin = dep.platforms[platform];
-  const { data: binary, error: binaryError } = await hashBinary(sdk.packageJson, pin.package, pin.binary);
+  const { data: binary, error: binaryError } = await hashBinary(sdk.dir, pin.package, pin.binary);
 
   if (binaryError) {
     return { data: null, error: binaryError };
@@ -51,24 +45,34 @@ export async function checkClaude({ dep, platform, rootDir }: CheckClaudeOptions
   return { data: null, error: null };
 }
 
-async function readSdk(rootDir: string): Promise<Result<{ packageJson: string; version: string }, ClaudeError>> {
-  try {
-    // pnpm links the SDK from its store, where its optional dependencies resolve from the real path.
-    const packageJson = await realpath(join(rootDir, "node_modules", AGENT_SDK, "package.json"));
-    const { version } = JSON.parse(await readFile(packageJson, "utf8")) as { version: string };
+const SdkPackageJsonSchema = z.object({ version: z.string() });
 
-    return { data: { packageJson, version }, error: null };
-  } catch (error) {
-    return { data: null, error: { code: "CLAUDE_SDK_MISSING", message: String(error) } };
+async function readSdk(rootDir: string): Promise<Result<{ dir: string; version: string }, ClaudeError>> {
+  const linked = join(rootDir, "node_modules", AGENT_SDK);
+  // pnpm links the SDK from its store, where its optional dependencies sit next to it.
+  const { data: dir, error } = await fileStep(linked, () => realpath(linked));
+
+  if (error) {
+    return { data: null, error: { code: "CLAUDE_SDK_MISSING", message: error.message } };
   }
+
+  const { data: json, error: readError } = await readJsonFile(join(dir, "package.json"));
+
+  if (readError) {
+    return { data: null, error: { code: "CLAUDE_SDK_MISSING", message: readError.message } };
+  }
+
+  const { success, data: packageJson, error: parseError } = SdkPackageJsonSchema.safeParse(json);
+
+  if (!success) {
+    return { data: null, error: { code: "CLAUDE_SDK_MISSING", message: `its package.json is invalid: ${parseError.message}` } };
+  }
+
+  return { data: { dir, version: packageJson.version }, error: null };
 }
 
-async function hashBinary(
-  sdkPackageJson: string,
-  platformPackage: string,
-  binary: string,
-): Promise<Result<{ path: string; sha256: string }, ClaudeError>> {
-  const packageDir = findPackageDir(dirname(sdkPackageJson), platformPackage);
+async function hashBinary(sdkDir: string, platformPackage: string, binary: string): Promise<Result<{ path: string; sha256: string }, ClaudeError>> {
+  const packageDir = findPackageDir(sdkDir, platformPackage);
 
   if (!packageDir) {
     return {
@@ -78,12 +82,13 @@ async function hashBinary(
   }
 
   const path = join(packageDir, binary);
+  const { data: sha256, error } = await fileStep(path, () => sha256File(path));
 
-  try {
-    return { data: { path, sha256: await sha256File(path) }, error: null };
-  } catch (error) {
-    return { data: null, error: { code: "CLAUDE_BINARY_MISSING", path, message: String(error) } };
+  if (error) {
+    return { data: null, error: { code: "CLAUDE_BINARY_MISSING", path, message: error.message } };
   }
+
+  return { data: { path, sha256 }, error: null };
 }
 
 /**

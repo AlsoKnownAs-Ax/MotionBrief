@@ -72,6 +72,24 @@ describe("postinstall", () => {
     expect(error).toMatchObject({ code: "CLAUDE_BINARY_MISSING" });
   });
 
+  it("refuses an Agent SDK whose package.json has no version", async () => {
+    await writeManifest(await servedManifest());
+    await writeFile(join(rootDir, "node_modules/@anthropic-ai/claude-agent-sdk/package.json"), JSON.stringify({ name: "sdk" }));
+
+    const { error } = await postinstall();
+
+    expect(error).toMatchObject({ code: "CLAUDE_SDK_MISSING" });
+  });
+
+  it("returns a coded error when vendor/ can't be written", async () => {
+    await writeManifest(await servedManifest());
+    await writeFile(join(rootDir, "vendor"), "a file where the folder should be");
+
+    const { error } = await postinstall();
+
+    expect(error).toMatchObject({ code: "FILE_FAILED" });
+  });
+
   it("fails when a pinned URL can't be fetched", async () => {
     const manifest = await servedManifest();
     manifest["whisper-cli"].platforms["win-x64"].url = `${server.url}/gone.zip`;
