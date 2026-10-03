@@ -12,6 +12,8 @@ export const IPC = {
   showAppMenu: "menu:show-app",
   /** renderer → main (invoke): pop up a context menu, resolving to the chosen item id or null. */
   showContextMenu: "menu:show-context",
+  /** renderer → main (invoke): show the native open-file dialog, resolving to the chosen path or null. */
+  chooseFile: "dialog:choose-file",
 } as const;
 
 /** window.postMessage tag the renderer uses to hand its core port to the preload. */
@@ -36,4 +38,10 @@ export type ContextMenuItem = {
   id: string;
   label: string;
   enabled?: boolean;
+};
+
+/** What the native open-file dialog asks for. */
+export type ChooseFileOptions = {
+  title: string;
+  filters: { name: string; extensions: string[] }[];
 };

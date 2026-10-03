@@ -2,10 +2,10 @@
  * Main process: windows, menus, OS integration, the single-instance lock and the core
  * process lifecycle. Product logic lives in the core, never here.
  */
-import { app, BrowserWindow, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
-import { IPC, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
+import { IPC, type ChooseFileOptions, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
 import { createWindow } from "./window";
@@ -15,6 +15,10 @@ const MenuPositionSchema = z.object({ x: z.number(), y: z.number() }) satisfies 
 const ContextMenuItemsSchema = z.array(
   z.object({ id: z.string(), label: z.string(), enabled: z.boolean().optional() }),
 ) satisfies z.ZodType<ContextMenuItem[]>;
+const ChooseFileOptionsSchema = z.object({
+  title: z.string(),
+  filters: z.array(z.object({ name: z.string(), extensions: z.array(z.string()) })),
+}) satisfies z.ZodType<ChooseFileOptions>;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -69,6 +73,23 @@ function handleIpc(core: CoreProcess) {
     }
 
     return popupContextMenu(window, items);
+  });
+
+  ipcMain.handle(IPC.chooseFile, async (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: options } = ChooseFileOptionsSchema.safeParse(payload);
+
+    if (!window || !success) {
+      return null;
+    }
+
+    const { canceled, filePaths } = await dialog.showOpenDialog(window, { ...options, properties: ["openFile"] });
+
+    if (canceled) {
+      return null;
+    }
+
+    return filePaths[0] ?? null;
   });
 }
 

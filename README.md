@@ -51,7 +51,7 @@ src/
   core/        Entry of the core utilityProcess and the composition root
   modules/     Product logic, one folder per module, each with one public index.ts
   contract/    The core API contract (oRPC + zod), shared by the core and the UI
-  shared/      Constants shared by main, preload and renderer
+  shared/      Constants shared by main, preload and renderer, and the deps.json schema scripts/ and the core share
 ```
 
 The UI talks to the core over typed oRPC on a MessagePort the renderer hands, through main, to a single `utilityProcess` that runs every module. If that process dies, main restarts it and the window reconnects. Modules never import Electron or UI code, so tests drive the core API in plain Node through `createCore` in `src/core/composition-root.ts`, swapping adapters where needed. `eslint-plugin-boundaries` enforces this.
