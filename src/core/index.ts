@@ -4,6 +4,7 @@
  */
 import { CORE_APP_VERSION_FLAG } from "../shared/ipc";
 import { createCore } from "./composition-root";
+import { parentPortConnectionStore } from "./connection-store";
 import { serveCore } from "./serve";
 
 const appVersion = process.argv
@@ -14,7 +15,7 @@ if (!appVersion) {
   throw new Error(`The core needs ${CORE_APP_VERSION_FLAG}<version>`);
 }
 
-const { router } = createCore({ appVersion });
+const { router } = createCore({ appVersion, connectionStore: parentPortConnectionStore(process.parentPort) });
 
 process.parentPort.on("message", ({ ports }) => {
   ports.forEach((port) => serveCore(router, port));

@@ -20,8 +20,34 @@ export const CORE_PORT_MESSAGE = "motionbrief:core-port";
 /** Command-line flag main passes the app version to the core process with. */
 export const CORE_APP_VERSION_FLAG = "--app-version=";
 
+/**
+ * core → main over the core's parent port: the Claude connection, which main keeps with
+ * Electron safeStorage (the OS keychain), since the core can't use Electron. Main answers
+ * each request with a response carrying the same id.
+ */
+export const CONNECTION_STORE_CHANNEL = "connection-store";
+
+export type StoredConnectionMessage = {
+  method?: "subscription" | "api-key";
+  apiKey?: string;
+};
+
+export type ConnectionStoreRequest = {
+  channel: typeof CONNECTION_STORE_CHANNEL;
+  id: number;
+  /** Absent to load, present to save. */
+  save?: StoredConnectionMessage;
+};
+
+export type ConnectionStoreResponse = {
+  channel: typeof CONNECTION_STORE_CHANNEL;
+  id: number;
+  connection?: StoredConnectionMessage;
+  error?: string;
+};
+
 /** Commands the app menu sends to the focused window. */
-export type AppCommand = "shortcuts.show";
+export type AppCommand = "shortcuts.show" | "settings.show";
 
 /** Where to pop up a menu, in window coordinates. */
 export type MenuPosition = {
