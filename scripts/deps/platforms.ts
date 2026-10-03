@@ -1,8 +1,6 @@
-import { z } from "zod";
+import type { z } from "zod";
+import { PlatformSchema } from "../../src/shared/deps-manifest.ts";
 import { failed, type Result } from "./result.ts";
-
-/** The platforms MotionBrief ships for, named as the native-deps workflow names them (ADR 0002). */
-export const PlatformSchema = z.enum(["win-x64", "mac-arm64"]);
 
 export type Platform = z.infer<typeof PlatformSchema>;
 
