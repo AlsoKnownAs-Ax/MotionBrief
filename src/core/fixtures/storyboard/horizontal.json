@@ -6,7 +6,7 @@
       "type": "hook",
       "from": 0,
       "to": 10,
-      "transition": "cut",
+      "transition": { "type": "cut" },
       "content": {
         "headline": { "id": "headline", "text": "Your request travels far", "at": 1 },
         "kicker": { "id": "kicker", "text": "further than you think", "at": 7 }
@@ -17,7 +17,7 @@
       "type": "key-term",
       "from": 11,
       "to": 24,
-      "transition": "crossfade",
+      "transition": { "type": "crossfade" },
       "content": {
         "term": { "id": "term", "text": "Latency", "at": 16 },
         "definition": { "id": "definition", "text": "The time between asking and getting an answer", "at": 18 },
@@ -30,7 +30,7 @@
       "from": 25,
       "to": 37,
       "canvas": "c1",
-      "transition": "camera",
+      "transition": { "type": "camera" },
       "content": {
         "nodes": [
           { "id": "browser", "label": "Browser", "icon": "lucide:laptop", "at": 26 },
@@ -49,7 +49,7 @@
       "from": 38,
       "to": 52,
       "canvas": "c1",
-      "transition": "push-left",
+      "transition": { "type": "push-left" },
       "content": {
         "steps": [
           { "id": "server", "label": "Server", "icon": "lucide:server", "at": 39 },
@@ -68,14 +68,13 @@
       "type": "code",
       "from": 53,
       "to": 63,
-      "transition": "zoom-through",
+      "transition": { "type": "zoom-through" },
       "content": {
         "filename": "load.ts",
         "language": "ts",
         "mode": "editor",
-        "lines": ["const response = await fetch(url);"],
-        "reveal": "typing",
-        "highlights": [{ "id": "fetch-call", "lines": [1], "note": "one line", "at": 59 }]
+        "blocks": [{ "id": "fetch-line", "lines": ["const response = await fetch(url);"], "at": 58 }],
+        "highlights": [{ "id": "fetch-call", "lines": [1], "note": "one line", "at": 60 }]
       }
     },
     {
@@ -83,7 +82,7 @@
       "type": "comparison",
       "from": 64,
       "to": 79,
-      "transition": "carry-over",
+      "transition": { "type": "carry-over", "element": "caching" },
       "content": {
         "left": {
           "id": "without",
@@ -105,7 +104,7 @@
       "type": "list",
       "from": 80,
       "to": 90,
-      "transition": "crossfade",
+      "transition": { "type": "crossfade" },
       "content": {
         "title": { "id": "title", "text": "Cut latency", "at": 82 },
         "items": [
@@ -120,7 +119,7 @@
       "type": "stat-chart",
       "from": 91,
       "to": 102,
-      "transition": "cut",
+      "transition": { "type": "cut" },
       "content": {
         "kind": "number",
         "number": { "id": "load-time", "value": 200, "prefix": "<", "unit": "ms", "label": "page load", "at": 97 },

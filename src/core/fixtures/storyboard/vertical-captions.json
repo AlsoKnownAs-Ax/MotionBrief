@@ -6,7 +6,7 @@
       "type": "hook",
       "from": 0,
       "to": 10,
-      "transition": "cut",
+      "transition": { "type": "cut" },
       "content": {
         "headline": { "id": "headline", "text": "Further than you think", "at": 7 }
       }
@@ -16,7 +16,7 @@
       "type": "key-term",
       "from": 11,
       "to": 24,
-      "transition": "push-up",
+      "transition": { "type": "push-up" },
       "content": {
         "term": { "id": "term", "text": "Latency", "at": 16 }
       }
@@ -27,7 +27,7 @@
       "from": 25,
       "to": 37,
       "canvas": "c1",
-      "transition": "camera",
+      "transition": { "type": "camera" },
       "content": {
         "nodes": [
           { "id": "browser", "label": "Browser", "icon": "lucide:laptop", "at": 26 },
@@ -46,7 +46,7 @@
       "from": 38,
       "to": 52,
       "canvas": "c1",
-      "transition": "crossfade",
+      "transition": { "type": "crossfade" },
       "content": {
         "steps": [
           { "id": "cache", "label": "Cache", "icon": "lucide:zap", "at": 42 },
@@ -61,13 +61,12 @@
       "type": "code",
       "from": 53,
       "to": 63,
-      "transition": "cut",
+      "transition": { "type": "cut" },
       "content": {
         "language": "ts",
         "mode": "editor",
-        "lines": ["await fetch(url);"],
-        "reveal": "typing",
-        "highlights": [{ "id": "fetch-call", "lines": [1], "at": 59 }]
+        "blocks": [{ "id": "fetch-line", "lines": ["await fetch(url);"], "at": 58 }],
+        "highlights": [{ "id": "fetch-call", "lines": [1], "at": 60 }]
       }
     },
     {
@@ -75,7 +74,7 @@
       "type": "comparison",
       "from": 64,
       "to": 79,
-      "transition": "carry-over",
+      "transition": { "type": "carry-over", "element": "caching" },
       "content": {
         "left": { "id": "without", "title": "No cache", "at": 64, "items": [] },
         "right": { "id": "with", "title": "Cache", "at": 73, "items": [{ "id": "memory", "text": "From memory", "at": 78 }] },
@@ -87,7 +86,7 @@
       "type": "list",
       "from": 80,
       "to": 90,
-      "transition": "push-up",
+      "transition": { "type": "push-up" },
       "content": {
         "items": [
           { "id": "caching", "text": "Caching", "icon": "lucide:zap", "at": 84 },
@@ -101,7 +100,7 @@
       "type": "stat-chart",
       "from": 91,
       "to": 102,
-      "transition": "cut",
+      "transition": { "type": "cut" },
       "content": {
         "kind": "bars",
         "bars": [

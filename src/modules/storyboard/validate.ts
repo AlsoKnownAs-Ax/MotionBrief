@@ -1,3 +1,4 @@
+import type { z } from "zod";
 import type { StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
 import { CHECKS } from "./checks";
 import { StoryboardSchema, type Storyboard } from "./schema";
@@ -14,7 +15,7 @@ export function validateStoryboard(raw: unknown, transcript: StoryboardTranscrip
   const { success, data: storyboard, error } = StoryboardSchema.safeParse(raw);
 
   if (!success) {
-    return invalid(error.issues.map((issue) => ({ code: "SCHEMA", ...locate(raw, issue.path), message: issue.message })));
+    return invalid(error.issues.flatMap((issue) => schemaIssues(raw, issue)));
   }
 
   const issues = CHECKS.flatMap((check) => check({ storyboard, transcript, rules }));
@@ -28,6 +29,19 @@ export function validateStoryboard(raw: unknown, transcript: StoryboardTranscrip
 
 function invalid(issues: StoryboardIssue[]): StoryboardResult {
   return { data: null, error: { code: "INVALID_STORYBOARD", issues } };
+}
+
+/** One issue per schema problem; an object with unknown fields gets one issue per field, located at that field. */
+function schemaIssues(raw: unknown, issue: z.core.$ZodIssue): StoryboardIssue[] {
+  if (issue.code !== "unrecognized_keys") {
+    return [{ code: "SCHEMA", ...locate(raw, issue.path), message: issue.message }];
+  }
+
+  return issue.keys.map((key) => ({
+    code: "SCHEMA",
+    ...locate(raw, [...issue.path, key]),
+    message: `"${key}" isn't a field here; a Storyboard holds structure and content only, no layout or motion.`,
+  }));
 }
 
 /** Where a schema issue is: the Scene it sits in, if that Scene has a usable id, and the field path below it. */
@@ -48,7 +62,12 @@ function rawSceneId(raw: unknown, index: PropertyKey | undefined): string | unde
   }
 
   const scenes = (raw as { scenes?: unknown } | null)?.scenes;
-  const id = Array.isArray(scenes) ? (scenes[index] as { id?: unknown } | null)?.id : undefined;
+
+  if (!Array.isArray(scenes)) {
+    return undefined;
+  }
+
+  const id = (scenes[index] as { id?: unknown } | null)?.id;
 
   if (typeof id !== "string" || id === "") {
     return undefined;

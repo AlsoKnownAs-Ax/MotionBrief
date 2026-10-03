@@ -19,8 +19,8 @@ export const HeartbeatSchema = z.object({
 
 export const FormatSchema = z.enum(["horizontal", "vertical"]);
 
-/** The Transitions a Style Preset can allow. Camera moves are governed by its Canvas preference instead. */
-export const PresetTransitionSchema = z.enum(["cut", "crossfade", "push", "zoom-through", "carry-over"]);
+/** The Transitions a Style Preset can allow. A camera move also needs both Scenes on one Canvas. */
+export const PresetTransitionSchema = z.enum(["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"]);
 
 export const CanvasPreferenceSchema = z.enum(["never", "where-it-helps", "whenever-possible"]);
 

@@ -1,6 +1,6 @@
 import type { Format, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
 import { copyOf, elementsOf } from "./content";
-import type { Scene, SceneType, Storyboard, Transition } from "./schema";
+import type { Scene, SceneType, Storyboard, Transition, TransitionType } from "./schema";
 
 /** What every check sees: a Storyboard that already fits the schema, and what it is checked against. */
 type CheckInput = {
@@ -198,6 +198,9 @@ function checkElements({ storyboard }: CheckInput): StoryboardIssue[] {
   );
 }
 
+/** The most lines a code Scene shows; more stop being legible in either Format (from the spike). */
+const MAX_CODE_LINES = 14;
+
 /** Rules that depend on a Scene Type's content shape. */
 const CONTENT_RULES = {
   hook: () => [],
@@ -216,15 +219,27 @@ const CONTENT_RULES = {
 
     return [...edgeRules(stepIds, edges, "step"), ...packetRules];
   },
-  code: ({ lines, highlights }) =>
-    highlights.flatMap((highlight, index) =>
+  code: ({ blocks, highlights }) => {
+    const lineCount = blocks.flatMap(({ lines }) => lines).length;
+    const highlightRules = highlights.flatMap((highlight, index) =>
       highlight.lines.map((line, position) => ({
-        broken: line > lines.length,
+        broken: line > lineCount,
         code: "CONTENT" as const,
         field: `content.highlights[${index}].lines[${position}]`,
-        message: `Highlight "${highlight.id}" marks line ${line}, but the code has ${lines.length} lines.`,
+        message: `Highlight "${highlight.id}" marks line ${line}, but the code has ${lineCount} lines.`,
       })),
-    ),
+    );
+
+    return [
+      {
+        broken: lineCount > MAX_CODE_LINES,
+        code: "CONTENT",
+        field: "content.blocks",
+        message: `The code has ${lineCount} lines; a code Scene shows at most ${MAX_CODE_LINES}, so it stays legible. Show the lines that matter.`,
+      },
+      ...highlightRules,
+    ];
+  },
   comparison: () => [],
   list: () => [],
   "stat-chart": ({ kind, number, bars }) => [
@@ -274,91 +289,99 @@ const PRESET_TRANSITION = {
   "push-down": "push",
   "zoom-through": "zoom-through",
   "carry-over": "carry-over",
-  camera: undefined,
-} satisfies Record<Transition, PresetTransition | undefined>;
+  camera: "camera",
+} satisfies Record<TransitionType, PresetTransition>;
 
 /**
  * Every Scene but the last names the Transition into the next one, drawn from the Style Preset's
- * allowed set. Camera moves happen exactly between Scenes on the same Canvas; a carry-over needs an
- * element both Scenes share.
+ * allowed set. Camera moves happen exactly between Scenes on the same Canvas; a carry-over morphs
+ * an element both Scenes have.
  */
 function checkTransitions({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   return storyboard.scenes.flatMap((scene, index) => {
     const next = storyboard.scenes[index + 1];
-    const { transition } = scene;
-    const presetTransition = presetTransitionOf(transition);
+    const type = scene.transition?.type;
+    const carried = carriedElement(scene.transition);
     const sharesCanvas = Boolean(scene.canvas) && scene.canvas === next?.canvas;
 
     return issuesFor(scene.id, [
       {
-        broken: !next && transition !== undefined,
+        broken: !next && type !== undefined,
         code: "TRANSITION",
         field: "transition",
         message: "The last Scene has no next Scene to transition into; remove its transition.",
       },
       {
-        broken: next !== undefined && transition === undefined,
+        broken: next !== undefined && type === undefined,
         code: "TRANSITION",
         field: "transition",
         message: `Needs the Transition into ${next?.id}.`,
       },
       {
-        broken: presetTransition !== undefined && !rules.transitions.includes(presetTransition),
+        broken: type !== undefined && !rules.transitions.includes(PRESET_TRANSITION[type]),
         code: "TRANSITION",
         field: "transition",
-        message: `The Style Preset doesn't allow "${transition}"; it allows ${allowedTransitions(rules)}.`,
+        message: `The Style Preset doesn't allow "${type}"; it allows ${allowedTransitions(rules)}.${withoutCamera(type)}`,
       },
       {
-        broken: next !== undefined && transition === "camera" && !sharesCanvas,
+        broken: next !== undefined && type === "camera" && !sharesCanvas,
         code: "TRANSITION",
         field: "transition",
         message: `"camera" moves only between Scenes on the same Canvas, and ${next?.id} isn't on this Scene's Canvas.`,
       },
       {
-        broken: sharesCanvas && transition !== "camera",
+        broken: sharesCanvas && type !== "camera",
         code: "TRANSITION",
         field: "transition",
         message: `This Scene and ${next?.id} share Canvas ${scene.canvas}, so the Transition between them is "camera".`,
       },
       {
-        broken: next !== undefined && transition === "carry-over" && !sharesElement(scene, next),
+        broken: carried !== undefined && !hasElement(scene, carried),
         code: "TRANSITION",
-        field: "transition",
-        message: `"carry-over" morphs an element into the next Scene, but ${next?.id} has no element with the same id as one in this Scene.`,
+        field: "transition.element",
+        message: `"carry-over" morphs "${carried}", but this Scene has no element with that id.`,
+      },
+      {
+        broken: carried !== undefined && next !== undefined && !hasElement(next, carried),
+        code: "TRANSITION",
+        field: "transition.element",
+        message: `"carry-over" morphs "${carried}" into ${next?.id}, but ${next?.id} has no element with that id. Give the element the same id in both Scenes.`,
       },
     ]);
   });
 }
 
-function presetTransitionOf(transition: Transition | undefined): PresetTransition | undefined {
-  if (!transition) {
+function carriedElement(transition: Transition | undefined): string | undefined {
+  if (transition?.type !== "carry-over") {
     return undefined;
   }
 
-  return PRESET_TRANSITION[transition];
+  return transition.element;
 }
 
 function allowedTransitions(rules: StoryboardRules): string {
-  const allowed = Object.entries(PRESET_TRANSITION)
-    .filter(([, presetTransition]) => presetTransition !== undefined && rules.transitions.includes(presetTransition))
-    .map(([transition]) => `"${transition}"`);
-
-  if (rules.canvas === "never") {
-    return allowed.join(", ");
-  }
-
-  return [...allowed, '"camera" within a Canvas'].join(", ");
+  return Object.entries(PRESET_TRANSITION)
+    .filter(([, presetTransition]) => rules.transitions.includes(presetTransition))
+    .map(([type]) => `"${type}"`)
+    .join(", ");
 }
 
-function sharesElement(scene: Scene, next: Scene): boolean {
-  const ids = new Set(elementsOf(scene).map(({ id }) => id));
+/** A Canvas only moves by camera, so a Style Preset without camera moves can't group Scenes on one. */
+function withoutCamera(type: TransitionType | undefined): string {
+  if (type !== "camera") {
+    return "";
+  }
 
-  return elementsOf(next).some(({ id }) => ids.has(id));
+  return " Without camera moves, keep these Scenes off a shared Canvas.";
+}
+
+function hasElement(scene: Scene, id: string): boolean {
+  return elementsOf(scene).some((element) => element.id === id);
 }
 
 /**
- * A Canvas is one run of at least two consecutive Scenes, used as readily as the Style Preset's
- * Canvas preference says: never, where it helps (the agent's call), or whenever possible.
+ * A Canvas is one run of at least two consecutive Scenes. A Style Preset that never uses a Canvas
+ * rejects every one; "where it helps" and "whenever possible" steer the agent's prompt, not this check.
  */
 function checkCanvases({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   const { scenes } = storyboard;
@@ -378,7 +401,7 @@ function checkCanvases({ storyboard, rules }: CheckInput): StoryboardIssue[] {
       );
   }
 
-  const runIssues = scenes.flatMap((scene, index) => {
+  return scenes.flatMap((scene, index) => {
     const startsRun = scene.canvas !== undefined && scenes[index - 1]?.canvas !== scene.canvas;
     const isReused = scenes.slice(0, index).some(({ canvas }) => canvas === scene.canvas);
     const holdsOneScene = scenes[index + 1]?.canvas !== scene.canvas;
@@ -398,27 +421,20 @@ function checkCanvases({ storyboard, rules }: CheckInput): StoryboardIssue[] {
       },
     ]);
   });
-
-  const usesNoCanvas = scenes.length > 1 && scenes.every(({ canvas }) => canvas === undefined);
-
-  if (rules.canvas === "whenever-possible" && usesNoCanvas) {
-    return [
-      ...runIssues,
-      {
-        code: "CANVAS",
-        field: "scenes",
-        message: "The Style Preset uses a Canvas whenever possible; put runs of consecutive Scenes about the same picture on a shared Canvas.",
-      },
-    ];
-  }
-
-  return runIssues;
 }
 
 /** The most words a label or hero word may have when Captions already show the spoken words. */
 const MAX_CAPTIONED_COPY_WORDS = 4;
 
-/** With Captions on, Storyboard copy is labels, numbers or hero words only: the Captions say the rest. */
+/** Copy of this many words or more that ends like a sentence reads as one. */
+const SENTENCE_MIN_WORDS = 3;
+
+const SENTENCE_END = /[.?!]["'”’)\]]*$/;
+
+/**
+ * With Captions on, Storyboard copy is labels, numbers or hero words only: the Captions say the
+ * rest. A word cap stands in for that; whether copy is apt is left to the prompt.
+ */
 function checkCaptions({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   if (!rules.captions) {
     return [];
@@ -427,12 +443,24 @@ function checkCaptions({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   return storyboard.scenes.flatMap((scene) =>
     issuesFor(
       scene.id,
-      copyOf(scene).map(({ text, field }) => ({
-        broken: text.split(/\s+/).length > MAX_CAPTIONED_COPY_WORDS,
-        code: "CAPTIONS",
-        field,
-        message: `"${text}" is too long while Captions are on; use a label, number or hero word of at most ${MAX_CAPTIONED_COPY_WORDS} words.`,
-      })),
+      copyOf(scene).flatMap(({ text, field }) => {
+        const words = text.split(/\s+/).length;
+
+        return [
+          {
+            broken: words > MAX_CAPTIONED_COPY_WORDS,
+            code: "CAPTIONS",
+            field,
+            message: `"${text}" is too long while Captions are on; use a label, number or hero word of at most ${MAX_CAPTIONED_COPY_WORDS} words.`,
+          },
+          {
+            broken: words >= SENTENCE_MIN_WORDS && words <= MAX_CAPTIONED_COPY_WORDS && SENTENCE_END.test(text),
+            code: "CAPTIONS",
+            field,
+            message: `"${text}" reads as a sentence, which the Captions already show; use a label, number or hero word.`,
+          },
+        ] satisfies SceneRule[];
+      }),
     ),
   );
 }

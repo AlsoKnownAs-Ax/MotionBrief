@@ -10,7 +10,7 @@ import verticalCaptions from "./fixtures/storyboard/vertical-captions.json";
 const HORIZONTAL: StoryboardRules = {
   format: "horizontal",
   captions: false,
-  transitions: ["cut", "crossfade", "push", "zoom-through", "carry-over"],
+  transitions: ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
   canvas: "where-it-helps",
 };
 
@@ -54,7 +54,7 @@ function twoHooks(format: Format) {
   return {
     format,
     scenes: [
-      { id: "s01", type: "hook", from: 0, to: 1, transition: "cut", content: { headline: { id: "headline", text: "Caches help", at: 0 } } },
+      { id: "s01", type: "hook", from: 0, to: 1, transition: { type: "cut" }, content: { headline: { id: "headline", text: "Caches help", at: 0 } } },
       { id: "s02", type: "hook", from: 2, to: 3, content: { headline: { id: "headline", text: "Use them", at: 2 } } },
     ],
   };
@@ -102,7 +102,33 @@ describe("Storyboard validation", () => {
     expect(located(await validate(storyboard))).toEqual([{ code: "SCHEMA", sceneId: "s03", field: "content.nodes" }]);
   });
 
-  it("names a Scene by the id it was given, even a malformed one", async () => {
+  it("rejects fields a Storyboard doesn't have, such as layout, rather than dropping them", async () => {
+    const storyboard = changed(horizontal, ({ scenes }) => {
+      Object.assign(scenes[2]!, { layout: { columns: 3 } });
+    });
+
+    expect(located(await validate(storyboard))).toEqual([{ code: "SCHEMA", sceneId: "s03", field: "layout" }]);
+  });
+
+  it("rejects motion written into a Scene's content", async () => {
+    const storyboard = changed(horizontal, ({ scenes }) => {
+      Object.assign(scenes[0]!.content, {
+        headline: { id: "headline", text: "Your request travels far", at: 1, motion: "fade" },
+      });
+    });
+
+    expect(located(await validate(storyboard))).toEqual([{ code: "SCHEMA", sceneId: "s01", field: "content.headline.motion" }]);
+  });
+
+  it("accepts any DOM-safe Scene id", async () => {
+    const storyboard = changed(horizontal, ({ scenes }) => {
+      scenes[0]!.id = "intro";
+    });
+
+    expect(await validate(storyboard)).toEqual([]);
+  });
+
+  it("rejects a hyphen in a Scene id, which would make `<sceneId>-<elementId>` ambiguous, naming the Scene by it", async () => {
     const storyboard = changed(horizontal, ({ scenes }) => {
       scenes[2]!.id = "scene-3";
     });
@@ -259,14 +285,50 @@ describe("Storyboard validation", () => {
       ]);
     });
 
+    it("rejects a code Scene without anchored blocks of code", async () => {
+      const storyboard = changed(horizontal, ({ scenes }) => {
+        Object.assign(scenes[4]!.content, { blocks: [] });
+      });
+
+      expect(located(await validate(storyboard))).toContainEqual({ code: "SCHEMA", sceneId: "s05", field: "content.blocks" });
+    });
+
     it("rejects a code highlight past the last line", async () => {
       const storyboard = changed(horizontal, ({ scenes }) => {
-        Object.assign(scenes[4]!.content, { highlights: [{ id: "fetch-call", lines: [2], at: 59 }] });
+        Object.assign(scenes[4]!.content, { highlights: [{ id: "fetch-call", lines: [2], at: 60 }] });
       });
 
       expect(located(await validate(storyboard))).toEqual([
         { code: "CONTENT", sceneId: "s05", field: "content.highlights[0].lines[0]" },
       ]);
+    });
+
+    it("rejects more code than a Scene can show legibly, counted across blocks", async () => {
+      const storyboard = changed(horizontal, ({ scenes }) => {
+        Object.assign(scenes[4]!.content, {
+          blocks: [
+            { id: "setup", lines: Array.from({ length: 8 }, (_, line) => `const a${line} = ${line};`), at: 58 },
+            { id: "fetch-line", lines: Array.from({ length: 7 }, (_, line) => `await fetch(a${line});`), at: 59 },
+          ],
+        });
+      });
+
+      expect(located(await validate(storyboard))).toEqual([{ code: "CONTENT", sceneId: "s05", field: "content.blocks" }]);
+    });
+
+    it("numbers code lines across blocks, in any programming language", async () => {
+      const storyboard = changed(horizontal, ({ scenes }) => {
+        Object.assign(scenes[4]!.content, {
+          language: "elixir",
+          blocks: [
+            { id: "request", lines: ["url = \"https://example.com\""], at: 58 },
+            { id: "fetch-line", lines: ["Req.get!(url)"], at: 59 },
+          ],
+          highlights: [{ id: "fetch-call", lines: [2], at: 60 }],
+        });
+      });
+
+      expect(await validate(storyboard)).toEqual([]);
     });
 
     it("rejects a bar chart without bars", async () => {
@@ -280,15 +342,27 @@ describe("Storyboard validation", () => {
 
   describe("Transitions", () => {
     it("rejects a Transition the Style Preset doesn't allow", async () => {
-      const issues = await validate(horizontal, { ...HORIZONTAL, transitions: ["cut", "crossfade", "push", "carry-over"] });
+      const issues = await validate(horizontal, { ...HORIZONTAL, transitions: ["cut", "crossfade", "push", "carry-over", "camera"] });
 
       expect(located(issues)).toEqual([{ code: "TRANSITION", sceneId: "s05", field: "transition" }]);
     });
 
     it("treats every push direction as the Style Preset's push", async () => {
-      const issues = await validate(horizontal, { ...HORIZONTAL, transitions: ["cut", "crossfade", "zoom-through", "carry-over"] });
+      const issues = await validate(horizontal, {
+        ...HORIZONTAL,
+        transitions: ["cut", "crossfade", "zoom-through", "carry-over", "camera"],
+      });
 
       expect(located(issues)).toEqual([{ code: "TRANSITION", sceneId: "s04", field: "transition" }]);
+    });
+
+    it("rejects a camera move the Style Preset doesn't allow, even on a Canvas", async () => {
+      const issues = await validate(horizontal, {
+        ...HORIZONTAL,
+        transitions: ["cut", "crossfade", "push", "zoom-through", "carry-over"],
+      });
+
+      expect(located(issues)).toEqual([{ code: "TRANSITION", sceneId: "s03", field: "transition" }]);
     });
 
     it("needs a Transition into the next Scene from every Scene but the last", async () => {
@@ -301,13 +375,21 @@ describe("Storyboard validation", () => {
 
     it("rejects a Transition out of the last Scene", async () => {
       const storyboard = changed(horizontal, ({ scenes }) => {
-        Object.assign(scenes[8]!, { transition: "cut" });
+        Object.assign(scenes[8]!, { transition: { type: "cut" } });
       });
 
       expect(located(await validate(storyboard))).toEqual([{ code: "TRANSITION", sceneId: "s09", field: "transition" }]);
     });
 
-    it("rejects a carry-over when the next Scene shares no element with this one", async () => {
+    it("requires a carry-over to name the element it morphs", async () => {
+      const storyboard = changed(horizontal, ({ scenes }) => {
+        Object.assign(scenes[5]!, { transition: { type: "carry-over" } });
+      });
+
+      expect(located(await validate(storyboard))).toEqual([{ code: "SCHEMA", sceneId: "s06", field: "transition.element" }]);
+    });
+
+    it("rejects a carry-over of an element the next Scene doesn't have", async () => {
       const storyboard = changed(horizontal, ({ scenes }) => {
         Object.assign(scenes[6]!.content, {
           items: [
@@ -317,12 +399,24 @@ describe("Storyboard validation", () => {
         });
       });
 
-      expect(located(await validate(storyboard))).toEqual([{ code: "TRANSITION", sceneId: "s06", field: "transition" }]);
+      expect(located(await validate(storyboard))).toEqual([
+        { code: "TRANSITION", sceneId: "s06", field: "transition.element" },
+      ]);
+    });
+
+    it("rejects a carry-over of an element this Scene doesn't have", async () => {
+      const storyboard = changed(horizontal, ({ scenes }) => {
+        Object.assign(scenes[5]!, { transition: { type: "carry-over", element: "cdn" } });
+      });
+
+      expect(located(await validate(storyboard))).toEqual([
+        { code: "TRANSITION", sceneId: "s06", field: "transition.element" },
+      ]);
     });
 
     it("rejects a camera move between Scenes that aren't on the same Canvas", async () => {
       const storyboard = changed(horizontal, ({ scenes }) => {
-        scenes[0]!.transition = "camera";
+        Object.assign(scenes[0]!, { transition: { type: "camera" } });
       });
 
       expect(located(await validate(storyboard))).toEqual([{ code: "TRANSITION", sceneId: "s01", field: "transition" }]);
@@ -330,7 +424,7 @@ describe("Storyboard validation", () => {
 
     it("moves the camera between Scenes on the same Canvas", async () => {
       const storyboard = changed(horizontal, ({ scenes }) => {
-        scenes[2]!.transition = "crossfade";
+        Object.assign(scenes[2]!, { transition: { type: "crossfade" } });
       });
 
       expect(located(await validate(storyboard))).toEqual([{ code: "TRANSITION", sceneId: "s03", field: "transition" }]);
@@ -342,7 +436,7 @@ describe("Storyboard validation", () => {
     const noCanvas = changed(horizontal, ({ scenes }) => {
       delete scenes[2]!.canvas;
       delete scenes[3]!.canvas;
-      scenes[2]!.transition = "crossfade";
+      Object.assign(scenes[2]!, { transition: { type: "crossfade" } });
     });
 
     it("rejects any Canvas when the Style Preset never uses one", async () => {
@@ -358,14 +452,12 @@ describe("Storyboard validation", () => {
       expect(await validate(noCanvas, { ...HORIZONTAL, canvas: "never" })).toEqual([]);
     });
 
-    it("rejects a Storyboard without a Canvas when the Style Preset uses one whenever possible", async () => {
-      const issues = await validate(noCanvas, { ...HORIZONTAL, canvas: "whenever-possible" });
-
-      expect(located(issues)).toEqual([{ code: "CANVAS", sceneId: undefined, field: "scenes" }]);
-    });
-
     it("leaves Canvases to the agent when the Style Preset uses them where they help", async () => {
       expect(await validate(noCanvas, HORIZONTAL)).toEqual([]);
+    });
+
+    it("leaves Canvases to the agent when the Style Preset uses them whenever possible", async () => {
+      expect(await validate(noCanvas, { ...HORIZONTAL, canvas: "whenever-possible" })).toEqual([]);
     });
 
     it("rejects a Canvas that isn't one run of consecutive Scenes", async () => {
@@ -409,6 +501,21 @@ describe("Storyboard validation", () => {
 
       expect(located(await validate(storyboard, VERTICAL_CAPTIONS))).toEqual([
         { code: "CAPTIONS", sceneId: "s03", field: "content.nodes[0].label" },
+      ]);
+    });
+
+    it("rejects copy that reads as a sentence with Captions on, but not a punctuated hero word", async () => {
+      const storyboard = changed(verticalCaptions, ({ scenes }) => {
+        Object.assign(scenes[6]!.content, {
+          items: [
+            { id: "caching", text: "Fast!", at: 84 },
+            { id: "cdn", text: "Use a CDN.", at: 86 },
+          ],
+        });
+      });
+
+      expect(located(await validate(storyboard, VERTICAL_CAPTIONS))).toEqual([
+        { code: "CAPTIONS", sceneId: "s07", field: "content.items[1].text" },
       ]);
     });
 
