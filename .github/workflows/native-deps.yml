@@ -18,8 +18,9 @@ on:
         default: ""
 
 concurrency:
-  group: native-deps-${{ github.ref }}
-  cancel-in-progress: true
+  group: native-deps-${{ github.ref }}-${{ github.event_name }}
+  # Never cancel a manual run: it may be publishing.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
 
 permissions:
   contents: read
@@ -73,11 +74,10 @@ jobs:
       - name: Install the Vulkan SDK
         if: matrix.platform == 'win-x64'
         run: |
-          . native-deps/versions.env
+          . native-deps/lib.sh
           installer="vulkansdk-windows-X64-$VULKAN_SDK_VERSION.exe"
-          curl --fail --silent --show-error --location --retry 5 --output "$installer" \
-            "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/windows/$installer"
-          echo "$VULKAN_SDK_SHA256  $installer" | sha256sum --check
+          fetch_verified "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/windows/$installer" \
+            "$VULKAN_SDK_SHA256" "$installer"
           root="C:/VulkanSDK/$VULKAN_SDK_VERSION"
           "./$installer" --root "$root" --accept-licenses --default-answer --confirm-command install
           echo "VULKAN_SDK=$root" >> "$GITHUB_ENV"
@@ -174,7 +174,7 @@ jobs:
 
   publish:
     name: Publish release
-    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != ''
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && github.ref == 'refs/heads/main'
     needs: smoke
     runs-on: ubuntu-24.04
     permissions:

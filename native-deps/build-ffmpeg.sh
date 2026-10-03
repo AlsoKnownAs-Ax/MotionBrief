@@ -54,7 +54,7 @@ case "$platform" in
 esac
 
 unpack() {
-  tar -xzf "$sources/$1" -C "$work"
+  tar -xf "$sources/$1" -C "$work"
 }
 
 log "Building zlib $ZLIB_VERSION"
@@ -99,7 +99,7 @@ unpack "$X265_SRC_TARBALL"
 )
 
 log "Building FFmpeg $FFMPEG_VERSION"
-tar -xJf "$sources/$FFMPEG_SRC_TARBALL" -C "$work"
+unpack "$FFMPEG_SRC_TARBALL"
 ffmpeg_src="$work/ffmpeg-$FFMPEG_VERSION"
 ffmpeg_flags=(
   --prefix="$prefix"
@@ -130,20 +130,23 @@ ffmpeg_flags=(
 )
 
 cp "$prefix/bin/ffmpeg$exe" "$prefix/bin/ffprobe$exe" "$pkg/"
+# x264 and x265 are GPL version 2 or later too, so one GPL text covers all three.
 cp "$ffmpeg_src/COPYING.GPLv2" "$pkg/COPYING.GPLv2.txt"
+cp "$work/zlib-$ZLIB_VERSION/LICENSE" "$pkg/LICENSE-zlib.txt"
 cat > "$pkg/BUILDINFO.txt" << EOF
-FFmpeg $FFMPEG_VERSION for $platform, licensed under the GNU GPL version 2 or later.
+FFmpeg $FFMPEG_VERSION for $platform, licensed under the GNU GPL version 2 or later
+(COPYING.GPLv2.txt).
 
 Statically linked:
-  zlib $ZLIB_VERSION
-  x264 $X264_COMMIT
-  x265 $X265_VERSION
+  zlib $ZLIB_VERSION (zlib license, LICENSE-zlib.txt)
+  x264 $X264_COMMIT (GPL version 2 or later)
+  x265 $X265_VERSION (GPL version 2 or later)
 
 The complete corresponding source (every tarball above) and the build script
 (native-deps/build-ffmpeg.sh) are attached to the same GitHub Release as this
 binary, in the source archive.
 
-configure ${ffmpeg_flags[*]}
+configure ${ffmpeg_flags[*]//$prefix/<prefix>}
 EOF
 
 zip_dir "$pkg" "$out/ffmpeg-$FFMPEG_VERSION-$platform.zip"

@@ -97,7 +97,14 @@ grep -q '"t_dtw"' transcript.json || die "transcript has no DTW word timings"
 
 if [ "$platform" = win-x64 ]; then
   # Runners have no GPU, so this proves the CPU fallback of GGML_BACKEND_DL.
+  if [ -f /c/Windows/System32/vulkan-1.dll ]; then
+    echo "This runner has a Vulkan loader but no GPU."
+  else
+    echo "This runner has no Vulkan loader."
+  fi
   grep -q "loaded CPU backend" whisper.log || die "whisper-cli didn't load a CPU backend"
+else
+  grep -q "found GPU device.*MTL" whisper.log || die "whisper-cli didn't run on Metal"
 fi
 
 log "Smoke test passed for $platform"

@@ -3,7 +3,7 @@
 Builds the native executables MotionBrief ships but nobody publishes in the form we need (ADR 0002):
 
 - **whisper-cli** from a pinned whisper.cpp tag. macOS arm64 is one static binary with Metal and its shaders embedded. Windows x64 is `whisper-cli.exe` with ggml backend DLLs loaded at runtime (`GGML_BACKEND_DL`): Vulkan when the machine has a GPU and a Vulkan loader, otherwise the best CPU variant. The MSVC runtime DLLs ship alongside it.
-- **FFmpeg and FFprobe**: a minimal GPL build (GPL version 2 or later) statically linked against zlib, libx264 and libx265, for both platforms. The macOS build also enables VideoToolbox.
+- **FFmpeg and FFprobe**: a minimal GPL build (GPL version 2 or later) statically linked against zlib, libx264 and libx265, for both platforms. The macOS build also enables VideoToolbox, a system framework that adds no dependency, so HyperFrames can use its GPU encoder.
 
 The `native-deps` workflow (`.github/workflows/native-deps.yml`) runs these scripts on native runners (`macos-15` arm64, `windows-2025`).
 
@@ -18,7 +18,7 @@ The `native-deps` workflow (`.github/workflows/native-deps.yml`) runs these scri
 ## Publishing a release
 
 1. Change the pins in `versions.env` and push. The workflow builds and smoke-tests on every push that touches this folder.
-2. Run the workflow manually from `main` with a new `release_tag`, such as `native-deps-2`.
+2. Run the workflow manually from `main` with a new `release_tag`, such as `native-deps-2`. Runs from other branches never publish.
 3. The release holds:
    - `whisper-cli-<tag>-<platform>.zip`
    - `ffmpeg-<version>-<platform>.zip`
