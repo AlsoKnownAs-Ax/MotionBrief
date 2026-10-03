@@ -1,0 +1,145 @@
+import { access, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { CheckFinding, StoryboardIssue, StoryboardRules, StoryboardTranscript, UnitCode } from "../../contract";
+import { assemble, planUnits, type AssembledPage } from "../assembler";
+import { FRAME_CONTRACT_VERSION, inlineIcons, type FrameTokens } from "../frame";
+import { validateStoryboard } from "../storyboard";
+import { checkContract } from "./contract";
+import { runHyperframesCheck, type HyperframesError } from "./hyperframes";
+import { openFramePage, type FramePageError } from "./page";
+import { tokenLint } from "./token-lint";
+
+export type CheckerOptions = {
+  /** The pinned chrome-headless-shell binary. */
+  chromePath: string;
+};
+
+export type CheckInput = {
+  storyboard: unknown;
+  transcript: StoryboardTranscript;
+  rules: StoryboardRules;
+  tokens: FrameTokens;
+  /** Scene code per unit id; a unit without code is drawn as its fallback Scene. */
+  code: Record<string, UnitCode>;
+};
+
+export type CheckReport = {
+  frameContractVersion: string;
+  /** Every finding, each mapped to its unit where it has one. None means every unit passes. */
+  findings: CheckFinding[];
+};
+
+export type CheckerError =
+  | { code: "INVALID_STORYBOARD"; issues: StoryboardIssue[] }
+  | { code: "UNKNOWN_UNIT"; unit: string; units: string[] }
+  | { code: "CHROME_MISSING"; path: string }
+  | { code: "PAGE_FAILED"; message: string }
+  | FramePageError
+  | HyperframesError;
+
+export type CheckResult = { data: CheckReport; error: null } | { data: null; error: CheckerError };
+
+export type Checker = ReturnType<typeof createChecker>;
+
+/**
+ * Checks Scene code inside the frame: it assembles the Storyboard's units into a page in a
+ * temporary folder, runs `hyperframes lint` and `check`, the token lint, icon lookup and the anchor
+ * contract, and reports every finding against the unit it belongs to.
+ */
+export function createChecker({ chromePath }: CheckerOptions) {
+  async function check({ storyboard: raw, transcript, rules, tokens, code }: CheckInput): Promise<CheckResult> {
+    const { data: storyboard, error } = validateStoryboard(raw, transcript, rules);
+
+    if (error) {
+      return { data: null, error: { code: "INVALID_STORYBOARD", issues: error.issues } };
+    }
+
+    const unitIds = planUnits(storyboard, transcript).map(({ id }) => id);
+    const unknown = Object.keys(code).find((unit) => !unitIds.includes(unit));
+
+    if (unknown) {
+      return { data: null, error: { code: "UNKNOWN_UNIT", unit: unknown, units: unitIds } };
+    }
+
+    if (!(await exists(chromePath))) {
+      return { data: null, error: { code: "CHROME_MISSING", path: chromePath } };
+    }
+
+    const dir = await mkdtemp(join(tmpdir(), "motionbrief-check-"));
+
+    try {
+      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, tokens, code });
+
+      if (assembleError) {
+        return { data: null, error: assembleError };
+      }
+
+      const { data: pageFindings, error: pageError } = await checkPage(dir, assembled);
+
+      if (pageError) {
+        return { data: null, error: pageError };
+      }
+
+      const codeFindings = await Promise.all(Object.entries(code).map(([unit, unitCode]) => checkCode(unit, unitCode)));
+
+      return { data: { frameContractVersion: FRAME_CONTRACT_VERSION, findings: [...codeFindings.flat(), ...pageFindings] }, error: null };
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+
+  async function checkPage(dir: string, assembled: AssembledPage) {
+    const { data: hyperframesFindings, error } = await runHyperframesCheck({ dir, chromePath, units: assembled.units });
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: page, error: pageError } = await openFramePage({ dir, chromePath, width: assembled.width, height: assembled.height });
+
+    if (pageError) {
+      return { data: null, error: pageError };
+    }
+
+    try {
+      return { data: [...hyperframesFindings, ...(await checkContract(page, assembled))], error: null };
+    } finally {
+      await page.close();
+    }
+  }
+
+  return { check };
+}
+
+/** What can be checked in the code alone: tokens and icon names. */
+async function checkCode(unit: string, code: UnitCode): Promise<CheckFinding[]> {
+  const { unknownIcons } = await inlineIcons(code.html);
+
+  return [
+    ...tokenLint(unit, code),
+    ...unknownIcons.map((name) => ({
+      unit,
+      source: "icons" as const,
+      code: "UNKNOWN_ICON",
+      message: `There is no icon "${name}". Use "lucide:<name>" from Lucide or "brand:<slug>" from Simple Icons.`,
+    })),
+  ];
+}
+
+async function assembleIn(dir: string, options: Omit<Parameters<typeof assemble>[0], "dir">) {
+  try {
+    return { data: await assemble({ dir, ...options }), error: null };
+  } catch (error) {
+    return { data: null, error: { code: "PAGE_FAILED", message: String((error as Error).message ?? error) } satisfies CheckerError };
+  }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -60,6 +60,27 @@ export const StoryboardIssueSchema = z.object({
   message: z.string(),
 });
 
+/** Scene code as the agent writes it for one unit (a lone Scene, or the Scenes sharing a Canvas). */
+export const UnitCodeSchema = z.object({ css: z.string(), html: z.string(), js: z.string() });
+
+export const CheckFindingSchema = z.object({
+  /** The unit at fault, named after its Scene or Canvas; absent when the finding is about the page as a whole. */
+  unit: z.string().optional(),
+  /** `hyperframes lint`, `hyperframes check`, the anchor contract, the token lint, or icon inlining. */
+  source: z.enum(["lint", "check", "contract", "tokens", "icons"]),
+  code: z.string(),
+  message: z.string(),
+  selector: z.string().optional(),
+  /** Seconds into the video where the problem shows. */
+  time: z.number().optional(),
+});
+
+/** Why the Checker couldn't run: the pinned browser is missing, or the page, browser or HyperFrames failed. */
+export const CheckerUnavailableSchema = z.object({
+  cause: z.enum(["CHROME_MISSING", "PAGE_FAILED", "BROWSER_FAILED", "HYPERFRAMES_FAILED"]),
+  detail: z.string(),
+});
+
 export const coreContract = {
   system: {
     info: oc.output(CoreInfoSchema),
@@ -78,6 +99,28 @@ export const coreContract = {
       )
       .output(z.object({ issues: z.array(StoryboardIssueSchema) })),
   },
+  checker: {
+    /**
+     * Assembles a Storyboard's units in the frame and checks them: `hyperframes lint` and `check`,
+     * the token lint, icons and the anchor contract. Units without code are drawn as their fallback
+     * Scene. No findings means every unit passes.
+     */
+    check: oc
+      .errors({
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        CHECKER_UNAVAILABLE: { data: CheckerUnavailableSchema },
+      })
+      .input(
+        z.object({
+          storyboard: z.unknown(),
+          transcript: StoryboardTranscriptSchema,
+          rules: StoryboardRulesSchema,
+          code: z.record(z.string(), UnitCodeSchema),
+        }),
+      )
+      .output(z.object({ frameContractVersion: z.string(), findings: z.array(CheckFindingSchema) })),
+  },
 };
 
 export type CoreContract = typeof coreContract;
@@ -90,3 +133,6 @@ export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;
 export type StoryboardTranscript = z.infer<typeof StoryboardTranscriptSchema>;
 export type StoryboardIssue = z.infer<typeof StoryboardIssueSchema>;
+export type UnitCode = z.infer<typeof UnitCodeSchema>;
+export type CheckFinding = z.infer<typeof CheckFindingSchema>;
+export type CheckerUnavailable = z.infer<typeof CheckerUnavailableSchema>;

@@ -1,0 +1,4 @@
+.stat { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 34px; text-align: center; }
+.number { font-size: 200px; color: var(--accent); }
+.hit { display: flex; align-items: center; gap: 14px; padding: 18px 28px; border-radius: 999px; background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.hit .mb-icon { font-size: 44px; }

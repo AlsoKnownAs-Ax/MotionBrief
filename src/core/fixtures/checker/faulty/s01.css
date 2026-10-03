@@ -1,0 +1,3 @@
+.diagram { display: flex; align-items: center; justify-content: space-between; padding: 0 40px; }
+.node { display: flex; align-items: center; gap: 22px; padding: 26px 36px; min-width: 360px; color: #ffffff; }
+.node-icon { font-size: 64px; color: var(--accent2); }
