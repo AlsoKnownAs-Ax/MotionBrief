@@ -74,7 +74,7 @@ export async function readAccount(claudePath: string, env: BaseEnv): Promise<Acc
   try {
     const account = await session.accountInfo();
 
-    return { email: account.email, plan: account.subscriptionType };
+    return { email: account.email, plan: planId(account.subscriptionType) };
   } catch {
     return undefined;
   } finally {
@@ -82,6 +82,11 @@ export async function readAccount(claudePath: string, env: BaseEnv): Promise<Acc
     abort.abort();
     session.close();
   }
+}
+
+/** Account info names the plan "Claude Max" where auth status says "max"; the core always uses the latter. */
+function planId(subscriptionType: string | undefined) {
+  return subscriptionType?.replace(/^claude\s+/i, "").toLowerCase();
 }
 
 /** A prompt stream that sends nothing and ends when `signal` aborts. */

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
 import { createCore } from "./composition-root";
 import { fakeAnthropic, fakeClaude, type FakeClaude, type FakeClaudeState } from "./fixtures/claude/fake";
+import { createReplayConnector } from "./fixtures/replay-connector";
 
 const fakes: FakeClaude[] = [];
 const servers: { close: () => Promise<void> }[] = [];
@@ -42,7 +43,8 @@ describe("connecting Claude", () => {
   });
 
   it("labels the login with the account Claude itself reports", async () => {
-    const { core } = connect({ ...SUBSCRIBER, account: { email: "team@example.com", subscriptionType: "team" } });
+    // The real account info names the plan "Claude Team" where auth status says "team".
+    const { core } = connect({ ...SUBSCRIBER, account: { email: "team@example.com", subscriptionType: "Claude Team" } });
 
     const status = await core.connection.status();
 
@@ -215,6 +217,30 @@ describe("connecting with an API key", () => {
     await core.connection.status();
 
     expect(fake.spawns("auth status").map((call) => call.env?.["ANTHROPIC_API_KEY"])).toEqual([GOOD_KEY]);
+  });
+});
+
+describe("swapping the connector", () => {
+  it("serves the connection of whichever connector the composition root is given", async () => {
+    const { connector } = createReplayConnector([]);
+    const { router } = createCore({ appVersion: "1.2.3", adapters: { connector } });
+
+    const status = await createRouterClient(router).connection.status();
+
+    expect(status).toEqual({ isConnected: true, method: "api-key" });
+  });
+
+  it("replays recorded turns and records what it was asked", async () => {
+    const { connector, asked } = createReplayConnector([[{ type: "turn-completed", status: "completed", text: "Storyboard" }]]);
+    const { data: session } = await connector.startSession({ workspaceDir: "/videos/horizontal", model: "claude-opus-5-5" });
+    const events = [];
+
+    for await (const event of session?.sendTurn("Plan the Storyboard") ?? []) {
+      events.push(event);
+    }
+
+    expect(events).toEqual([{ type: "turn-completed", status: "completed", text: "Storyboard" }]);
+    expect(asked.map(({ message }) => message)).toEqual(["Plan the Storyboard"]);
   });
 });
 

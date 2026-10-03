@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { ShortcutKeys } from "@renderer/components/shortcut-keys";
 import { orpc } from "@renderer/core/connection";
+import { SetupChecklist } from "@renderer/setup/checklist";
 import { SHORTCUTS } from "../../../shared/shortcuts";
 
 const NO_VALUE = "–";
@@ -47,6 +48,10 @@ export function Home() {
 
   return (
     <main className="flex flex-1 flex-col items-center justify-center gap-8 p-10">
+      <div className="w-full max-w-3xl">
+        <SetupChecklist />
+      </div>
+
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
         <h1 className="text-app-display">MotionBrief</h1>
         <p className="text-app-body text-ink-muted">The app is running. Projects and generation come next.</p>

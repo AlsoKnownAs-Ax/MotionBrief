@@ -8,6 +8,8 @@ type CoreProcessOptions = {
   onExit: () => void;
   /** A replacement core is up; windows should reconnect. */
   onRestart: () => void;
+  /** A request from the core for something only main can do; the answer, if any, goes back to it. */
+  onRequest: (message: unknown) => Promise<unknown>;
 };
 
 /** Delay before each restart, by how many crashes happened within CRASH_WINDOW_MS. */
@@ -18,7 +20,7 @@ const CRASH_WINDOW_MS = 60_000;
  * Owns the single core utilityProcess: forks it, hands it window ports, and restarts it
  * when it dies so windows stay open and reconnect.
  */
-export function startCoreProcess({ entry, appVersion, onExit, onRestart }: CoreProcessOptions) {
+export function startCoreProcess({ entry, appVersion, onExit, onRestart, onRequest }: CoreProcessOptions) {
   let isRunning = true;
   let isStopping = false;
   let crashTimes: number[] = [];
@@ -30,6 +32,15 @@ export function startCoreProcess({ entry, appVersion, onExit, onRestart }: CoreP
       stdio: "inherit",
     });
     proc.once("exit", handleExit);
+    proc.on("message", (message: unknown) => {
+      void onRequest(message)
+        .then((response) => {
+          if (response !== undefined) {
+            proc.postMessage(response);
+          }
+        })
+        .catch((error: unknown) => console.error("[main] a core request failed", error));
+    });
 
     return proc;
   }

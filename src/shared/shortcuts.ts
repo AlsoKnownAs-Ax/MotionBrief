@@ -13,6 +13,7 @@ export type Shortcut = {
 
 export const SHORTCUTS = {
   newWindow: { label: "New window", accelerator: "CmdOrCtrl+Shift+N" },
+  openSettings: { label: "Settings", accelerator: "CmdOrCtrl+," },
   closeWindow: { label: "Close window", accelerator: "CmdOrCtrl+W" },
   showShortcuts: { label: "Keyboard shortcuts", accelerator: "CmdOrCtrl+/" },
   toggleFullScreen: { label: "Toggle full screen", accelerator: "F11", macAccelerator: "Ctrl+Cmd+F" },
