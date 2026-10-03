@@ -16,11 +16,15 @@
     "build": "electron-vite build",
     "start": "electron-vite preview",
     "lint": "eslint .",
-    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.web.json",
+    "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.web.json && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "postinstall": "node scripts/deps/postinstall.ts",
+    "deps:fetch": "node scripts/deps/postinstall.ts",
+    "deps:pin": "node scripts/deps/pin.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "0.3.288",
     "@orpc/client": "1.15.4",
     "@orpc/contract": "1.15.4",
     "@orpc/server": "1.15.4",

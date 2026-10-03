@@ -27,6 +27,9 @@ jobs:
       # pnpm comes from package.json's packageManager pin.
       - run: corepack enable
 
+      # Its postinstall also fetches the native binaries deps.json pins (a few seconds), so every
+      # run proves the pins still match upstream on both platforms. Jobs that need no binaries
+      # can set MOTIONBRIEF_SKIP_DEPS=1.
       - run: pnpm install --frozen-lockfile
 
       - run: pnpm lint

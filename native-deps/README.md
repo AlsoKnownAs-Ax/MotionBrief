@@ -26,6 +26,6 @@ The `native-deps` workflow (`.github/workflows/native-deps.yml`) runs these scri
    - `SHA256SUMS.txt`
 
    It isn't marked as the latest release, so the app's updater ignores it.
-4. Re-pin the app's dependency manifest to the new assets.
+4. Re-pin the app's dependency manifest to the new assets: `pnpm deps:pin ffmpeg <tag>` and `pnpm deps:pin whisper-cli <tag>`.
 
 Releases are immutable: never delete or replace one that an app release references. GPL compliance depends on its source archive staying available.

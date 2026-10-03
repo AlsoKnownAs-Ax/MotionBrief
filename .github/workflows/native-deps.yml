@@ -9,6 +9,8 @@ on:
   push:
     paths:
       - native-deps/**
+      # Doc edits don't change what gets built.
+      - "!native-deps/**/*.md"
       - .github/workflows/native-deps.yml
   workflow_dispatch:
     inputs:

@@ -24,7 +24,7 @@ const ELECTRON_AND_UI = [
 const HEADLESS = ["core", "module", "contract", "shared"];
 
 export default defineConfig([
-  globalIgnores(["out/", "node_modules/", "prototypes/", ".agents/", ".claude/", ".codex/", ".opencode/", ".impeccable/"]),
+  globalIgnores(["out/", "node_modules/", "vendor/", "prototypes/", ".agents/", ".claude/", ".codex/", ".opencode/", ".impeccable/"]),
   js.configs.recommended,
   tseslint.configs.recommended,
   {
