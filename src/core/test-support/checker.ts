@@ -1,0 +1,20 @@
+import { createRouterClient } from "@orpc/server";
+import type { StoryboardRules } from "../../contract";
+import { createCore, type CoreOptions } from "../composition-root";
+
+/** A Blueprint-like horizontal video: every Transition kind allowed, Canvases where they help, no Captions. */
+export const RULES: StoryboardRules = {
+  format: "horizontal",
+  captions: false,
+  transitions: ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
+  canvas: "where-it-helps",
+};
+
+/** Each check runs `hyperframes check` and the contract probe in the pinned chrome-headless-shell. */
+export const BROWSER_TIMEOUT_MS = 90_000;
+
+export function connect(options: Partial<CoreOptions> = {}) {
+  const { router } = createCore({ appVersion: "1.2.3", ...options });
+
+  return createRouterClient(router);
+}

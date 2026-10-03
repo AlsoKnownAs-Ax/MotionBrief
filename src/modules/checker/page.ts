@@ -1,4 +1,4 @@
-import { createFileServer } from "@hyperframes/producer";
+import { createFileServer, type FileServerHandle } from "@hyperframes/producer";
 import puppeteer, { type Browser } from "puppeteer-core";
 import PROBE from "./runtime/probe.js?raw";
 
@@ -30,10 +30,11 @@ const LOAD_TIMEOUT_MS = 60_000;
  * it, and waits until its timeline is ready to seek.
  */
 export async function openFramePage({ dir, chromePath, width, height }: FramePageOptions) {
+  let server: FileServerHandle | undefined;
   let browser: Browser | undefined;
-  const server = await createFileServer({ projectDir: dir });
 
   try {
+    server = await createFileServer({ projectDir: dir });
     browser = await puppeteer.launch({
       executablePath: chromePath,
       headless: true,
@@ -49,7 +50,7 @@ export async function openFramePage({ dir, chromePath, width, height }: FramePag
     await page.evaluate("document.fonts.ready");
     await page.evaluate(PROBE);
 
-    const opened = browser;
+    const opened = { browser, server };
     const framePage: FramePage = {
       seek: async (time) => {
         await page.evaluate(`window.__hf.seek(${time})`);
@@ -59,15 +60,15 @@ export async function openFramePage({ dir, chromePath, width, height }: FramePag
       evaluate: <T>(expression: string) => page.evaluate(expression) as Promise<T>,
       errors,
       close: async () => {
-        await opened.close();
-        server.close();
+        await opened.browser.close();
+        opened.server.close();
       },
     };
 
     return { data: framePage, error: null };
   } catch (error) {
     await browser?.close();
-    server.close();
+    server?.close();
 
     return { data: null, error: { code: "BROWSER_FAILED", message: String((error as Error).message ?? error) } satisfies FramePageError };
   }

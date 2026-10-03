@@ -1,31 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
-import { createRouterClient } from "@orpc/server";
 import { beforeAll, describe, expect, it } from "vitest";
-import type { CheckFinding, StoryboardRules, UnitCode } from "../contract";
-import { createCore, type CoreOptions } from "./composition-root";
+import type { CheckFinding, UnitCode } from "../contract";
 import storyboard from "./fixtures/checker/storyboard.json";
 import transcript from "./fixtures/checker/transcript.json";
-import horizontal from "./fixtures/storyboard/horizontal.json";
-import longTranscript from "./fixtures/storyboard/transcript.json";
-import verticalCaptions from "./fixtures/storyboard/vertical-captions.json";
-
-/** A Blueprint-like horizontal video: every Transition kind allowed, Canvases where they help, no Captions. */
-const RULES: StoryboardRules = {
-  format: "horizontal",
-  captions: false,
-  transitions: ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
-  canvas: "where-it-helps",
-};
-
-/** Each check runs `hyperframes check` and the contract probe in the pinned chrome-headless-shell. */
-const BROWSER_TIMEOUT_MS = 90_000;
-
-function connect(options: Partial<CoreOptions> = {}) {
-  const { router } = createCore({ appVersion: "1.2.3", ...options });
-
-  return createRouterClient(router);
-}
+import { BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
 
 /** Scene code for a unit, as hand-written in `fixtures/checker/<variant>/<unit>.{css,html,js}`. */
 async function unitCode(variant: string, unit: string): Promise<UnitCode> {
@@ -80,6 +59,10 @@ describe("Checker", () => {
       });
     });
 
+    it("reports an element id used twice in the page", () => {
+      expect(located(findings)).toContainEqual({ unit: "s02", source: "contract", code: "DUPLICATE_ELEMENT_ID", selector: "#s02-caption" });
+    });
+
     it("accepts the elements that keep the contract", () => {
       const contract = located(findings).filter(({ source }) => source === "contract");
 
@@ -88,13 +71,18 @@ describe("Checker", () => {
         "#s01-browser-server",
         "#s01-database",
         "#s01-server",
+        "#s02-caption",
       ]);
     });
 
-    it("rejects raw colors and fonts other than the frame's", () => {
-      expect(located(findings).filter(({ source }) => source === "tokens")).toEqual([
-        { unit: "s01", source: "tokens", code: "RAW_COLOR", selector: undefined },
-        { unit: "s01", source: "tokens", code: "FOREIGN_FONT", selector: undefined },
+    it("rejects raw colors and fonts other than the frame's, in the CSS, the markup and the script", () => {
+      const tokens = findings.filter(({ source }) => source === "tokens").map(({ unit, code, message }) => ({ unit, code, message }));
+
+      expect(tokens).toEqual([
+        { unit: "s01", code: "RAW_COLOR", message: expect.stringMatching(/^Raw color #ffffff in the css\./) },
+        { unit: "s01", code: "FOREIGN_FONT", message: expect.stringMatching(/^Raw fontFamily "Comic Sans MS" in the js\./) },
+        { unit: "s02", code: "RAW_COLOR", message: expect.stringMatching(/^Raw color name "white" in the html\./) },
+        { unit: "s02", code: "RAW_COLOR", message: expect.stringMatching(/^Raw color function rgba\(\) in the js\./) },
       ]);
     });
 
@@ -105,30 +93,6 @@ describe("Checker", () => {
     it("maps a HyperFrames layout finding to the unit it was found in", () => {
       expect(located(findings)).toContainEqual({ unit: "s02", source: "check", code: "content_overlap", selector: expect.any(String) });
     });
-  });
-
-  describe("fallback Scenes", () => {
-    it(
-      "draws every Scene Type, and a Canvas, so that it passes every check in horizontal",
-      async () => {
-        const report = await connect().checker.check({ storyboard: horizontal, transcript: longTranscript, rules: RULES, code: {} });
-
-        expect(report.findings).toEqual([]);
-      },
-      BROWSER_TIMEOUT_MS,
-    );
-
-    it(
-      "passes every check in vertical, with Captions on",
-      async () => {
-        const rules: StoryboardRules = { ...RULES, format: "vertical", captions: true };
-
-        const report = await connect().checker.check({ storyboard: verticalCaptions, transcript: longTranscript, rules, code: {} });
-
-        expect(report.findings).toEqual([]);
-      },
-      BROWSER_TIMEOUT_MS,
-    );
   });
 
   describe("refuses to check", () => {

@@ -38,7 +38,9 @@ export type CheckerError =
   | FramePageError
   | HyperframesError;
 
-export type CheckResult = { data: CheckReport; error: null } | { data: null; error: CheckerError };
+type Result<T, E> = { data: T; error: null } | { data: null; error: E };
+
+export type CheckResult = Result<CheckReport, CheckerError>;
 
 export type Checker = ReturnType<typeof createChecker>;
 
@@ -89,21 +91,33 @@ export function createChecker({ chromePath }: CheckerOptions) {
     }
   }
 
-  async function checkPage(dir: string, assembled: AssembledPage) {
-    const { data: hyperframesFindings, error } = await runHyperframesCheck({ dir, chromePath, units: assembled.units });
+  /** `hyperframes check` and the contract each play the page in their own browser, side by side. */
+  async function checkPage(dir: string, assembled: AssembledPage): Promise<Result<CheckFinding[], CheckerError>> {
+    const [hyperframes, contract] = await Promise.all([
+      runHyperframesCheck({ dir, chromePath, units: assembled.units }),
+      probeContract(dir, assembled),
+    ]);
+
+    if (hyperframes.error) {
+      return { data: null, error: hyperframes.error };
+    }
+
+    if (contract.error) {
+      return { data: null, error: contract.error };
+    }
+
+    return { data: [...hyperframes.data, ...contract.data], error: null };
+  }
+
+  async function probeContract(dir: string, assembled: AssembledPage): Promise<Result<CheckFinding[], FramePageError>> {
+    const { data: page, error } = await openFramePage({ dir, chromePath, width: assembled.width, height: assembled.height });
 
     if (error) {
       return { data: null, error };
     }
 
-    const { data: page, error: pageError } = await openFramePage({ dir, chromePath, width: assembled.width, height: assembled.height });
-
-    if (pageError) {
-      return { data: null, error: pageError };
-    }
-
     try {
-      return { data: [...hyperframesFindings, ...(await checkContract(page, assembled))], error: null };
+      return { data: await checkContract(page, assembled), error: null };
     } finally {
       await page.close();
     }
