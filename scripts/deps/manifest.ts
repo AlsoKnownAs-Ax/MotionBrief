@@ -1,39 +1,10 @@
 import { writeFile } from "node:fs/promises";
-import { z } from "zod";
+import type { z } from "zod";
+import { ManifestSchema, type Manifest } from "../../src/shared/deps-manifest.ts";
 import { fileStep, readJsonFile, type FileError } from "./files.ts";
-import { PlatformSchema } from "./platforms.ts";
 import type { Result } from "./result.ts";
 
-const Sha256 = z.string().regex(/^[0-9a-f]{64}$/, "a lowercase hex SHA-256");
-
-const Archive = z.object({ url: z.url(), sha256: Sha256 });
-
-/** A zip per platform, fetched from an immutable URL and unpacked into vendor/ by postinstall. */
-const ArchiveDep = z.object({
-  version: z.string(),
-  platforms: z.record(PlatformSchema, Archive),
-});
-
-/** The Claude Code binary inside the Agent SDK's per-platform optional dependency: pnpm installs it, postinstall checks its hash. */
-const ClaudeBinary = z.object({ package: z.string(), binary: z.string(), sha256: Sha256 });
-
-const ClaudeDep = z.object({
-  version: z.string(),
-  platforms: z.record(PlatformSchema, ClaudeBinary),
-});
-
-/** One file for every platform, fetched by the app's first-run flow, never by postinstall. */
-const ModelDep = z.object({ version: z.string(), url: z.url(), sha256: Sha256, size: z.int().positive() });
-
-const ManifestSchema = z.object({
-  "chrome-headless-shell": ArchiveDep,
-  ffmpeg: ArchiveDep,
-  "whisper-cli": ArchiveDep,
-  claude: ClaudeDep,
-  "whisper-model": ModelDep,
-});
-
-export type Manifest = z.infer<typeof ManifestSchema>;
+export type { Manifest };
 
 export type DepName = keyof Manifest;
 
