@@ -1,0 +1,211 @@
+name: native-deps
+
+# Builds whisper-cli and GPL FFmpeg/FFprobe from the pins in
+# native-deps/versions.env (ADR 0002). Pushes that touch the build verify it;
+# a manual run with a release tag also publishes the binaries, their source
+# and these build scripts on a GitHub Release.
+
+on:
+  push:
+    paths:
+      - native-deps/**
+      - .github/workflows/native-deps.yml
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Publish to this new release tag, e.g. native-deps-1. Leave empty to only build and smoke test.
+        required: false
+        default: ""
+
+concurrency:
+  group: native-deps-${{ github.ref }}-${{ github.event_name }}
+  # Never cancel a manual run: it may be publishing.
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+permissions:
+  contents: read
+
+jobs:
+  sources:
+    name: Fetch pinned sources
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - run: native-deps/fetch-sources.sh sources
+
+      # Every build job builds from this archive, and the release publishes
+      # it, so the published source is exactly what was built.
+      - name: Archive sources and build scripts
+        run: |
+          mkdir -p dist
+          tar -cf dist/native-deps-source.tar sources native-deps .github/workflows/native-deps.yml
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: source
+          path: dist/native-deps-source.tar
+          compression-level: 0
+
+  whisper:
+    name: whisper-cli (${{ matrix.platform }})
+    needs: sources
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-15
+          - platform: win-x64
+            runner: windows-2025
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: source
+
+      - run: tar -xf native-deps-source.tar sources
+
+      - name: Install the Vulkan SDK
+        if: matrix.platform == 'win-x64'
+        run: |
+          . native-deps/lib.sh
+          installer="vulkansdk-windows-X64-$VULKAN_SDK_VERSION.exe"
+          fetch_verified "https://sdk.lunarg.com/sdk/download/$VULKAN_SDK_VERSION/windows/$installer" \
+            "$VULKAN_SDK_SHA256" "$installer"
+          root="C:/VulkanSDK/$VULKAN_SDK_VERSION"
+          "./$installer" --root "$root" --accept-licenses --default-answer --confirm-command install
+          echo "VULKAN_SDK=$root" >> "$GITHUB_ENV"
+          echo "$root/Bin" >> "$GITHUB_PATH"
+
+      - run: native-deps/build-whisper.sh ${{ matrix.platform }} sources dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: whisper-${{ matrix.platform }}
+          path: dist/*.zip
+          compression-level: 0
+
+  ffmpeg:
+    name: FFmpeg (${{ matrix.platform }})
+    needs: sources
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-15
+            shell: bash
+          - platform: win-x64
+            runner: windows-2025
+            shell: msys2 {0}
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: source
+
+      - name: Install MSYS2 and the MinGW toolchain
+        if: matrix.platform == 'win-x64'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            make
+            diffutils
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      - name: Install pkg-config
+        if: matrix.platform == 'mac-arm64'
+        run: brew install pkgconf
+
+      - run: tar -xf native-deps-source.tar sources
+
+      - run: native-deps/build-ffmpeg.sh ${{ matrix.platform }} sources dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-${{ matrix.platform }}
+          path: dist/*.zip
+          compression-level: 0
+
+  smoke:
+    name: Smoke test (${{ matrix.platform }})
+    needs: [whisper, ffmpeg]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-15
+          - platform: win-x64
+            runner: windows-2025
+    # A fresh runner without the Vulkan SDK or MSYS2, closer to a user's machine.
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "{source,*-${{ matrix.platform }}}"
+          merge-multiple: true
+          path: dist
+
+      - run: tar -xf dist/native-deps-source.tar sources
+
+      - run: native-deps/smoke.sh ${{ matrix.platform }} dist sources
+
+  publish:
+    name: Publish release
+    if: github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && github.ref == 'refs/heads/main'
+    needs: smoke
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          merge-multiple: true
+          path: dist
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          [[ "$TAG" =~ ^native-deps-[0-9A-Za-z._-]+$ ]] || { echo "release_tag must look like native-deps-<n>"; exit 1; }
+          . native-deps/versions.env
+          (cd dist && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          cat > notes.md << EOF
+          Native dependencies for MotionBrief, built by the native-deps workflow from $GITHUB_SHA.
+
+          - whisper-cli: whisper.cpp $WHISPER_CPP_TAG (macOS arm64 with Metal; Windows x64 with Vulkan and CPU backends)
+          - FFmpeg and FFprobe $FFMPEG_VERSION, GPL version 2 or later, with zlib $ZLIB_VERSION, x264 $X264_COMMIT and x265 $X265_VERSION
+
+          \`native-deps-source.tar\` holds the complete corresponding source of every binary here and the scripts that built them.
+          EOF
+          # Not marked latest: the app's updater reads the latest release.
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --target "$GITHUB_SHA" \
+            --latest=false
