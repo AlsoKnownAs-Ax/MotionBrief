@@ -6,7 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CoreClient, GenerationStatus, Project, UnitCode, VideoRef } from "../contract";
 import type { Checker } from "../modules/checker";
 import { createGeneration } from "../modules/generation";
-import type { Previews } from "../modules/preview";
+import type { Previews, Stills } from "../modules/preview";
 import type { Projects, Version } from "../modules/projects";
 import { bundledPreset } from "../modules/style";
 import { realClock } from "../modules/system";
@@ -391,7 +391,7 @@ async function fakedGeneration(project: Project, transcript: unknown, script: Pa
   };
   const projects = {
     video: async () => ({ data: { project, transcript, voiceoverPath: "", version: 1 }, error: null }),
-    latestVersion: async () => ({ data: { version, code: {} as Record<string, UnitCode> }, error: null }),
+    storedVideo: async () => ({ data: { version, code: {} as Record<string, UnitCode> }, error: null }),
     writeUnit: async () => {
       storing.resolve();
       await stored.promise;
@@ -409,8 +409,10 @@ async function fakedGeneration(project: Project, transcript: unknown, script: Pa
   } as unknown as Projects;
   const checker = { check: async () => ({ data: { frameContractVersion: "1.0.0", findings: [] }, error: null }) } as unknown as Checker;
   const previews = { open: async () => ({ data: null, error: { code: "VOICEOVER_MISSING", path: "" } }) } as unknown as Previews;
+  // No stills, so passing units aren't reviewed.
+  const stills = { frames: async () => ({ data: null, error: { code: "BROWSER_FAILED", message: "No stills here" } }) } as unknown as Stills;
   const workDir = await mkdtemp(join(root, "agents-"));
-  const generation = createGeneration({ connector: replay.connector, checker, previews, projects, clock: realClock, workDir });
+  const generation = createGeneration({ connector: replay.connector, checker, previews, stills, projects, clock: realClock, workDir });
 
   return { generation, replay, saved, storing: storing.promise, finishStoring: () => stored.resolve() };
 }
