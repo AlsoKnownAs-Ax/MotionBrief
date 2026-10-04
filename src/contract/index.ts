@@ -24,6 +24,81 @@ export const PresetTransitionSchema = z.enum(["cut", "crossfade", "push", "zoom-
 
 export const CanvasPreferenceSchema = z.enum(["never", "where-it-helps", "whenever-possible"]);
 
+/** A Palette's fixed roles: backgrounds, surfaces, a line color, text, three accents, positive and negative. */
+export const PaletteRoleSchema = z.enum(["bg", "bg2", "surface", "surface2", "line", "ink", "muted", "accent", "accent2", "accent3", "good", "bad"]);
+
+const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "use a six-digit hex color, such as #ff7a3d");
+
+/** The colors of a Style Preset, light or dark; a Preset holds its own copy, never a link to a bundled Palette. */
+export const PaletteSchema = z.object({
+  name: z.string().trim().min(1).max(40),
+  mode: z.enum(["light", "dark"]),
+  colors: z.record(PaletteRoleSchema, HexColorSchema),
+});
+
+/** The OFL font families the frame bundles; Scene code reaches them only through `var(--font-*)`. */
+export const FontFamilySchema = z.enum(["Inter", "JetBrains Mono", "Manrope", "IBM Plex Mono", "Fredoka", "Nunito", "VT323"]);
+
+export const FaceSchema = z.object({
+  family: FontFamilySchema,
+  weight: z.number().int().min(100).max(900).multipleOf(100),
+  /** CSS letter-spacing in em. */
+  tracking: z
+    .string()
+    .regex(/^-?\d*\.?\d+em$/, "use a letter-spacing in em, such as -0.03em")
+    .optional(),
+  /** Size relative to the frame's type scale, for faces that run small or large. */
+  scale: z.number().min(0.5).max(2).optional(),
+});
+
+/** An OFL font pairing: a face for each typography role. */
+export const TypographySchema = z.object({
+  name: z.string().trim().min(1).max(40),
+  display: FaceSchema,
+  body: FaceSchema,
+  label: FaceSchema,
+  mono: FaceSchema,
+});
+
+/** The frame-owned visual treatments a Style Preset picks; Scene code never draws them itself. */
+export const TreatmentsSchema = z.object({
+  surface: z.enum(["flat", "outlined", "elevated"]),
+  /** Corner radius of surfaces, in pixels. */
+  radius: z.number().int().min(0).max(48),
+  background: z.enum(["solid", "gradient", "dot-grid", "line-grid"]),
+  connector: z.object({ style: z.enum(["straight", "curved"]), weight: z.number().int().min(1).max(8) }),
+  line: z.enum(["clean", "sketchy"]),
+  texture: z.enum(["none", "paper", "film-grain", "scanlines"]),
+  icons: z.enum(["outline", "outline-chip", "filled-chip"]),
+});
+
+/** How energetically (energy) and in what manner (character) elements move. */
+export const MotionSchema = z.object({
+  energy: z.enum(["calm", "balanced", "punchy"]),
+  character: z.enum(["smooth", "springy", "snappy", "stepped"]),
+});
+
+/** How Captions show the current word: highlighted, popping, or plain. */
+export const CaptionStyleSchema = z.enum(["highlight", "pop", "plain"]);
+
+/** A Style Preset, the same in either Format. A video keeps a snapshot of the one it was generated with. */
+export const StylePresetSchema = z.object({
+  id: z.string().regex(/^[a-z][a-z0-9-]*$/, "use a kebab-case id"),
+  name: z.string().trim().min(1).max(40),
+  palette: PaletteSchema,
+  typography: TypographySchema,
+  treatments: TreatmentsSchema,
+  motion: MotionSchema,
+  /** Written direction for the agent: what the video should feel like. */
+  direction: z.string().trim().min(1).max(600),
+  transitions: z.array(PresetTransitionSchema).min(1),
+  canvas: CanvasPreferenceSchema,
+  captions: CaptionStyleSchema,
+});
+
+/** A Style Preset as the app lists it: the bundled ones are read-only and are duplicated to edit. */
+export const ListedPresetSchema = StylePresetSchema.extend({ readOnly: z.boolean() });
+
 /** What a Storyboard is checked against: its video's Format and Captions, and the Style Preset's choices. */
 export const StoryboardRulesSchema = z.object({
   format: FormatSchema,
@@ -179,10 +254,20 @@ export const coreContract = {
           storyboard: z.unknown(),
           transcript: StoryboardTranscriptSchema,
           rules: StoryboardRulesSchema,
+          /** The video's Style Preset snapshot, which the frame draws the units in. */
+          preset: StylePresetSchema,
           code: z.record(z.string(), UnitCodeSchema),
         }),
       )
       .output(z.object({ frameContractVersion: z.string(), findings: z.array(CheckFindingSchema) })),
+  },
+  style: {
+    /** The Style Presets to choose from, Blueprint first. The four bundled ones are read-only. */
+    presets: oc.output(z.array(ListedPresetSchema)),
+    /** The bundled Palettes a Preset copies its colors from. */
+    palettes: oc.output(z.array(PaletteSchema)),
+    /** The bundled OFL font pairings a Preset copies its typography from. */
+    typography: oc.output(z.array(TypographySchema)),
   },
   connection: {
     /** Checks the connection with `claude auth status`; spends no tokens. */
@@ -218,6 +303,16 @@ export type Format = z.infer<typeof FormatSchema>;
 export type PresetTransition = z.infer<typeof PresetTransitionSchema>;
 export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;
+export type PaletteRole = z.infer<typeof PaletteRoleSchema>;
+export type Palette = z.infer<typeof PaletteSchema>;
+export type FontFamily = z.infer<typeof FontFamilySchema>;
+export type Face = z.infer<typeof FaceSchema>;
+export type Typography = z.infer<typeof TypographySchema>;
+export type Treatments = z.infer<typeof TreatmentsSchema>;
+export type Motion = z.infer<typeof MotionSchema>;
+export type CaptionStyle = z.infer<typeof CaptionStyleSchema>;
+export type StylePreset = z.infer<typeof StylePresetSchema>;
+export type ListedPreset = z.infer<typeof ListedPresetSchema>;
 export type StoryboardTranscript = z.infer<typeof StoryboardTranscriptSchema>;
 export type StoryboardIssue = z.infer<typeof StoryboardIssueSchema>;
 export type UnitCode = z.infer<typeof UnitCodeSchema>;

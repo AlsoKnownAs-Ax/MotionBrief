@@ -13,13 +13,12 @@ export function fallbackCode(scenes: Scene[], unit: UnitTiming): UnitCode {
   return {
     css: `.fb-stack { display: flex; flex-flow: column wrap; justify-content: center; align-content: center; gap: 24px 64px; }
 .fb-line { max-width: 100%; color: var(--ink); }
-.fb-line:first-child { font-family: var(--font-display); font-size: var(--fs-title); font-weight: 800; line-height: 1.08; }
 .fb-code { padding: 28px 36px; margin: 0; white-space: pre; line-height: 1.4; }`,
     html: blocks
       .map(
         ({ scene, elements }) =>
           `<div id="fb-${scene.id}" class="mb-safe fb-stack" style="font-size: ${sizeFor(elements.length)}">
-${elements.map((element) => lineHtml(scene, element)).join("\n")}
+${elements.map((element, index) => lineHtml(scene, element, index === 0)).join("\n")}
 </div>`,
       )
       .join("\n"),
@@ -45,7 +44,8 @@ function sizeFor(count: number): string {
   return "calc(var(--fs-label) * 0.8)";
 }
 
-function lineHtml(scene: Scene, element: SceneElement): string {
+/** The Scene's first element leads, as a title in the Preset's display face. */
+function lineHtml(scene: Scene, element: SceneElement, leads: boolean): string {
   const id = `${scene.id}-${element.id}`;
   const lines = element.value.lines;
 
@@ -53,7 +53,7 @@ function lineHtml(scene: Scene, element: SceneElement): string {
     return `<pre id="${id}" class="mb-card mb-mono fb-code">${escape(lines.join("\n"))}</pre>`;
   }
 
-  return `<div id="${id}" class="fb-line">${escape(textOf(scene, element.value))}</div>`;
+  return `<div id="${id}" class="${leads ? "mb-title fb-line" : "fb-line"}">${escape(textOf(scene, element.value))}</div>`;
 }
 
 /** The words an element shows: its own copy, or what its fields describe. */

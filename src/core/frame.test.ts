@@ -1,45 +1,23 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { UnitCode } from "../contract";
-import { assemble } from "../modules/assembler";
-import { openFramePage, type FramePage } from "../modules/checker";
-import { BLUEPRINT, inlineIcons } from "../modules/frame";
+import type { StoryboardTranscript, UnitCode } from "../contract";
+import type { FramePage } from "../modules/checker";
+import { inlineIcons } from "../modules/frame";
 import type { Storyboard } from "../modules/storyboard";
 import storyboardJson from "./fixtures/checker/storyboard.json";
 import transcript from "./fixtures/checker/transcript.json";
 import longTranscript from "./fixtures/storyboard/transcript.json";
 import verticalJson from "./fixtures/storyboard/vertical-captions.json";
-import { chromeHeadlessShellPath } from "./native";
-
-/** Opening a page launches the pinned chrome-headless-shell. */
-const BROWSER_TIMEOUT_MS = 60_000;
+import { BLUEPRINT } from "./test-support/checker";
+import { closeFrame, FRAME_TIMEOUT_MS as BROWSER_TIMEOUT_MS, openFrame as openPresetFrame, type OpenFrame } from "./test-support/frame";
 
 const storyboard = storyboardJson as Storyboard;
 const vertical = verticalJson as Storyboard;
 
-type OpenFrame = { page: FramePage; dir: string };
-
-/** Assembles a Storyboard's units in the frame and opens the page; units without code are fallback Scenes. */
-async function openFrame(board: Storyboard, words: typeof transcript, code: Record<string, UnitCode>): Promise<OpenFrame> {
-  const dir = await mkdtemp(join(tmpdir(), "motionbrief-frame-"));
-  const { width, height } = await assemble({ dir, storyboard: board, transcript: words, tokens: BLUEPRINT, code });
-  const { data: page, error } = await openFramePage({ dir, chromePath: chromeHeadlessShellPath(), width, height });
-
-  if (error) {
-    throw new Error(error.message);
-  }
-
-  return { page, dir };
-}
-
-async function closeFrame(frame: OpenFrame | undefined) {
-  await frame?.page.close();
-
-  if (frame) {
-    await rm(frame.dir, { recursive: true, force: true });
-  }
+/** Assembles a Storyboard's units in the frame, in Blueprint, and opens the page; units without code are fallback Scenes. */
+function openFrame(board: Storyboard, words: StoryboardTranscript, code: Record<string, UnitCode>): Promise<OpenFrame> {
+  return openPresetFrame(board, words, code, BLUEPRINT);
 }
 
 async function unitCode(unit: string): Promise<UnitCode> {

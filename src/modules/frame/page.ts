@@ -3,8 +3,10 @@ import type { Format, UnitCode } from "../../contract";
 import { frameCss } from "./css";
 import { bundledFonts } from "./fonts";
 import { FRAME_SIZES } from "./formats";
+import { motionDefaults } from "./motion";
+import { rootTreatments } from "./overlays";
 import MB_RUNTIME from "./runtime/mb.js?raw";
-import type { FrameTokens } from "./tokens";
+import type { FrameStyle } from "./style";
 import { FRAME_CONTRACT_VERSION } from "./version";
 
 const require = createRequire(import.meta.url);
@@ -27,21 +29,23 @@ export type UnitTiming = {
 /** A file the page needs: copied `from` a bundled package, or written with `content`. */
 export type PageAsset = { path: string; from?: string; content?: string };
 
-/** Blueprint's Motion: balanced and smooth, so long-tail ease-outs and no overshoot. */
-const MOTION = { ease: "power3.out", easeInOut: "power2.inOut", duration: 0.5, reveal: "rise" };
-
-/** What the root page loads before any unit: GSAP, the anchor table, the `MB.*` runtime and the bundled fonts. */
-export async function framePage({ format, units }: { format: Format; units: UnitTiming[] }) {
+/**
+ * What the root page loads before any unit: GSAP, the anchor table and the Preset's Motion, the
+ * `MB.*` runtime and the Preset's fonts; and what the frame puts around the root composition for
+ * the Preset's treatments (`defs` before it, `overlay` at its end).
+ */
+export async function framePage({ format, units, style }: { format: Format; units: UnitTiming[]; style: FrameStyle }) {
   const { width, height, safe } = FRAME_SIZES[format];
-  const fonts = await bundledFonts();
+  const fonts = await bundledFonts(style.typography);
+  const treatments = rootTreatments(style.treatments);
   const data = {
     contractVersion: FRAME_CONTRACT_VERSION,
     format,
     width,
     height,
     safe,
-    motion: MOTION,
-    connector: { curve: false },
+    motion: motionDefaults(style.motion),
+    connector: { curve: style.treatments.connector.style === "curved", sketchy: style.treatments.line === "sketchy" },
     units: Object.fromEntries(units.map(({ id, ...timing }) => [id, timing])),
   };
   const assets: PageAsset[] = [
@@ -57,20 +61,25 @@ export async function framePage({ format, units }: { format: Format; units: Unit
 <script src="assets/mb.js"></script>
 <style>
 ${fonts.css}
+${treatments.css}
 </style>`,
+    defs: treatments.defs,
+    overlay: treatments.overlay,
   };
 }
 
 /**
  * A unit's composition: the frame's CSS and background around the agent's code, which runs in a
- * paused GSAP timeline as long as the unit, with `at` bound to the unit's anchors.
+ * paused GSAP timeline as long as the unit, with `at` bound to the unit's anchors. Stepped Motion
+ * plays the timeline through MB.quantize, so Scene code never handles the frame rate.
  */
-export function wrapUnit({ unit, format, tokens, code }: { unit: UnitTiming; format: Format; tokens: FrameTokens; code: UnitCode }) {
+export function wrapUnit({ unit, format, style, code }: { unit: UnitTiming; format: Format; style: FrameStyle; code: UnitCode }) {
   const { width, height } = FRAME_SIZES[format];
+  const timeline = motionDefaults(style.motion).fps > 0 ? `MB.quantize(tl, ${unit.duration})` : "tl";
 
   return `<template>
 <style>
-${frameCss(format, tokens)}
+${frameCss(format, style)}
 </style>
 <style>
 ${code.css}
@@ -86,7 +95,7 @@ ${withDeliberateLayering(code.html)}
   const tl = gsap.timeline({ paused: true });
 ${code.js}
   tl.to({}, { duration: ${unit.duration} }, 0);
-  window.__timelines["${unit.id}"] = tl;
+  window.__timelines["${unit.id}"] = ${timeline};
 })();
 </script>
 </template>

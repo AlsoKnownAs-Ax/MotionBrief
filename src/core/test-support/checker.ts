@@ -2,7 +2,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRouterClient } from "@orpc/server";
 import type { StoryboardRules } from "../../contract";
+import { bundledPreset } from "../../modules/style";
 import { createCore, type CoreOptions } from "../composition-root";
+
+/** The default Style Preset, which the Checker's fixtures are written for. */
+export const BLUEPRINT = bundledPreset("blueprint");
 
 /** A Blueprint-like horizontal video: every Transition kind allowed, Canvases where they help, no Captions. */
 export const RULES: StoryboardRules = {

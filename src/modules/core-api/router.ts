@@ -2,8 +2,8 @@ import { implement } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult } from "../../contract";
 import type { Checker, CheckerError } from "../checker";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
-import { BLUEPRINT } from "../frame";
 import { validateStoryboard } from "../storyboard";
+import { BUNDLED_PALETTES, FONT_PAIRINGS, listPresets } from "../style";
 import type { System } from "../system";
 import type { TranscriptionModel } from "../transcription-model";
 
@@ -43,8 +43,7 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
     },
     checker: {
       check: api.checker.check.handler(async ({ input, errors }) => {
-        // Blueprint until Style Presets reach the frame.
-        const { data: report, error } = await checker.check({ ...input, tokens: BLUEPRINT });
+        const { data: report, error } = await checker.check(input);
 
         if (error?.code === "INVALID_STORYBOARD") {
           throw errors.INVALID_STORYBOARD({ data: { issues: error.issues } });
@@ -60,6 +59,11 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
 
         return report;
       }),
+    },
+    style: {
+      presets: api.style.presets.handler(() => listPresets()),
+      palettes: api.style.palettes.handler(() => structuredClone([...BUNDLED_PALETTES])),
+      typography: api.style.typography.handler(() => structuredClone([...FONT_PAIRINGS])),
     },
     connection: {
       status: api.connection.status.handler(() => connector.status()),
