@@ -3,6 +3,7 @@ import { LoginExpiryBanner } from "@renderer/claude/login-expiry-banner";
 import { SettingsDialog } from "@renderer/components/settings-dialog";
 import { ExportControl } from "@renderer/editor/export-control";
 import { ShortcutsDialog } from "@renderer/components/shortcuts-dialog";
+import { Toaster } from "@renderer/components/toast";
 import { TitleBar } from "@renderer/components/title-bar";
 import { useNavigation, type Screen } from "@renderer/navigation";
 import { Editor, EditorToolbar } from "@renderer/screens/editor";
@@ -31,6 +32,7 @@ export function App() {
       <Screen />
       <SettingsDialog />
       <ShortcutsDialog />
+      <Toaster />
     </div>
   );
 }

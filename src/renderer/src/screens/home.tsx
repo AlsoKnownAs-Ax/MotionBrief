@@ -1,14 +1,17 @@
 import { useQuery } from "@tanstack/react-query";
-import { AudioLinesIcon, FlaskConicalIcon, PlusIcon } from "lucide-react";
+import { AudioLinesIcon, FlaskConicalIcon, FolderOpenIcon, PlusIcon, UploadIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ShortcutKeys } from "@renderer/components/shortcut-keys";
 import { Button } from "@renderer/components/ui/button";
 import { orpc } from "@renderer/core/connection";
 import { useOpenFixtureProject } from "@renderer/editor/open-video";
+import { chooseAndOpenProject, OpenProjectPrompts } from "@renderer/home/open-project";
+import { ProjectList } from "@renderer/home/project-list";
 import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
 import { chooseVoiceover, useFileDrop } from "@renderer/new-project/voiceover-file";
 import { SetupChecklist } from "@renderer/setup/checklist";
+import type { ProjectSummary } from "../../../contract";
 import { SHORTCUTS } from "../../../shared/shortcuts";
 
 const NO_VALUE = "–";
@@ -67,10 +70,16 @@ function StartWithVoiceover() {
         Drop a recording anywhere on this window, or choose one. MotionBrief transcribes it on this computer and turns it into a
         motion-graphics video you revise by asking.
       </p>
-      <Button variant="primary" className="mt-1" onClick={() => void choose()}>
-        <PlusIcon />
-        New Project
-      </Button>
+      <div className="mt-1 flex items-center gap-2">
+        <Button variant="ghost" onClick={() => void chooseAndOpenProject()}>
+          <FolderOpenIcon />
+          Open Project…
+        </Button>
+        <Button variant="primary" onClick={() => void choose()}>
+          <PlusIcon />
+          New Project
+        </Button>
+      </div>
     </section>
   );
 }
@@ -93,17 +102,59 @@ function DropOverlay({ isOver }: { isOver: boolean }) {
   );
 }
 
-/** Home: the setup checklist and the way into a new Project. Recent Projects come with the Project lifecycle. */
+/** Projects, Open Project… and New Project, over the recent Projects. */
+function RecentProjects({ projects }: { projects: ProjectSummary[] }) {
+  const openNewProject = useNavigation((state) => state.openNewProject);
+
+  async function choose() {
+    const path = await chooseVoiceover();
+
+    if (path) {
+      openNewProject(path);
+    }
+  }
+
+  return (
+    <section aria-labelledby="projects-heading" className="flex w-full max-w-5xl flex-col gap-4">
+      <div className="flex items-center gap-2.5">
+        <h1 id="projects-heading" className="text-app-title">
+          Projects
+        </h1>
+        <span className="flex-1" />
+        <Button variant="tertiary" onClick={() => void chooseAndOpenProject()}>
+          <FolderOpenIcon />
+          Open Project…
+        </Button>
+        <Button variant="primary" onClick={() => void choose()}>
+          <PlusIcon />
+          New Project
+        </Button>
+      </div>
+      <ProjectList projects={projects} />
+      <p className="flex items-center gap-2 text-app-xs text-ink-muted">
+        <UploadIcon aria-hidden="true" className="size-3.5" />
+        Drop a Voiceover anywhere on this window to start a new Project. Projects are plain folders you can move, sync or copy.
+      </p>
+    </section>
+  );
+}
+
+/** Home: the setup checklist, the recent Projects, and the way into a new one. */
 export function Home() {
   const info = useQuery(orpc.system.info.queryOptions());
   const heartbeat = useQuery(orpc.system.heartbeat.experimental_liveOptions());
+  const projects = useQuery(orpc.project.list.queryOptions());
   const openNewProject = useNavigation((state) => state.openNewProject);
   const drop = useFileDrop(openNewProject);
+  const hasProjects = (projects.data?.length ?? 0) > 0;
 
   return (
-    <main className="relative flex flex-1 flex-col items-center justify-center gap-8 overflow-y-auto p-10" {...drop.handlers}>
+    <main
+      className={cn("relative flex flex-1 flex-col items-center gap-8 overflow-y-auto p-10", !hasProjects && "justify-center")}
+      {...drop.handlers}
+    >
       <SetupChecklist />
-      <StartWithVoiceover />
+      {hasProjects ? <RecentProjects projects={projects.data ?? []} /> : <StartWithVoiceover />}
 
       <section aria-label="Core" className="w-full max-w-sm rounded-lg bg-surface-1 px-3 py-1">
         <dl className="flex flex-col">
@@ -121,6 +172,7 @@ export function Home() {
         Keyboard shortcuts
       </p>
       <DropOverlay isOver={drop.isOver} />
+      <OpenProjectPrompts />
     </main>
   );
 }

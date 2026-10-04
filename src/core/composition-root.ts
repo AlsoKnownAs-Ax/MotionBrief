@@ -8,7 +8,7 @@ import { createCoreRouter } from "../modules/core-api";
 import { createExporter, projectExportLocations } from "../modules/exporter";
 import { createMedia } from "../modules/media";
 import { createPreviews } from "../modules/preview";
-import { createProjects } from "../modules/projects";
+import { createProjects, type Trash } from "../modules/projects";
 import { createSystem, realClock, realDisk, type Clock, type Disk } from "../modules/system";
 import { createWhisperCli, createWhisperTranscriber, type WhisperEngine } from "../modules/transcriber";
 import { createTranscriptionModel } from "../modules/transcription-model";
@@ -44,6 +44,8 @@ export type CoreOptions = {
   modelPin?: ModelDep;
   /** Where the Claude connection is kept: main's safeStorage in the app, memory when absent. */
   connectionStore?: ConnectionStore;
+  /** Moves deleted Projects to the OS Trash: main's shell in the app. Without it, Delete fails. */
+  trash?: Trash;
   adapters?: Partial<Adapters>;
   /** The chrome-headless-shell the frame runs in; the pinned one in vendor/ by default. */
   chromePath?: string;
@@ -69,6 +71,7 @@ export function createCore({
   cacheCapBytes = DEFAULT_CACHE_CAP_BYTES,
   modelPin = pinnedModel(),
   connectionStore,
+  trash = noTrash,
   adapters,
   chromePath = chromeHeadlessShellPath(),
   ffmpegPath = pinnedFfmpegPath(),
@@ -89,12 +92,22 @@ export function createCore({
   const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR, EXPORT_DIR] });
   const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
-  const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
+  const projects = createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash });
   const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }) };
+  return {
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }),
+    /** A window's connection closed: its Project is closed and unlocked. */
+    disconnect: (connection: string) => projects.disconnect(connection),
+    /** The app is quitting: every open Project is closed and unlocked. */
+    shutdown: () => projects.closeAll(),
+  };
 }
+
+const noTrash: Trash = async () => {
+  throw new Error("This core can't reach the Trash");
+};
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */
 function pinnedModel() {

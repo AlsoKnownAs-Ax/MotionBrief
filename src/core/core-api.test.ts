@@ -42,9 +42,9 @@ describe("core API", () => {
   });
 
   it("serves calls and streams over a MessagePort", async () => {
-    const { router } = createCore({ appVersion: "1.2.3", appDataDir: APP_DATA_DIR, adapters: { clock: manualClock(10_000) } });
+    const served = createCore({ appVersion: "1.2.3", appDataDir: APP_DATA_DIR, adapters: { clock: manualClock(10_000) } });
     const { port1, port2 } = new MessageChannel();
-    serveCore(router, port1);
+    serveCore(served, port1);
     const core: CoreClient = createORPCClient(new RPCLink({ port: port2 }));
     port2.start();
 

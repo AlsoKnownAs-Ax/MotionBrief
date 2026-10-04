@@ -103,7 +103,7 @@ async function create(core: CoreClient, input: Parameters<CoreClient["project"][
 }
 
 async function open(core: CoreClient, path: string) {
-  const project = await core.project.open({ path });
+  const { project } = await core.project.open({ path });
   opened.set(core, [...(opened.get(core) ?? []), project.id]);
 
   return project;
@@ -167,7 +167,8 @@ describe("new Project", { timeout: 30_000 }, () => {
     expect((await readdir(project.path)).sort()).toEqual([".lock", "project.json", "voiceover.wav"]);
     expect(await readFile(join(project.path, "voiceover.wav"))).toEqual(await readFile(source));
     expect(await projectDocument(project.path)).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
+      appVersion: "1.2.3",
       id: project.id,
       voiceover: { file: "voiceover.wav", fileName: "Load balancing.wav" },
       format: "horizontal",

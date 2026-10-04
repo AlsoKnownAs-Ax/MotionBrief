@@ -30,9 +30,10 @@ const bridge: Bridge = {
   showAppMenu: (position) => ipcRenderer.send(IPC.showAppMenu, position),
   showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
   chooseFile: (options) => ipcRenderer.invoke(IPC.chooseFile, options),
+  chooseFolder: (title) => ipcRenderer.invoke(IPC.chooseFolder, title),
+  showInFolder: (path) => ipcRenderer.send(IPC.showInFolder, path),
   pathForFile: (file) => webUtils.getPathForFile(file),
   chooseSavePath: (options) => ipcRenderer.invoke(IPC.chooseSavePath, options),
-  showInFolder: (path) => ipcRenderer.send(IPC.showInFolder, path),
 };
 
 contextBridge.exposeInMainWorld("motionbrief", bridge);

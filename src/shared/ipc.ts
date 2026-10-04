@@ -14,6 +14,8 @@ export const IPC = {
   showContextMenu: "menu:show-context",
   /** renderer → main (invoke): show the native open-file dialog, resolving to the chosen path or null. */
   chooseFile: "dialog:choose-file",
+  /** renderer → main (invoke): show the native choose-folder dialog, resolving to the chosen path or null. */
+  chooseFolder: "dialog:choose-folder",
   /** renderer → main (invoke): show the native Save dialog, resolving to the chosen path or null. */
   chooseSavePath: "dialog:choose-save-path",
   /** renderer → main: reveal a file in Explorer or Finder. */
@@ -63,6 +65,24 @@ export type ConnectionStoreResponse = {
   connection?: StoredConnectionMessage;
   error?: string;
 };
+
+/** core → main over the core's parent port: move a Project folder to the OS Trash, which only main can reach. */
+export const TRASH_CHANNEL = "trash";
+
+export type TrashRequest = {
+  channel: typeof TRASH_CHANNEL;
+  id: number;
+  path: string;
+};
+
+export type TrashResponse = {
+  channel: typeof TRASH_CHANNEL;
+  id: number;
+  error?: string;
+};
+
+/** main → core over the parent port: the app is quitting. The core releases its Project locks, then exits. */
+export const CORE_SHUTDOWN_MESSAGE = "core:shutdown";
 
 /** Commands the app menu sends to the focused window. */
 export type AppCommand = "shortcuts.show" | "settings.show";
