@@ -377,6 +377,7 @@ describe("a word fix that is also on screen", () => {
   let fixedVideo: OpenedVideo;
   let askedAfterFix: number;
   let done: RevisionStatus;
+  let statuses: RevisionStatus[];
 
   beforeAll(async () => {
     // The fix carried into the copy of s02 ("Cache first", "Cache answers") and s04 (the term "Cache").
@@ -385,7 +386,7 @@ describe("a word fix that is also on screen", () => {
     (s02.content.items as { text: string }[])[1]!.text = "Cash answers";
     const s04 = scene(storyboard, "s04");
     (s04.content.term as { text: string }).text = "Cash";
-    connected = await connect({ revision: [submitsPatch({ scenes: [s02, s04], summary: "Wrote cash where the copy said cache." })] });
+    connected = await connect({ revision: [submitsPatch({ scenes: [s02, s04], summary: "Wrote cash where the copy said cache." })] }, { approveCost: true });
     const { core, project, video } = connected;
     v1Units = await generatedGood(project);
     await core.video.setCaptions({ ...video, captions: true });
@@ -395,7 +396,7 @@ describe("a word fix that is also on screen", () => {
     offer = await core.video.wordFixOffer({ ...video, index: cache, previous: "cache" });
     fixedVideo = await core.video.open(video);
     askedAfterFix = connected.replay.asked.length;
-    ({ ended: done } = await revise(core, video, offer!.message, offer!.scope));
+    ({ ended: done, statuses } = await revise(core, video, offer!.message, offer!.scope));
   }, RUN_TIMEOUT_MS);
 
   afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
@@ -408,6 +409,10 @@ describe("a word fix that is also on screen", () => {
     expect(askedAfterFix).toBe(0);
     expect(fixedVideo).toMatchObject({ version: 1, captions: true });
     expect(fixedVideo.preview?.timeline.words[cache]).toMatchObject({ text: "cash" });
+  });
+
+  it("asks approval of the regenerated Scenes' cost like any Revision, on an API key with approval on", () => {
+    expect(statuses.find(({ state }) => state === "approval")?.costUsd?.high).toBeGreaterThan(0);
   });
 
   it("carries the fix into the affected Scenes only, once accepted", async () => {
