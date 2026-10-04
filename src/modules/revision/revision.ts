@@ -10,6 +10,7 @@ import type {
   Transcript,
   UnitCode,
   VideoRef,
+  WordFixOffer,
 } from "../../contract";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
@@ -22,6 +23,7 @@ import type { Clock } from "../system";
 import { runRevisionAgent } from "./agent";
 import { regenerateRequest } from "./prompts";
 import { planRebuild, type UnitRebuild } from "./rebuild";
+import { wordFixOffer } from "./word-fix";
 
 /**
  * The model each role of a Revision runs on until Settings choose others: the Revision agent and Scene code on Opus,
@@ -55,6 +57,8 @@ export type ReviseError =
   | { code: "NOT_GENERATED"; projectId: string }
   | { code: "REVISING"; projectId: string }
   | { code: "UNKNOWN_SCENE"; sceneId: string };
+
+export type WordFixOfferError = Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> | { code: "UNKNOWN_WORD"; index: number; words: number };
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
@@ -495,7 +499,46 @@ export function createRevisions({ connector, checker, previews, stills, projects
     return { data: storeOf(ref).store.watch(signal), error: null };
   }
 
-  return { start, stop, watch };
+  /**
+   * The Revision to offer once the word at `index` was fixed from `previous`: scoped to the current Version's Scenes
+   * whose copy still says the word as it was, or what whisper-cli heard. Nothing to offer before the first Version.
+   */
+  async function offerWordFix(ref: VideoRef, index: number, previous: string): Promise<Result<WordFixOffer | undefined, WordFixOfferError>> {
+    const { data: video, error } = await projects.video(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const words = video.transcript?.words ?? [];
+    const word = words[index];
+
+    if (!word) {
+      return { data: null, error: { code: "UNKNOWN_WORD", index, words: words.length } };
+    }
+
+    const { data: stored, error: storedError } = await projects.storedVideo(ref.projectId, ref.format);
+
+    if (storedError) {
+      return { data: null, error: projectError(storedError) };
+    }
+
+    if (!stored) {
+      return { data: undefined, error: null };
+    }
+
+    const { success, data: storyboard, error: parseError } = StoryboardSchema.safeParse(stored.version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "FILE_FAILED", path: `versions/${stored.version.version}.json`, message: parseError.message } };
+    }
+
+    const spellings = [previous, word.heard].filter((spelling) => spelling !== undefined);
+
+    return { data: wordFixOffer(storyboard, spellings, word.text), error: null };
+  }
+
+  return { start, stop, watch, offerWordFix };
 }
 
 function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {
@@ -572,7 +615,7 @@ function fileErrorOf(error: ProjectsError | VersionError): FileFailed {
   return { code: "FILE_FAILED", path: "", message: error.code };
 }
 
-function projectError(error: ProjectsError | VersionError): ReviseError {
+function projectError(error: ProjectsError | VersionError): Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
   if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
     return error;
   }

@@ -220,6 +220,9 @@ export function createCoreRouter({
       }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
       stopRevision: api.video.stopRevision.handler(({ input }) => revisions.stop(input)),
+      wordFixOffer: api.video.wordFixOffer.handler(async ({ input: { projectId, format, index, previous } }) =>
+        dataOrThrow(await revisions.offerWordFix({ projectId, format }, index, previous)),
+      ),
       stop: api.video.stop.handler(async ({ input }) => {
         dataOrThrow(await generation.stop(input));
       }),

@@ -1,7 +1,7 @@
 import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
-import type { RevisionError, RevisionStatus, TimelineScene, VideoRef } from "../../../contract";
+import type { RevisionError, RevisionStatus, TimelineScene, VideoRef, WordFixOffer } from "../../../contract";
 import { useGeneration } from "./generation";
 import { sceneName } from "./labels";
 import { useOpenVideo } from "./open-video";
@@ -36,6 +36,12 @@ type RevisionStore = {
   /** Sends a request about the selected Scenes, or the whole video. Resolves once the core has taken it. */
   send: (text: string) => Promise<boolean>;
   stop: () => void;
+  /** The Revision offered after the last word fix, when the old word is still on screen; cleared once taken or dismissed. */
+  wordFixOffer?: WordFixOffer;
+  /** Sends the offered Revision, scoped to the Scenes that still say the old word. */
+  carryWordFix: () => Promise<void>;
+  /** Declines the offer: nothing else changes. */
+  dismissWordFix: () => void;
 };
 
 type NewMessage = Omit<ChatMessage, "id">;
@@ -74,6 +80,33 @@ export const useRevision = create<RevisionStore>((set, get) => {
     say(...(ENDINGS[status.state]?.(status, useOpenVideo.getState().preview?.timeline.scenes ?? []) ?? []));
   }
 
+  /** Sends a request scoped to `scope`, saying it in chat first. */
+  async function request(text: string, scope: string[]): Promise<boolean> {
+    if (!video) {
+      return false;
+    }
+
+    say({ role: "creator", text, scope });
+    const { error } = await safe(core.video.revise({ ...video, message: text, scope }));
+
+    if (error) {
+      say({ role: "note", isProblem: true, text: reviseErrorMessage(error) });
+
+      return false;
+    }
+
+    return true;
+  }
+
+  /** Asks the core whether the followed video's copy still says the fixed word as it was; offers a Revision if so. */
+  async function offerFor(followed: VideoRef, { index, previous }: { index: number; previous: string }) {
+    const { data: offer } = await safe(core.video.wordFixOffer({ ...followed, index, previous }));
+
+    if (video === followed) {
+      set({ wordFixOffer: offer ?? undefined });
+    }
+  }
+
   return {
     selection: [],
     messages: [],
@@ -84,7 +117,13 @@ export const useRevision = create<RevisionStore>((set, get) => {
     follow: (followed) => {
       video = followed;
       const controller = new AbortController();
-      set({ status: undefined, selection: [], messages: [] });
+      set({ status: undefined, selection: [], messages: [], wordFixOffer: undefined });
+      // Every saved word fix may leave the old word in on-screen copy.
+      const unsubscribe = useOpenVideo.subscribe(({ lastFix }, before) => {
+        if (lastFix && lastFix !== before.lastFix) {
+          void offerFor(followed, lastFix);
+        }
+      });
 
       void (async () => {
         for await (const status of await core.video.revision(followed, { signal: controller.signal })) {
@@ -101,6 +140,7 @@ export const useRevision = create<RevisionStore>((set, get) => {
 
       return () => {
         controller.abort();
+        unsubscribe();
 
         if (video === followed) {
           video = undefined;
@@ -108,24 +148,25 @@ export const useRevision = create<RevisionStore>((set, get) => {
       };
     },
     send: async (text) => {
-      if (!video) {
-        return false;
+      const isSent = await request(text, get().selection);
+
+      if (isSent) {
+        set({ selection: [] });
       }
 
-      const scope = get().selection;
-      say({ role: "creator", text, scope });
-      const { error } = await safe(core.video.revise({ ...video, message: text, scope }));
-
-      if (error) {
-        say({ role: "note", isProblem: true, text: reviseErrorMessage(error) });
-
-        return false;
-      }
-
-      set({ selection: [] });
-
-      return true;
+      return isSent;
     },
+    carryWordFix: async () => {
+      const offer = get().wordFixOffer;
+
+      if (!offer) {
+        return;
+      }
+
+      set({ wordFixOffer: undefined });
+      await request(offer.message, offer.scope);
+    },
+    dismissWordFix: () => set({ wordFixOffer: undefined }),
     stop: () => {
       if (video) {
         void safe(core.video.stopRevision(video));

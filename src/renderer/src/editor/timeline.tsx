@@ -6,12 +6,12 @@ import { Button } from "@renderer/components/ui/button";
 import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
-import type { Preview, RevisionStatus, TimelineScene, TimelineWord, VideoTimeline } from "../../../contract";
+import type { Preview, RevisionStatus, TimelineScene, TimelineWord, VideoTimeline, WordFixOffer } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } from "./labels";
 import { useOpenVideo } from "./open-video";
 import { formatTime, usePlayback } from "./playback";
-import { isRevising, useRevision } from "./revision";
+import { isRevising, nameOf, useRevision } from "./revision";
 
 /** How a Scene a Revision is working on reads, whatever its status in the current Version. */
 const REVISING = { label: "Revising, playing the current Version", badge: "working", badgeLabel: "Revising" } as const;
@@ -33,6 +33,51 @@ function cardStatus(scene: TimelineScene, isRevising: boolean) {
   }
 
   return SCENE_STATUS[scene.status];
+}
+
+/** What the timeline header says beside the Scene count: a problem, a word fix to carry onto the screen, or a hint. */
+function HeaderNote({ error, offer, scenes }: { error?: string; offer?: WordFixOffer; scenes: TimelineScene[] }) {
+  if (error) {
+    return (
+      <span role="alert" title={error} className="min-w-0 truncate text-app-xs text-status-fallback-ink">
+        {error}
+      </span>
+    );
+  }
+
+  if (offer) {
+    return <WordFixOfferNote offer={offer} scenes={scenes} />;
+  }
+
+  return (
+    <span className="min-w-0 truncate text-app-xs text-ink-muted">
+      Click a Scene to select it for a Revision, Shift-click to add more. Click a word to go to it, double-click to fix it.
+    </span>
+  );
+}
+
+/** Offers the Revision that carries a word fix into the Scenes still showing the old word; Not now changes nothing. */
+function WordFixOfferNote({ offer, scenes }: { offer: WordFixOffer; scenes: TimelineScene[] }) {
+  const carry = useRevision((state) => state.carryWordFix);
+  const dismiss = useRevision((state) => state.dismissWordFix);
+  const isRevisingNow = useRevision((state) => isRevising(state.status));
+  const isGeneratingNow = useGeneration((state) => isGenerating(state.status));
+  const names = offer.scope.map((sceneId) => nameOf(scenes, sceneId)).join(", ");
+  const text = `“${offer.from}” is still on screen in ${names}.`;
+
+  return (
+    <span role="status" className="flex min-w-0 items-center gap-2">
+      <span title={text} className="min-w-0 truncate text-app-xs text-ink">
+        {text}
+      </span>
+      <Button size="sm" disabled={isRevisingNow || isGeneratingNow} title={`Revise ${names} to say “${offer.to}”`} onClick={() => void carry()}>
+        Carry the fix
+      </Button>
+      <Button size="sm" variant="ghost" onClick={dismiss}>
+        Not now
+      </Button>
+    </span>
+  );
 }
 
 /** Zoom limits, in pixels per second. */
@@ -78,6 +123,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const retry = useRetry();
   const flagged = [...new Set(timeline.scenes.filter(({ status }) => status === "fallback").map(({ unit }) => unit))];
   const headerError = fixError ?? retryError;
+  const wordFixOffer = useRevision((state) => state.wordFixOffer);
 
   return (
     <section aria-label="Scene timeline" className="flex shrink-0 flex-col bg-[#0b0b0b]" style={{ height }}>
@@ -86,15 +132,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
           <span className="font-medium">{timeline.scenes.length} Scenes</span>
           <span className="text-ink-muted tabular-nums"> · {formatTime(timeline.duration)}</span>
         </span>
-        {headerError ? (
-          <span role="alert" title={headerError} className="min-w-0 truncate text-app-xs text-status-fallback-ink">
-            {headerError}
-          </span>
-        ) : (
-          <span className="min-w-0 truncate text-app-xs text-ink-muted">
-            Click a Scene to select it for a Revision, Shift-click to add more. Click a word to go to it, double-click to fix it.
-          </span>
-        )}
+        <HeaderNote error={headerError} offer={wordFixOffer} scenes={timeline.scenes} />
         <span className="flex-1" />
         {retry && flagged.length > 0 ? (
           <Button
