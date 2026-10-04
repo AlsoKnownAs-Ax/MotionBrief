@@ -6,6 +6,7 @@ import { useToast } from "@renderer/components/toast";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { core, orpc, queryClient } from "@renderer/core/connection";
+import { FORMAT_LABELS } from "@renderer/editor/labels";
 import { openStoredVideo } from "@renderer/editor/stored-video";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
@@ -54,10 +55,17 @@ export async function openProject(path: string, { force = false } = {}) {
     return;
   }
 
-  const { project, backupPath } = opened;
+  const { project, backupPath, recovered } = opened;
 
   if (backupPath) {
     useToast.getState().show({ text: `Updated "${project.name}" for this version of MotionBrief. Its old files are in ${backupPath}.` });
+  }
+
+  if (recovered) {
+    const videos = recovered.map(({ format }) => FORMAT_LABELS[format]).join(" and ");
+    useToast.getState().show({
+      text: `MotionBrief closed while the ${videos} video was being generated. Its finished Scenes are saved; the rest are flagged fallbacks to Retry.`,
+    });
   }
 
   void queryClient.invalidateQueries({ queryKey: orpc.project.list.key() });

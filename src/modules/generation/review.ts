@@ -70,7 +70,7 @@ async function judge({ stills, storyboard, transcript, rules, preset, brief, uni
   const { data: review } = await withSession(run, setup, async (session, workspaceDir) => {
     const files = moments.map(({ sceneId }, index) => ({ file: `still-${index + 1}.jpg`, time: moments[index]?.time ?? 0, sceneId }));
     await Promise.all(files.map(({ file }, index) => writeFile(join(workspaceDir, file), frames[index] ?? new Uint8Array())));
-    const turnError = await runTurn(session, reviewMessage({ unit, stills: files }));
+    const turnError = await runTurn(session, reviewMessage({ unit, stills: files }), run.signal);
 
     if (turnError) {
       return { data: null, error: null };

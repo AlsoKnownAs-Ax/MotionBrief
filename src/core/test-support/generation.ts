@@ -45,6 +45,11 @@ export function submitsReview(review: { looksRight: boolean; problems: string[];
   ];
 }
 
+/** A turn the connector ends with an error, such as a plan limit or a failed login. */
+export function failsWith(error: Extract<AgentEvent, { type: "turn-completed" }>["error"]): AgentEvent[] {
+  return [{ type: "turn-completed", status: "failed", error }];
+}
+
 /** A stand-in for the transcription model: the fake whisper-cli never reads it. */
 const MODEL = randomBytes(1024);
 
@@ -55,23 +60,28 @@ type Setup = {
   whisper?: FakeWhisper;
   /** Changes how the replaying connector behaves, such as making some sessions throw. */
   wrap?: (connector: Connector) => Connector;
+  /** The folders of an earlier core, to stand in for the app started again. */
+  dir?: string;
 };
 
-/** A core on its own folders under `root` with the transcription model installed, an agent replaying `script` and the `stacked` Transcript. */
-export async function connect({ root, script, status, whisper, wrap = (connector) => connector }: Setup) {
-  const dir = await mkdtemp(join(root, "core-"));
+/**
+ * A core on its own folders under `root` (or `dir`'s) with the transcription model installed, an agent replaying
+ * `script` and the `stacked` Transcript.
+ */
+export async function connect({ root, script, status, whisper, wrap = (connector) => connector, dir }: Setup) {
+  const coreDir = dir ?? (await mkdtemp(join(root, "core-")));
   const replay = createReplayConnector(script, status);
   const modelPin = { version: "test", url: "http://127.0.0.1:9/model.bin", sha256: sha256(MODEL), size: MODEL.length };
   const { router } = createCore({
     appVersion: "1.2.3",
-    appDataDir: join(dir, "app-data"),
-    projectsDir: join(dir, "Projects"),
-    cacheDir: join(dir, "cache"),
+    appDataDir: join(coreDir, "app-data"),
+    projectsDir: join(coreDir, "Projects"),
+    cacheDir: join(coreDir, "cache"),
     modelPin,
     adapters: { connector: wrap(replay.connector), whisper: whisper ?? fakeWhisper(await whisperFixture("stacked", 1)) },
   });
   const core = createRouterClient(router);
-  const model = join(dir, "model.bin");
+  const model = join(coreDir, "model.bin");
   await writeFile(model, MODEL);
   await core.transcriptionModel.import({ path: model });
 
@@ -81,7 +91,7 @@ export async function connect({ root, script, status, whisper, wrap = (connector
     }
   }
 
-  return { core, replay, dir };
+  return { core, replay, dir: coreDir };
 }
 
 /** A transcribed Project of the 33.6 s Voiceover the `stacked` fixture was transcribed from, in Blueprint and 16:9. */
@@ -116,6 +126,41 @@ export async function generate(core: CoreClient, video: VideoRef): Promise<Gener
   }
 
   throw new Error("The generation stream ended");
+}
+
+/** Every status a video's generation streams, and a way to wait for one; resolves once the first has come. */
+export async function watch(core: CoreClient, video: VideoRef) {
+  const statuses: GenerationStatus[] = [];
+  const waiters: { matches: (status: GenerationStatus) => boolean; resolve: (status: GenerationStatus) => void }[] = [];
+  const stop = new AbortController();
+
+  void (async () => {
+    for await (const status of await core.video.generation(video, { signal: stop.signal })) {
+      statuses.push(status);
+      waiters.filter(({ matches }) => matches(status)).forEach(({ resolve }) => resolve(status));
+    }
+  })().catch(() => undefined);
+
+  const until = (matches: (status: GenerationStatus) => boolean) =>
+    new Promise<GenerationStatus>((resolve) => {
+      const seen = statuses.find(matches);
+
+      if (seen) {
+        resolve(seen);
+        return;
+      }
+
+      waiters.push({ matches, resolve });
+    });
+  /** Like `until`, but only for statuses still to come. */
+  const next = (matches: (status: GenerationStatus) => boolean) => new Promise<GenerationStatus>((resolve) => waiters.push({ matches, resolve }));
+  await until(() => true);
+
+  return { statuses, until, next, stop: () => stop.abort() };
+}
+
+export function unitStatuses(status: GenerationStatus) {
+  return Object.fromEntries(status.units.map(({ id, status: unitStatus }) => [id, unitStatus]));
 }
 
 export function sha256(data: string | Uint8Array) {

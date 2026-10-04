@@ -26,7 +26,18 @@ import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocument, type VideoDocumentError } from "./video";
-import { latestVersion, readVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version, type VersionError } from "./videos";
+import { FormatSchema } from "../../contract";
+import {
+  latestVersion,
+  readVersion,
+  recoverGeneration,
+  saveGeneration,
+  saveVersion,
+  writeUnit,
+  type GenerationRecord,
+  type Version,
+  type VersionError,
+} from "./videos";
 
 /** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
 export type Trash = (path: string) => Promise<void>;
@@ -115,6 +126,8 @@ type OpenProject = {
   job?: AbortController;
   /** Every change to the folder runs after the one before, so writes and renames never interleave. */
   queue: Promise<unknown>;
+  /** Closing: work already going finishes and saves, but none may start. */
+  isClosing: boolean;
 };
 
 /**
@@ -265,13 +278,40 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       return { data: null, error: loadError };
     }
 
+    const { data: recovered, error: recoverError } = await recoverGenerations(dir);
+
+    if (recoverError) {
+      await removeLock(dir);
+
+      return { data: null, error: recoverError };
+    }
+
     const project = await adopt(dir, key, loaded.document, connection);
 
     if (!project.document.transcript) {
       startTranscription(project);
     }
 
-    return { data: { project: toProject(project), backupPath: loaded.backupPath }, error: null };
+    return { data: { project: toProject(project), backupPath: loaded.backupPath, ...(recovered.length > 0 && { recovered }) }, error: null };
+  }
+
+  /** Saves, by Stop's rules, each video whose first generation was still running when the app last quit or crashed. */
+  async function recoverGenerations(dir: string): Promise<Result<{ format: Format; version: number }[], ProjectsError>> {
+    const recovered: { format: Format; version: number }[] = [];
+
+    for (const format of FormatSchema.options) {
+      const { data: version, error } = await recoverGeneration(dir, format, new Date(clock.now()).toISOString());
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      if (version !== undefined) {
+        recovered.push({ format, version });
+      }
+    }
+
+    return { data: recovered, error: null };
   }
 
   /** The document brought up to this app's schema, under an id no other known Project folder owns. */
@@ -364,6 +404,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       owner,
       transcription: createStatusStore<TranscriptionStatus>(initialStatus(document)),
       queue: Promise.resolve(),
+      isClosing: false,
     };
     open.set(document.id, project);
     await recents.remember(dir, document.id);
@@ -899,6 +940,24 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return enqueue(project, () => step(project.dir));
   }
 
+  /** Work on open Projects that must end, and save, before one closes. */
+  const closing: ((projectId: string) => Promise<void>)[] = [];
+
+  /** Runs `stop` before the Project closes, while it can still save; the close waits for it. */
+  function whenClosing(stop: (projectId: string) => Promise<void>) {
+    closing.push(stop);
+  }
+
+  /**
+   * Whether work may start on the Project now: it is open and not closing. Check it synchronously right before
+   * registering the work, so a close either sees the work or the work sees the close.
+   */
+  function admits(projectId: string) {
+    const project = open.get(projectId);
+
+    return project !== undefined && !project.isClosing;
+  }
+
   /** Stops the Project's work, waits for its last write, and releases the lock. */
   async function close(projectId: string) {
     const project = open.get(projectId);
@@ -913,6 +972,8 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
         return;
       }
 
+      project.isClosing = true;
+      await Promise.all(closing.map((stop) => stop(projectId)));
       open.delete(projectId);
       project.job?.abort();
       await enqueue(project, () => removeLock(project.dir));
@@ -950,6 +1011,8 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
     /** A saved Version of the video by number, with its units' Scene code. */
     readVersion: (projectId: string, format: Format, number: number) => read(projectId, (dir) => readVersion(dir, format, number)),
+    whenClosing,
+    admits,
     lastExportPath,
     rememberExportPath,
     storedVideo,
