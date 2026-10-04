@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRouterClient } from "@orpc/server";
 import type { StoryboardRules } from "../../contract";
 import { createCore, type CoreOptions } from "../composition-root";
@@ -14,7 +16,7 @@ export const RULES: StoryboardRules = {
 export const BROWSER_TIMEOUT_MS = 90_000;
 
 export function connect(options: Partial<CoreOptions> = {}) {
-  const { router } = createCore({ appVersion: "1.2.3", ...options });
+  const { router } = createCore({ appVersion: "1.2.3", appDataDir: join(tmpdir(), "motionbrief-checker-test"), ...options });
 
   return createRouterClient(router);
 }

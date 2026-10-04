@@ -1,4 +1,5 @@
 import { readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRouterClient } from "@orpc/server";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,6 +8,7 @@ import { createCore } from "./composition-root";
 import { fakeAnthropic, fakeClaude, type FakeClaude, type FakeClaudeState } from "./fixtures/claude/fake";
 import { createReplayConnector } from "./fixtures/replay-connector";
 
+const APP_DATA_DIR = join(tmpdir(), "motionbrief-connection-test");
 const fakes: FakeClaude[] = [];
 const servers: { close: () => Promise<void> }[] = [];
 
@@ -27,7 +29,7 @@ function connect(state: FakeClaudeState, { store = memoryConnectionStore(), apiB
   const fake = fakeClaude(state, env);
   fakes.push(fake);
   const connector = createClaudeConnector({ claudePath: fake.path, env: fake.env, store, apiBaseUrl });
-  const { router } = createCore({ appVersion: "1.2.3", adapters: { connector } });
+  const { router } = createCore({ appVersion: "1.2.3", appDataDir: APP_DATA_DIR, adapters: { connector } });
 
   return { core: createRouterClient(router), fake, store };
 }
@@ -223,7 +225,7 @@ describe("connecting with an API key", () => {
 describe("swapping the connector", () => {
   it("serves the connection of whichever connector the composition root is given", async () => {
     const { connector } = createReplayConnector([]);
-    const { router } = createCore({ appVersion: "1.2.3", adapters: { connector } });
+    const { router } = createCore({ appVersion: "1.2.3", appDataDir: APP_DATA_DIR, adapters: { connector } });
 
     const status = await createRouterClient(router).connection.status();
 
