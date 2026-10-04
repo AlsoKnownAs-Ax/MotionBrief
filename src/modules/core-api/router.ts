@@ -10,8 +10,10 @@ import type { Previews, StillError, Stills, ThumbnailsError } from "../preview";
 import type { ReviseError, Revisions } from "../revision";
 import { validateStoryboard } from "../storyboard";
 import { BUNDLED_PALETTES, bundledFonts, checkContrast, FONT_PAIRINGS, presetSample, type PresetStore, type PresetStoreError } from "../style";
+import type { SettingsError, SettingsStore } from "../settings";
 import type { System } from "../system";
 import type { TranscriptionModel } from "../transcription-model";
+import type { Usage, UsageError } from "../usage";
 
 /** The fixture Project development builds open from Home, until Projects open from disk. */
 export type SampleProject = { id: string; name: string; source: () => Promise<VideoSource> };
@@ -30,6 +32,8 @@ export type CoreRouterDeps = {
   stills: Stills;
   generation: Generation;
   revisions: Revisions;
+  usage: Usage;
+  settings: SettingsStore;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -52,6 +56,8 @@ export function createCoreRouter({
   stills,
   generation,
   revisions,
+  usage,
+  settings,
 }: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
@@ -219,13 +225,24 @@ export function createCoreRouter({
         dataOrThrow(await revisions.start({ projectId, format }, request));
       }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
+      approveRevision: api.video.approveRevision.handler(({ input }) => revisions.approve(input)),
       stopRevision: api.video.stopRevision.handler(({ input }) => revisions.stop(input)),
+      wordFixOffer: api.video.wordFixOffer.handler(async ({ input: { projectId, format, index, previous } }) =>
+        dataOrThrow(await revisions.offerWordFix({ projectId, format }, index, previous)),
+      ),
       stop: api.video.stop.handler(async ({ input }) => {
         dataOrThrow(await generation.stop(input));
       }),
       retry: api.video.retry.handler(async ({ input: { units, ...video } }) => {
         dataOrThrow(await generation.retry(video, units));
       }),
+    },
+    usage: {
+      watch: api.usage.watch.handler(async ({ input, signal }) => dataOrThrow(await usage.watch(input.video, signal))),
+    },
+    settings: {
+      get: api.settings.get.handler(() => settings.get()),
+      update: api.settings.update.handler(async ({ input }) => dataOrThrow(await settings.update(input))),
     },
     cache: {
       status: api.cache.status.handler(() => cache.status()),
@@ -246,7 +263,7 @@ function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null
 
 type CodedResult =
   | { data: unknown; error: null }
-  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError };
+  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError | UsageError | SettingsError };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
 function stillUnavailable(error: StillError): CheckerUnavailable {

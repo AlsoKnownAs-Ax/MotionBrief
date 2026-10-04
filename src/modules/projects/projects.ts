@@ -11,6 +11,7 @@ import type {
   TranscriptionStatus,
   TranscriptWord,
   UnitCode,
+  UsageTotals,
 } from "../../contract";
 import type { Clock } from "../system";
 import type { Media } from "../media";
@@ -920,6 +921,49 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return changeVideo(projectId, format, { frameChecked });
   }
 
+  /** What the video's agent runs have used so far, kept in the video's folder; absent before its first run. */
+  async function usage(projectId: string, format: Format): Promise<Result<UsageTotals | undefined, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { data: video, error } = await enqueue(project, () => readVideo(project.dir, format));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: video.usage, error: null };
+  }
+
+  /** Adds what a run used to the video's totals; resolves to the new totals. */
+  function addUsage(projectId: string, format: Format, used: UsageTotals): Promise<Result<UsageTotals, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
+    }
+
+    return enqueue(project, async () => {
+      const { data: video, error } = await readVideo(project.dir, format);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      const totals = sumUsage(video.usage, used);
+      const { error: saveError } = await saveVideo(project.dir, format, { ...video, usage: totals });
+
+      if (saveError) {
+        return { data: null, error: saveError };
+      }
+
+      return { data: totals, error: null };
+    });
+  }
+
   /** Runs a write in the Project folder after its earlier changes, wherever the folder is by then. */
   function write<T>(projectId: string, step: (dir: string) => Promise<Result<T, FileError>>): Promise<Result<T, ProjectsError>> {
     const project = open.get(projectId);
@@ -1022,10 +1066,28 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     captionsChoice,
     /** Saves whether the video shows Captions. */
     chooseCaptions: (projectId: string, format: Format, captions: boolean) => changeVideo(projectId, format, { captions }),
+    usage,
+    addUsage,
     close,
     disconnect,
     closeAll,
   };
+}
+
+/** Adds a run's usage to the video's; dollars appear once a billed run added some. */
+function sumUsage(before: UsageTotals | undefined, used: UsageTotals): UsageTotals {
+  const tokens = {
+    inputTokens: (before?.inputTokens ?? 0) + used.inputTokens,
+    outputTokens: (before?.outputTokens ?? 0) + used.outputTokens,
+    cacheReadTokens: (before?.cacheReadTokens ?? 0) + used.cacheReadTokens,
+    cacheWriteTokens: (before?.cacheWriteTokens ?? 0) + used.cacheWriteTokens,
+  };
+
+  if (before?.costUsd === undefined && used.costUsd === undefined) {
+    return tokens;
+  }
+
+  return { ...tokens, costUsd: (before?.costUsd ?? 0) + (used.costUsd ?? 0) };
 }
 
 function lockedError(dir: string, { host, isThisComputer, isStale, lockedAt }: Lock): ProjectsError {

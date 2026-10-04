@@ -7,6 +7,9 @@ import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { usePlayback } from "./playback";
 import type { Preview } from "../../../contract";
 
+/** A word fix saved in the Transcript: the word's index and its text before the fix. */
+export type SavedWordFix = { index: number; previous: string };
+
 type OpenVideo = {
   /** The open Project's id and name. */
   projectId: string;
@@ -21,6 +24,8 @@ type OpenVideo = {
   wordFixes: Record<number, string>;
   /** Why the last word fix couldn't be saved. */
   fixError?: string;
+  /** The last word fix saved in the Transcript; a new object for every fix. */
+  lastFix?: SavedWordFix;
   /** Rebuilds the preview from the saved Transcript once a word fix is saved, so its Captions show the fix. */
   onWordFixed?: () => void;
   /** Opens a video; one still being generated has no preview until its Storyboard is valid. */
@@ -60,13 +65,15 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
         preview,
         wordFixes: {},
         fixError: undefined,
+        lastFix: undefined,
         onWordFixed: undefined,
       });
     },
     showPreview: (preview) => set({ preview }),
     fixWord: async (index, text) => {
-      const { projectId, isStored, wordFixes } = get();
+      const { projectId, isStored, wordFixes, preview } = get();
       const before = wordFixes[index];
+      const previous = before ?? preview?.timeline.words[index]?.text ?? "";
       show(index, text);
       set({ fixError: undefined });
 
@@ -84,6 +91,7 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
       }
 
       show(index, saved.text);
+      set({ lastFix: { index, previous } });
       get().onWordFixed?.();
     },
   };

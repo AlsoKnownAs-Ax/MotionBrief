@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRouterClient } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { CoreClient, Project, RevisionStatus, UnitCode, VideoRef } from "../contract";
+import type { CoreClient, OpenedVideo, Project, RevisionStatus, UnitCode, VideoRef, WordFixOffer } from "../contract";
 import type { AgentEvent } from "../modules/connector";
 import { bundledPreset } from "../modules/style";
 import { createCore } from "./composition-root";
@@ -71,8 +71,11 @@ beforeAll(async () => {
 
 afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 
-/** A core replaying `script`, with an open, transcribed Project of the `stacked` Voiceover in Blueprint and 16:9. */
-async function connect(script: ReplayScript) {
+/**
+ * A core replaying `script`, with an open, transcribed Project of the `stacked` Voiceover in Blueprint and 16:9. The
+ * replay connector is an API key; "Approve cost before running" is off unless `approveCost`.
+ */
+async function connect(script: ReplayScript, { approveCost = false } = {}) {
   const dir = await mkdtemp(join(root, "core-"));
   const replay = createReplayConnector(script);
   const modelPin = { version: "test", url: "http://127.0.0.1:9/model.bin", sha256: createHash("sha256").update(MODEL).digest("hex"), size: MODEL.length };
@@ -85,6 +88,7 @@ async function connect(script: ReplayScript) {
     adapters: { connector: replay.connector, whisper: fakeWhisper(await whisperFixture("stacked", 1)) },
   });
   const core = createRouterClient(router);
+  await core.settings.update({ approveCost });
   await writeFile(join(dir, "model.bin"), MODEL);
   await core.transcriptionModel.import({ path: join(dir, "model.bin") });
 
@@ -160,6 +164,17 @@ async function readVersion(project: Project, number: number) {
   };
 }
 
+/** The Project's saved Transcript words. */
+async function transcriptWords(core: CoreClient, project: Project) {
+  for await (const { state, words } of await core.project.transcription({ projectId: project.id })) {
+    if (state === "done") {
+      return words;
+    }
+  }
+
+  return [];
+}
+
 async function versions(project: Project) {
   return (await readdir(join(project.path, "horizontal", "versions"))).sort();
 }
@@ -195,9 +210,10 @@ async function watch(core: CoreClient, video: VideoRef) {
 
 const ENDED = new Set(["answered", "done", "failed", "stopped"]);
 
-/** Sends a request and waits for the Revision to end. */
+/** Sends a request and waits for the Revision to end, approving its cost if it asks. */
 async function revise(core: CoreClient, video: VideoRef, message: string, scope: string[] = []) {
   const revision = await watch(core, video);
+  void revision.until(({ state }) => state === "approval").then(() => core.video.approveRevision(video));
   await core.video.revise({ ...video, message, scope });
   const ended = await revision.until(({ state, request }) => ENDED.has(state) && request?.message === message);
   revision.stop();
@@ -290,23 +306,27 @@ describe("a Revision that changes content", () => {
   let connected: Awaited<ReturnType<typeof connect>>;
   let v1Units: Record<string, string>;
   let done: RevisionStatus;
+  let statuses: RevisionStatus[];
 
   beforeAll(async () => {
     const s03 = scene(storyboard, "s03");
     (s03.content.caption as { text: string }).text = "Instant";
     // Neither subagent has a recorded turn, so both stop before handing in code: s01's instruction can't be applied,
     // and s03's new content ends as a fallback.
-    connected = await connect({
-      revision: [
-        submitsPatch({
-          scenes: [s03],
-          instructions: [{ scene: "s01", text: "Make the headline twice as big" }],
-          summary: "Shortened the stat's caption and made the hook's headline bigger.",
-        }),
-      ],
-    });
+    connected = await connect(
+      {
+        revision: [
+          submitsPatch({
+            scenes: [s03],
+            instructions: [{ scene: "s01", text: "Make the headline twice as big" }],
+            summary: "Shortened the stat's caption and made the hook's headline bigger.",
+          }),
+        ],
+      },
+      { approveCost: true },
+    );
     v1Units = await generatedGood(connected.project);
-    ({ ended: done } = await revise(connected.core, connected.video, "Shorter caption on the stat, bigger hook headline", ["s01", "s03"]));
+    ({ ended: done, statuses } = await revise(connected.core, connected.video, "Shorter caption on the stat, bigger hook headline", ["s01", "s03"]));
   }, RUN_TIMEOUT_MS);
 
   afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
@@ -317,6 +337,16 @@ describe("a Revision that changes content", () => {
       ["s01", "regenerate"],
       ["s03", "regenerate"],
     ]);
+  });
+
+  it("waits for approval of the regenerated Scenes' cost after planning, on an API key with approval on", () => {
+    const approval = statuses.find(({ state }) => state === "approval");
+    const asked = statuses.indexOf(approval!);
+
+    expect(approval?.costUsd?.high).toBeGreaterThan(0);
+    expect(statuses.slice(0, asked).some(({ state }) => state === "rebuilding")).toBe(true);
+    // Nothing was regenerated before the approval.
+    expect(statuses.slice(0, asked + 1).flatMap(({ units }) => units).every(({ status }) => status === "queued" || status === "ready")).toBe(true);
   });
 
   it("keeps the previous code of a unit whose instruction couldn't be applied, and says so", async () => {
@@ -337,6 +367,80 @@ describe("a Revision that changes content", () => {
     ]);
     expect(done.preview?.timeline.scenes.find(({ id }) => id === "s03")?.status).toBe("fallback");
   });
+});
+
+describe("a word fix that is also on screen", () => {
+  let connected: Awaited<ReturnType<typeof connect>>;
+  let v1Units: Record<string, string>;
+  let cache: number;
+  let offer: WordFixOffer | undefined;
+  let fixedVideo: OpenedVideo;
+  let askedAfterFix: number;
+  let done: RevisionStatus;
+
+  beforeAll(async () => {
+    // The fix carried into the copy of s02 ("Cache first", "Cache answers") and s04 (the term "Cache").
+    const s02 = scene(storyboard, "s02");
+    (s02.content.title as { text: string }).text = "Cash first";
+    (s02.content.items as { text: string }[])[1]!.text = "Cash answers";
+    const s04 = scene(storyboard, "s04");
+    (s04.content.term as { text: string }).text = "Cash";
+    connected = await connect({ revision: [submitsPatch({ scenes: [s02, s04], summary: "Wrote cash where the copy said cache." })] });
+    const { core, project, video } = connected;
+    v1Units = await generatedGood(project);
+    await core.video.setCaptions({ ...video, captions: true });
+    cache = (await transcriptWords(core, project)).findIndex(({ text }) => text === "cache");
+
+    await core.project.fixWord({ projectId: project.id, index: cache, text: "cash" });
+    offer = await core.video.wordFixOffer({ ...video, index: cache, previous: "cache" });
+    fixedVideo = await core.video.open(video);
+    askedAfterFix = connected.replay.asked.length;
+    ({ ended: done } = await revise(core, video, offer!.message, offer!.scope));
+  }, RUN_TIMEOUT_MS);
+
+  afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
+
+  it("offers a Revision scoped to the Scenes whose copy says the old word", () => {
+    expect(offer).toMatchObject({ from: ["cache"], to: "cash", scope: ["s02", "s04"] });
+  });
+
+  it("updates the Captions from the fixed Transcript with no agent run and no Version", () => {
+    expect(askedAfterFix).toBe(0);
+    expect(fixedVideo).toMatchObject({ version: 1, captions: true });
+    expect(fixedVideo.preview?.timeline.words[cache]).toMatchObject({ text: "cash" });
+  });
+
+  it("carries the fix into the affected Scenes only, once accepted", async () => {
+    const saved = await readVersion(connected.project, 2);
+
+    expect(done).toMatchObject({ state: "done", version: 2 });
+    expect(saved.revision).toMatchObject({ request: offer?.message, scope: ["s02", "s04"] });
+    expect(regenerated(connected.replay)).toEqual(["s02", "s04"]);
+    expect(saved.units.s01).toBe(v1Units.s01);
+    expect(saved.units.s03).toBe(v1Units.s03);
+    expect(saved.storyboard.scenes[1]?.content).toMatchObject({ title: { text: "Cash first" } });
+    expect(saved.storyboard.scenes[3]?.content.term).toMatchObject({ text: "Cash" });
+  });
+
+  it("names every old spelling the Scenes still show after repeated fixes", async () => {
+    // s02 says the word as whisper-cli heard it; s04 was written after a first fix to "Cach".
+    const shown: Storyboard = structuredClone(storyboard);
+    (shown.scenes[3]!.content.term as { text: string }).text = "Cach";
+    const { core, project, video } = await connect({});
+    const code = Object.fromEntries(await Promise.all(["s01", "s02", "s03", "s04"].map(async (unit) => [unit, await unitCode("good", unit)] as const)));
+    await generated(project, shown, code, ["s05"]);
+    const index = (await transcriptWords(core, project)).findIndex(({ text }) => text === "cache");
+
+    await core.project.fixWord({ projectId: project.id, index, text: "cach" });
+    await core.project.fixWord({ projectId: project.id, index, text: "cash" });
+    const repeated = await core.video.wordFixOffer({ ...video, index, previous: "cach" });
+
+    expect(repeated).toMatchObject({ to: "cash", scope: ["s02", "s04"] });
+    expect(repeated?.from.toSorted()).toEqual(["cach", "cache"]);
+    // "cache" contains "cach", so each spelling is looked for as a whole word.
+    repeated?.from.forEach((spelling) => expect(repeated.message).toMatch(new RegExp(`\\b${spelling}\\b`)));
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
 });
 
 describe("a Revision", () => {
@@ -385,13 +489,15 @@ describe("a Revision", () => {
     s04.transition = { type: "carry-over", element: "headline" } as Scene["transition"];
     const revised = structuredClone(s04);
     revised.transition = { type: "carry-over", element: "cta" } as Scene["transition"];
-    const { core, replay, project, video } = await connect({ revision: [submitsPatch({ scenes: [revised], summary: "Carried the call to action instead." })] });
+    const { core, replay, project, video } = await connect({ revision: [submitsPatch({ scenes: [revised], summary: "Carried the call to action instead." })] }, { approveCost: true });
     const code = Object.fromEntries(await Promise.all(["s01", "s02", "s03"].map(async (unit) => [unit, await unitCode("good", unit)] as const)));
     await generated(project, carrying, code, ["s04", "s05"]);
 
-    const { ended } = await revise(core, video, "Carry the call to action into the outro", ["s04"]);
+    const { ended, statuses } = await revise(core, video, "Carry the call to action into the outro", ["s04"]);
 
     expect(ended).toMatchObject({ state: "done", version: 2 });
+    // Re-rendering costs nothing, so it never asks for approval.
+    expect(statuses.some(({ state }) => state === "approval")).toBe(false);
     expect(ended.units.map(({ id, rebuild }) => [id, rebuild])).toEqual([
       ["s04", "rerender"],
       ["s05", "rerender"],
@@ -525,6 +631,27 @@ describe("a Revision", () => {
     expect(await versions(project)).toEqual(["1.json", "2.json"]);
     await core.project.close({ projectId: project.id });
   }, RUN_TIMEOUT_MS);
+
+  it("is offered after a word fix only for Scenes whose copy still says the old word", async () => {
+    const { core, replay, project, video } = await connect({});
+    const words = await transcriptWords(core, project);
+    const milliseconds = words.findIndex(({ text }) => text === "milliseconds,");
+    const load = words.findIndex(({ text }) => text === "load");
+
+    await core.project.fixWord({ projectId: project.id, index: milliseconds, text: "ms," });
+    // No Version yet: nothing on screen to carry the fix into.
+    expect(await core.video.wordFixOffer({ ...video, index: milliseconds, previous: "milliseconds," })).toBeUndefined();
+
+    await generatedGood(project);
+    await core.project.fixWord({ projectId: project.id, index: load, text: "Load" });
+
+    // "5 ms" is on screen, but never "milliseconds"; and the hook already says "Load balancer".
+    expect(await core.video.wordFixOffer({ ...video, index: milliseconds, previous: "milliseconds," })).toBeUndefined();
+    expect(await core.video.wordFixOffer({ ...video, index: load, previous: "load" })).toBeUndefined();
+    await expect(core.video.wordFixOffer({ ...video, index: words.length, previous: "load" })).rejects.toMatchObject({ code: "UNKNOWN_WORD" });
+    expect(replay.asked).toEqual([]);
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
 
   it("needs a generated video, and Scenes it has", async () => {
     const { core, project, video } = await connect({});
