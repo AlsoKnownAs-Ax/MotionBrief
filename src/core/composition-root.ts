@@ -52,6 +52,8 @@ export type CoreOptions = {
   ffprobePath?: string;
   /** The source tree's fixtures folder: development builds open the fixture Project from it. */
   sampleDir?: string;
+  /** Told how many exports are running whenever that changes: main holds app updates back while any is. */
+  onExportsChange?: (running: number) => void;
 };
 
 /** The cache folder's subfolder of assembled preview pages. */
@@ -74,6 +76,7 @@ export function createCore({
   ffmpegPath = pinnedFfmpegPath(),
   ffprobePath = pinnedFfprobePath(),
   sampleDir,
+  onExportsChange,
 }: CoreOptions) {
   const clock = adapters?.clock ?? realClock;
   const disk = adapters?.disk ?? realDisk;
@@ -90,7 +93,7 @@ export function createCore({
   const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
-  const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
+  const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects), onRunningChange: onExportsChange });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }) };

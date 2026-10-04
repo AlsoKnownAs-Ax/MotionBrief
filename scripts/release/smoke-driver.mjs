@@ -107,7 +107,7 @@ await step("Checker passes the good fixture (hyperframes check in chrome-headles
 });
 
 await step("exports the fixture Project to MP4 (producer, chrome-headless-shell, FFmpeg)", async () => {
-  const { projectId, preview } = await core.system.openSample();
+  const { projectId, preview } = await core.preview.openSample();
   const path = join(outDir, "smoke.mp4");
   let last;
 

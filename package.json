@@ -24,7 +24,9 @@
     "test:watch": "vitest",
     "postinstall": "node scripts/deps/postinstall.ts",
     "deps:fetch": "node scripts/deps/postinstall.ts",
-    "deps:pin": "node scripts/deps/pin.ts"
+    "deps:pin": "node scripts/deps/pin.ts",
+    "package": "electron-vite build && node scripts/release/licenses.ts && electron-builder --publish never",
+    "package:smoke": "node scripts/release/smoke.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.288",

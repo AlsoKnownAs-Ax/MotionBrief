@@ -26,6 +26,7 @@ const HEADLESS = ["core", "module", "contract", "shared"];
 export default defineConfig([
   globalIgnores([
     "out/",
+    "dist/",
     "node_modules/",
     "vendor/",
     "prototypes/",
@@ -40,7 +41,7 @@ export default defineConfig([
   js.configs.recommended,
   tseslint.configs.recommended,
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ["**/*.{ts,tsx}", "scripts/**/*.mjs"],
     languageOptions: { globals: { ...globals.node } },
   },
   {

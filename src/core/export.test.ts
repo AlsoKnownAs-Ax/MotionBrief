@@ -59,8 +59,8 @@ async function openPreview(options: Parameters<typeof connect>[0] = {}) {
 }
 
 /** The same, as the horizontal video of a Project the core has open. */
-async function openVideo() {
-  const opened = await openPreview();
+async function openVideo(options: Parameters<typeof connect>[0] = {}) {
+  const opened = await openPreview(options);
   const project = await opened.client.project.create({ voiceoverPath: voiceover, format: "horizontal" });
   closers.push(() => opened.client.project.close({ projectId: project.id }));
   const video: VideoRef = { projectId: project.id, format: "horizontal" };
@@ -98,9 +98,11 @@ describe("Export MP4", () => {
     let opened: Awaited<ReturnType<typeof openVideo>>;
     let target = "";
     let statuses: ExportStatus[] = [];
+    const running: number[] = [];
+    const onExportsChange = (count: number) => running.push(count);
 
     beforeAll(async () => {
-      opened = await openVideo();
+      opened = await openVideo({ onExportsChange });
       target = join(workDir, "Exported video.mp4");
       statuses = await collect(await opened.client.export.mp4({ previewId: opened.previewId, path: target, video: opened.video }));
     }, EXPORT_TIMEOUT_MS);
@@ -142,6 +144,10 @@ describe("Export MP4", () => {
       const saved: unknown = JSON.parse(await readFile(join(opened.projectDir, "horizontal", "video.json"), "utf8"));
 
       expect(saved).toEqual({ lastExportPath: target });
+    });
+
+    it("telling main while it runs, so an app update waits for it", () => {
+      expect(running).toEqual([1, 0]);
     });
   });
 

@@ -10,6 +10,7 @@ import { Home } from "@renderer/screens/home";
 import { NewProject } from "@renderer/screens/new-project";
 import { Setup } from "@renderer/screens/setup";
 import { useStartTranscriptionModel } from "@renderer/setup/transcription-model-step";
+import { UpdateBanner } from "@renderer/updates/update-banner";
 
 /** Each screen, and what it adds to the title bar: a toolbar after the brand and actions on the right. */
 const SCREENS = {
@@ -28,6 +29,7 @@ export function App() {
     <div className="flex h-full flex-col">
       <TitleBar actions={Actions && <Actions />}>{Toolbar && <Toolbar />}</TitleBar>
       <LoginExpiryBanner />
+      <UpdateBanner />
       <Screen />
       <SettingsDialog />
       <ShortcutsDialog />

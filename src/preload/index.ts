@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
-import { CORE_PORT_MESSAGE, IPC, type AppCommand } from "../shared/ipc";
+import { CORE_PORT_MESSAGE, IPC, type AppCommand, type UpdateState } from "../shared/ipc";
 import { toPlatform } from "../shared/shortcuts";
 import type { Bridge } from "./bridge";
 
@@ -33,6 +33,10 @@ const bridge: Bridge = {
   pathForFile: (file) => webUtils.getPathForFile(file),
   chooseSavePath: (options) => ipcRenderer.invoke(IPC.chooseSavePath, options),
   showInFolder: (path) => ipcRenderer.send(IPC.showInFolder, path),
+  getUpdateState: () => ipcRenderer.invoke(IPC.getUpdateState),
+  onUpdateChanged: (callback) => subscribe<[UpdateState]>(IPC.updateChanged, callback),
+  setUpdateChannel: (channel) => ipcRenderer.invoke(IPC.setUpdateChannel, channel),
+  restartToUpdate: () => ipcRenderer.invoke(IPC.restartToUpdate),
 };
 
 contextBridge.exposeInMainWorld("motionbrief", bridge);

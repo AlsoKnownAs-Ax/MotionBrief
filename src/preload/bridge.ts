@@ -1,4 +1,4 @@
-import type { AppCommand, ChooseFileOptions, ChooseSavePathOptions, ContextMenuItem, MenuPosition } from "../shared/ipc";
+import type { AppCommand, ChooseFileOptions, ChooseSavePathOptions, ContextMenuItem, MenuPosition, UpdateChannel, UpdateState } from "../shared/ipc";
 import type { Platform } from "../shared/shortcuts";
 
 /** What the preload exposes to the renderer as `window.motionbrief`. */
@@ -17,4 +17,9 @@ export type Bridge = {
   chooseSavePath: (options: ChooseSavePathOptions) => Promise<string | null>;
   /** Reveals a file in Explorer or Finder. */
   showInFolder: (path: string) => void;
+  getUpdateState: () => Promise<UpdateState>;
+  onUpdateChanged: (callback: (state: UpdateState) => void) => () => void;
+  setUpdateChannel: (channel: UpdateChannel) => Promise<UpdateState>;
+  /** Restarts into the downloaded update; resolves to false when there is none or an export is running. */
+  restartToUpdate: () => Promise<boolean>;
 };

@@ -16,6 +16,8 @@ export type ExporterOptions = {
   ffmpegPath: string;
   ffprobePath: string;
   locations: ExportLocations;
+  /** Called with how many exports are running whenever one starts or ends. */
+  onRunningChange?: (running: number) => void;
 };
 
 export type ExportRequest = {
@@ -35,7 +37,7 @@ export type Exporter = ReturnType<typeof createExporter>;
  * player uses, and only then moves it to where the creator chose, so a cancelled or failed export
  * leaves nothing there and never touches an earlier file.
  */
-export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, locations }: ExporterOptions) {
+export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, locations, onRunningChange }: ExporterOptions) {
   const running = new Set<string>();
 
   async function* mp4({ source, path, video, signal = new AbortController().signal }: ExportRequest): AsyncGenerator<ExportStatus> {
@@ -49,6 +51,7 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
     const id = randomUUID();
     const dir = join(workDir, id);
     running.add(id);
+    onRunningChange?.(running.size);
 
     try {
       yield { state: "rendering", stage: "preparing", progress: 0 };
@@ -89,6 +92,7 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
       yield { state: "done", path };
     } finally {
       running.delete(id);
+      onRunningChange?.(running.size);
       await rm(dir, { recursive: true, force: true });
     }
   }

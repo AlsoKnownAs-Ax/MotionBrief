@@ -10,10 +10,13 @@ directories:
 
 # Refuses to pack a vendor/ that doesn't match deps.json for the platform being built (ADR 0002).
 beforePack: ./scripts/release/before-pack.ts
+# Copies Electron's Chromium licenses into resources/licenses.
+afterPack: ./scripts/release/after-pack.ts
 
 files:
   - out/**
   - "!out/licenses/**"
+  - "!out/.bundled-packages/**"
   - vendor/**
   # Pin files and postinstall's staging folders.
   - "!vendor/*.sha256"
@@ -33,9 +36,8 @@ extraResources:
 # No native Node modules to rebuild.
 npmRebuild: false
 
-# Stable releases also carry beta.yml, so a beta-channel install sees a stable release newer than its beta.
-generateUpdatesFilesForAllChannels: true
-
+# The updater's feed. A vX.Y.Z-beta.N version gets beta.yml and is released as a GitHub pre-release; the beta
+# channel reads it, and latest.yml from stable releases (src/main/updater.ts).
 publish:
   provider: github
   owner: AlsoKnownAs-Ax

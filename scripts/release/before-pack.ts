@@ -1,9 +1,12 @@
 // electron-builder's beforePack hook (electron-builder.yml): refuses to pack a vendor/ that doesn't match deps.json.
 import { join } from "node:path";
-import type { BeforePackContext } from "electron-builder";
+import type { Configuration } from "electron-builder";
 import { describeError } from "../deps/errors.ts";
 import type { VendorError } from "./vendor.ts";
 import { checkVendor } from "./vendor.ts";
+
+// electron-builder 26.15's own BeforePackContext export points at a declaration file it doesn't ship.
+type BeforePackContext = Parameters<Extract<Configuration["beforePack"], (context: never) => unknown>>[0];
 
 /** electron-builder's Arch enum, by value. */
 const ARCH_NAMES = ["ia32", "x64", "armv7l", "arm64", "universal"];
