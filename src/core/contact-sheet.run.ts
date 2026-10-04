@@ -1,10 +1,10 @@
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import type { Format } from "../contract";
-import { sceneTimings } from "../modules/storyboard";
+import type { Format, StoryboardTranscript, UnitCode } from "../contract";
+import { sceneTimings, type Storyboard } from "../modules/storyboard";
 import { bundledPreset } from "../modules/style";
-import { corpusEntries, PRESETS, replay, type Replayed } from "./test-support/corpus";
+import { corpusEntries, loadCorpus, PRESETS } from "./test-support/corpus";
 import { closeFrame, openFrame } from "./test-support/frame";
 
 /** Where the sheet is written; CI attaches this folder to the run. */
@@ -20,6 +20,11 @@ const STILL_SCALE = 0.25;
 const BEFORE_END_SECONDS = 0.6;
 
 const FORMATS = ["horizontal", "vertical"] as const;
+
+/** Captions as a new video of each Format has them: on in vertical, off in horizontal. */
+const CAPTIONS = { horizontal: false, vertical: true } satisfies Record<Format, boolean>;
+
+type Sample = { storyboard: Storyboard; transcript: StoryboardTranscript; code: Record<string, UnitCode> };
 
 type Still = { format: Format; preset: (typeof PRESETS)[number]; sceneId: string; sceneType: string; file: string; errors: string[] };
 
@@ -39,10 +44,9 @@ describe("the contact sheet", () => {
       const sample = entries.find(({ name }) => name === SAMPLES[format]);
 
       expect(sample, `${SAMPLES[format]} is missing from the corpus`).toBeDefined();
-      const { data: steps, error } = await replay(sample!.entry);
-
-      expect(error).toBeNull();
-      const video = steps![0]!;
+      const { storyboard, transcript, code } = await loadCorpus(sample!.entry);
+      // Hand-written samples the replay corpus test validates and checks.
+      const video = { storyboard: storyboard as Storyboard, transcript, code };
 
       for (const preset of PRESETS) {
         stills.push(...(await drawStills(video, format, preset)));
@@ -56,8 +60,8 @@ describe("the contact sheet", () => {
 });
 
 /** One page per Format and Preset: a still of each Scene just before it ends. */
-async function drawStills(video: Replayed, format: Format, preset: (typeof PRESETS)[number]): Promise<Still[]> {
-  const frame = await openFrame(video.storyboard, video.transcript, video.code, bundledPreset(preset), { captions: video.rules.captions, scale: STILL_SCALE });
+async function drawStills(video: Sample, format: Format, preset: (typeof PRESETS)[number]): Promise<Still[]> {
+  const frame = await openFrame(video.storyboard, video.transcript, video.code, bundledPreset(preset), { captions: CAPTIONS[format], scale: STILL_SCALE });
 
   try {
     const stills: Still[] = [];

@@ -2,12 +2,6 @@
   "description": "Hand-written, token-only Scene code for every Scene Type in 16:9: a Canvas (c1), a carry-over (s06 into s07) and a scripted Revision of the outro",
   "frameContractVersion": "1.0.0",
   "preset": "blueprint",
-  "rules": {
-    "format": "horizontal",
-    "captions": false,
-    "transitions": ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
-    "canvas": "where-it-helps"
-  },
   "storyboard": "storyboard/horizontal.json",
   "transcript": "storyboard/transcript.json",
   "units": {
@@ -22,6 +16,8 @@
   },
   "revisions": [
     {
+      "request": "Point the outro at the DNS video and put a bell beside Subscribe",
+      "scope": ["s09"],
       "patch": "corpus/scene-types/horizontal/revision-1/patch.json",
       "units": { "s09": "corpus/scene-types/horizontal/revision-1/s09" }
     }

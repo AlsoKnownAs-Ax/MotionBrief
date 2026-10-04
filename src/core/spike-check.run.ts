@@ -70,7 +70,7 @@ async function spikeRuns(runsDir: string): Promise<{ dir: string; transcriptPath
 }
 
 async function checkRun({ dir, transcriptPath, name }: { dir: string; transcriptPath: string; name: string }): Promise<RunReport> {
-  const format: Format = basename(dir).startsWith("vertical") ? "vertical" : "horizontal";
+  const format = formatOfRun(dir);
   const rules: StoryboardRules = { ...SPIKE_RULES, transitions: [...SPIKE_RULES.transitions], format };
   const transcript = toTranscript(JSON.parse(await readFile(transcriptPath, "utf8")));
   const spike = JSON.parse(await readFile(join(dir, "storyboard.json"), "utf8")) as { scenes: SpikeScene[] };
@@ -87,6 +87,15 @@ async function checkRun({ dir, transcriptPath, name }: { dir: string; transcript
   const unattributed = report.findings.filter((finding) => !finding.unit);
 
   return { run: name, format, storyboardIssues: [], units: [...units, ...unattributedUnit(unattributed)] };
+}
+
+/** The spike named each run folder after its Format: `vertical-r2`, `horizontal-r1`. */
+function formatOfRun(dir: string): Format {
+  if (basename(dir).startsWith("vertical")) {
+    return "vertical";
+  }
+
+  return "horizontal";
 }
 
 function unattributedUnit(findings: CheckFinding[]) {
