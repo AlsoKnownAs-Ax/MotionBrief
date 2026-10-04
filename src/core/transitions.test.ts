@@ -8,7 +8,7 @@ import type { Storyboard } from "../modules/storyboard";
 import horizontalJson from "./fixtures/storyboard/horizontal.json";
 import transcript from "./fixtures/storyboard/transcript.json";
 import { BLUEPRINT, BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
-import { closeFrame, openFrame, type OpenFrame } from "./test-support/frame";
+import { CLOSE_TIMEOUT_MS, closeFrame, openFrame, type OpenFrame } from "./test-support/frame";
 
 const horizontal = horizontalJson as Storyboard;
 
@@ -56,7 +56,7 @@ describe("hand-written Scene code for a Canvas and a carry-over", () => {
       frame = await openFrame(horizontal, transcript, await handWritten(), BLUEPRINT);
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), CLOSE_TIMEOUT_MS);
 
     const page = () => frame!.page;
 

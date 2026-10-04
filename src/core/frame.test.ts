@@ -449,7 +449,7 @@ describe("the frame, in a headless browser", () => {
       frame = await openFrame(pushes, longTranscript, {});
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), CLOSE_TIMEOUT_MS);
 
     const page = () => frame!.page;
 
