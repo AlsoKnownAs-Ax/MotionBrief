@@ -59,6 +59,8 @@ export const SKETCH_PAPER: Palette = {
     good: "#2f9a57",
     bad: "#c8372c",
   },
+  // Mustard is 1.8:1 on the paper: a fill behind ink, never text or lines.
+  fills: ["accent3"],
 };
 
 export const PHOSPHOR: Palette = {

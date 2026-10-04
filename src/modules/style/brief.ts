@@ -24,14 +24,27 @@ export function presetBrief(preset: StylePreset, format: Format): PresetBrief {
       ...shared,
       `Pacing: ${preset.motion.energy} Motion, so aim for Scenes of ${range(target)} (a ${format} Scene must last ${range([min, max])}).`,
     ].join("\n"),
-    sceneCode: [...shared, motionLine(preset.motion), treatmentsLine(preset.treatments)].join("\n"),
+    sceneCode: [...shared, motionLine(preset.motion), treatmentsLine(preset.treatments), ...fillsLine(preset)].join("\n"),
     review: [
       ...shared,
       motionLine(preset.motion),
       treatmentsLine(preset.treatments),
+      ...fillsLine(preset),
       "Judge each still against this direction: a Scene that reads well but ignores it still needs a note.",
     ].join("\n"),
   };
+}
+
+/** Accents the Palette keeps to fills are too faint on bg to be read, so they carry ink rather than being it. */
+function fillsLine({ palette: { fills = [] } }: StylePreset): string[] {
+  if (fills.length === 0) {
+    return [];
+  }
+
+  const roles = fills.map((role) => `var(--${role})`).join(" and ");
+  const [fill, it] = fills.length === 1 ? ["a fill", "it is"] : ["fills", "they are"];
+
+  return [`Palette: use ${roles} only as ${fill} behind var(--ink) text, never as text, icons or lines; ${it} too faint on the background to read.`];
 }
 
 const TRANSITION_NOTES: Partial<Record<TransitionType, string>> = {
