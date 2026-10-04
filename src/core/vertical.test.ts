@@ -146,10 +146,9 @@ describe("the 9:16 version of a Project", () => {
   it("is a generation of its own, with its own Storyboard laid out for vertical, not a Revision of the 16:9 video", async () => {
     const [wideVersions, tallVersions] = await Promise.all([savedVersions(project, "horizontal"), savedVersions(project, "vertical")]);
 
-    // Each Storyboard session replays from the first recorded turn: the 9:16 one is first handed the 16:9 Storyboard,
-    // which the validator refuses, so it is asked again and hands in the vertical one.
+    // A later Storyboard session replays the turns after the earlier one's: the 9:16 one hands in the vertical Storyboard.
     expect(tallDone).toMatchObject({ state: "done", version: 1 });
-    expect(replay.askedOf("storyboard")).toHaveLength(3);
+    expect(replay.askedOf("storyboard")).toHaveLength(2);
     expect(tallVersions).toMatchObject([{ version: 1, origin: "generation", storyboard: vertical }]);
     expect(wideVersions).toMatchObject([{ version: 1, origin: "generation", storyboard: horizontal }]);
     expect(tallDone.preview?.timeline).toMatchObject({ format: "vertical", width: 1080, height: 1920 });
