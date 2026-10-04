@@ -55,12 +55,17 @@ export function copyHashed(from: string, to: string) {
   });
 }
 
-/** Errors Windows gives while another process (an indexer, a virus scanner, FFmpeg) briefly has a file open. */
+/**
+ * Errors Windows gives while another process has a file open. Virus scanners, sync clients and the search indexer
+ * open every new file in Documents for a while, so a fresh Project can't be renamed for seconds.
+ */
 const TRANSIENT = new Set(["EPERM", "EBUSY", "EACCES"]);
 
-const RENAME_ATTEMPTS = 5;
+/** Seven tries 0.1 s to 3.2 s apart: about six seconds in all. */
+const RENAME_ATTEMPTS = 7;
+const FIRST_RETRY_MS = 100;
 
-/** Renames, trying again for about a second while Windows reports the file busy. */
+/** Renames, trying again with growing pauses while Windows reports the file or folder busy. */
 export async function renameRetrying(from: string, to: string, attempt = 1): Promise<void> {
   try {
     await rename(from, to);
@@ -71,7 +76,7 @@ export async function renameRetrying(from: string, to: string, attempt = 1): Pro
       throw error;
     }
 
-    await sleep(50 * attempt);
+    await sleep(FIRST_RETRY_MS * 2 ** (attempt - 1));
     await renameRetrying(from, to, attempt + 1);
   }
 }
