@@ -51,6 +51,15 @@ export const SCENE_STATUS = {
 
 export const FORMAT_LABELS = { horizontal: "16:9", vertical: "9:16" } satisfies Record<Format, string>;
 
+/** A Scene's description, followed by its review note when it has one. */
+export function withNote(text: string, scene: TimelineScene, separator = ": "): string {
+  if (!scene.note) {
+    return text;
+  }
+
+  return `${text}${separator}${scene.note}`;
+}
+
 export function sceneName(scene: TimelineScene): string {
   return `Scene ${scene.number}`;
 }

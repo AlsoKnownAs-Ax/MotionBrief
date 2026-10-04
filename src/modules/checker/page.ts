@@ -64,17 +64,33 @@ export async function openFramePage({ dir, chromePath, width, height, scale = 1 
       evaluate: <T>(expression: string) => page.evaluate(expression) as Promise<T>,
       screenshot: () => page.screenshot({ type: "jpeg", quality: 75 }),
       errors,
-      close: async () => {
-        await opened.browser.close();
-        opened.server.close();
-      },
+      close: () => shutDown(opened.browser, opened.server),
     };
 
     return { data: framePage, error: null };
   } catch (error) {
-    await browser?.close();
-    server?.close();
+    await shutDown(browser, server);
 
     return { data: null, error: { code: "BROWSER_FAILED", message: String((error as Error).message ?? error) } satisfies FramePageError };
+  }
+}
+
+/** How long the browser may take to close before its process is killed. */
+const CLOSE_TIMEOUT_MS = 5_000;
+
+/** Closes the browser, killing its process if closing fails or hangs, and always closes the file server. */
+async function shutDown(browser: Browser | undefined, server: FileServerHandle | undefined) {
+  try {
+    const closed = browser?.close().then(
+      () => true,
+      () => false,
+    );
+    const timedOut = new Promise<boolean>((resolve) => setTimeout(() => resolve(false), CLOSE_TIMEOUT_MS).unref());
+
+    if (closed && !(await Promise.race([closed, timedOut]))) {
+      browser?.process()?.kill("SIGKILL");
+    }
+  } finally {
+    server?.close();
   }
 }

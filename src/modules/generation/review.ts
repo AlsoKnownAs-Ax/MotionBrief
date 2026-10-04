@@ -34,9 +34,14 @@ type ReviewRun = AgentRun & {
 /**
  * The visual review: the Renderer draws stills of the unit (every other unit as its fallback Scene), and
  * the reviewer judges them once. Resolves with what to repair, or `null` when the unit looks right or
- * couldn't be reviewed, which never holds the unit back.
+ * couldn't be reviewed, which never holds the unit back: anything the stills, the workspace or the
+ * session throw ends the review here, never the generation.
  */
-export async function reviewUnit({ stills, storyboard, transcript, rules, preset, brief, unit, code, ...run }: ReviewRun): Promise<Review | null> {
+export async function reviewUnit(run: ReviewRun): Promise<Review | null> {
+  return judge(run).catch(() => null);
+}
+
+async function judge({ stills, storyboard, transcript, rules, preset, brief, unit, code, ...run }: ReviewRun): Promise<Review | null> {
   const moments = momentsOf(storyboard, transcript, unit);
   const source = { storyboard, transcript, rules, preset, code: { [unit.id]: code } };
   const { data: frames } = await stills.frames(source, moments.map(({ time }) => time), REVIEW_WIDTH);
@@ -67,7 +72,11 @@ export async function reviewUnit({ stills, storyboard, transcript, rules, preset
     await Promise.all(files.map(({ file }, index) => writeFile(join(workspaceDir, file), frames[index] ?? new Uint8Array())));
     const turnError = await runTurn(session, reviewMessage({ unit, stills: files }));
 
-    return { data: turnError ? null : reviewOf(verdict), error: null };
+    if (turnError) {
+      return { data: null, error: null };
+    }
+
+    return { data: reviewOf(verdict), error: null };
   });
 
   return review ?? null;

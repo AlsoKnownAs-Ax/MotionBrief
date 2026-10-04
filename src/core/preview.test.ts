@@ -8,6 +8,7 @@ import storyboard from "./fixtures/storyboard/horizontal.json";
 import transcript from "./fixtures/storyboard/transcript.json";
 import { chromeHeadlessShellPath } from "./native";
 import { BLUEPRINT, BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
+import { CLOSE_TIMEOUT_MS } from "./test-support/frame";
 import { silentWav } from "./test-support/voiceover";
 
 /** Hand-written Scene code for two units of the horizontal fixture; the rest play as fallback Scenes. */
@@ -129,7 +130,7 @@ describe("preview", () => {
       })()`)) as Played;
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => browser?.close());
+    afterAll(() => browser?.close(), CLOSE_TIMEOUT_MS);
 
     it("on this computer only, with the HyperFrames runtime the player drives, so no request leaves it", () => {
       const origin = new URL(preview.url).origin;

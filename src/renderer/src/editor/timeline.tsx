@@ -7,7 +7,7 @@ import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
 import type { Preview, TimelineScene, TimelineWord, VideoTimeline } from "../../../contract";
-import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS } from "./labels";
+import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } from "./labels";
 import { useOpenVideo } from "./open-video";
 import { formatTime, usePlayback } from "./playback";
 
@@ -218,8 +218,8 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
   return (
     <button
       type="button"
-      title={`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${formatTime(scene.start)} to ${formatTime(scene.end)}${scene.note ? `\nReview note: ${scene.note}` : ""}`}
-      aria-label={`${sceneName(scene)}, ${SCENE_TYPE_LABELS[scene.type]}, ${status.label}${scene.note ? `: ${scene.note}` : ""}, from ${formatTime(scene.start)}`}
+      title={withNote(`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${formatTime(scene.start)} to ${formatTime(scene.end)}`, scene, "\nReview note: ")}
+      aria-label={`${withNote(`${sceneName(scene)}, ${SCENE_TYPE_LABELS[scene.type]}, ${status.label}`, scene)}, from ${formatTime(scene.start)}`}
       className="absolute flex items-center gap-2 overflow-hidden rounded-md bg-surface-1 p-1.5 text-left transition-colors hover:bg-surface-2"
       style={{ left: scene.start * px, width, top, height }}
       onClick={() => onSeek(scene.start)}
@@ -236,7 +236,7 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
             <span className="text-ink-muted tabular-nums">{scene.number}</span> {SCENE_TYPE_LABELS[scene.type]}
           </span>
           {badge}
-          {scene.note && <span className="max-w-full truncate text-app-xs text-ink-muted">{scene.note}</span>}
+          {scene.note ? <span className="max-w-full truncate text-app-xs text-ink-muted">{scene.note}</span> : null}
         </span>
       )}
     </button>

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createRouterClient } from "@orpc/server";
 import type { CoreClient, GenerationStatus, Project, UnitCode, VideoRef } from "../../contract";
-import type { AgentEvent, ConnectionStatus } from "../../modules/connector";
+import type { AgentEvent, ConnectionStatus, Connector } from "../../modules/connector";
 import { createCore } from "../composition-root";
 import { createReplayConnector, type ReplayScript } from "../fixtures/replay-connector";
 import { voiceover } from "./media";
@@ -48,10 +48,17 @@ export function submitsReview(review: { looksRight: boolean; problems: string[];
 /** A stand-in for the transcription model: the fake whisper-cli never reads it. */
 const MODEL = randomBytes(1024);
 
-type Setup = { root: string; script: ReplayScript; status?: ConnectionStatus; whisper?: FakeWhisper };
+type Setup = {
+  root: string;
+  script: ReplayScript;
+  status?: ConnectionStatus;
+  whisper?: FakeWhisper;
+  /** Changes how the replaying connector behaves, such as making some sessions throw. */
+  wrap?: (connector: Connector) => Connector;
+};
 
 /** A core on its own folders under `root` with the transcription model installed, an agent replaying `script` and the `stacked` Transcript. */
-export async function connect({ root, script, status, whisper }: Setup) {
+export async function connect({ root, script, status, whisper, wrap = (connector) => connector }: Setup) {
   const dir = await mkdtemp(join(root, "core-"));
   const replay = createReplayConnector(script, status);
   const modelPin = { version: "test", url: "http://127.0.0.1:9/model.bin", sha256: sha256(MODEL), size: MODEL.length };
@@ -61,7 +68,7 @@ export async function connect({ root, script, status, whisper }: Setup) {
     projectsDir: join(dir, "Projects"),
     cacheDir: join(dir, "cache"),
     modelPin,
-    adapters: { connector: replay.connector, whisper: whisper ?? fakeWhisper(await whisperFixture("stacked", 1)) },
+    adapters: { connector: wrap(replay.connector), whisper: whisper ?? fakeWhisper(await whisperFixture("stacked", 1)) },
   });
   const core = createRouterClient(router);
   const model = join(dir, "model.bin");

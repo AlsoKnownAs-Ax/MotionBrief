@@ -35,7 +35,7 @@ export function timelineOf(
         start: seconds(start),
         end: seconds(end),
         status,
-        note: status === "flagged" ? notes[unit] : undefined,
+        note: noteOf(status, notes[unit]),
         transitionIn: timings[index - 1]?.scene.transition?.type,
       };
     }),
@@ -48,11 +48,24 @@ export function timelineOf(
 }
 
 function statusOf(unit: string, code: Record<string, UnitCode>, pending: Record<string, UnitWork>, notes: Record<string, string>): SceneStatus {
+  if (code[unit] && notes[unit]) {
+    return "flagged";
+  }
+
   if (code[unit]) {
-    return notes[unit] ? "flagged" : "ready";
+    return "ready";
   }
 
   return pending[unit] ?? "fallback";
+}
+
+/** Only a Scene playing its own code carries its unit's review note. */
+function noteOf(status: SceneStatus, note: string | undefined): string | undefined {
+  if (status !== "flagged") {
+    return undefined;
+  }
+
+  return note;
 }
 
 function seconds(value: number): number {

@@ -304,7 +304,11 @@ function statusOf(outcome: UnitOutcome): GenerationUnit["status"] {
     return "fallback";
   }
 
-  return outcome.note ? "flagged" : "ready";
+  if (outcome.note) {
+    return "flagged";
+  }
+
+  return "ready";
 }
 
 function flagOf(unit: Unit, reason: string): Flag {

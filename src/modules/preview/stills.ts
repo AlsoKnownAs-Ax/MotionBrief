@@ -59,7 +59,7 @@ export function createStills({ cache, chromePath }: StillsOptions) {
       return pending;
     }
 
-    const done = queue.then(() => draw(source, times, width, keys));
+    const done = queue.then(() => draw(source, times, width, keys).catch(browserFailed));
     queue = done.catch(() => undefined);
     drawing.set(id, done);
 
@@ -73,7 +73,11 @@ export function createStills({ cache, chromePath }: StillsOptions) {
   async function readCached(key: string): Promise<Uint8Array | undefined> {
     const path = await cache.get(key);
 
-    return path ? readFile(path).catch(() => undefined) : undefined;
+    if (!path) {
+      return undefined;
+    }
+
+    return readFile(path).catch(() => undefined);
   }
 
   async function draw(source: VideoSource, times: number[], stillWidth: number, keys: string[]): Promise<Result<Uint8Array[], StillError>> {
@@ -130,6 +134,11 @@ function stillId(source: VideoSource, time: number, width: number): string {
   const key = JSON.stringify({ frame: FRAME_CONTRACT_VERSION, width, time, source });
 
   return createHash("sha256").update(key).digest("hex").slice(0, 32);
+}
+
+/** Seeking, drawing or closing the page threw: the stills fail as a value, never as an exception. */
+function browserFailed(cause: unknown): { data: null; error: StillError } {
+  return { data: null, error: { code: "BROWSER_FAILED", message: String((cause as Error).message ?? cause) } };
 }
 
 function dataUrl(jpeg: Uint8Array): string {

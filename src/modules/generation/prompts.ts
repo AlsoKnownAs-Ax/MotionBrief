@@ -183,6 +183,9 @@ export function noCodeMessage(): string {
   return `No code was handed in. Hand in the unit's {css, html, js} with the ${SCENE_CODE_TOOL} tool.`;
 }
 
+/** Where content may not go besides outside the frame. */
+const OUT_OF_BOUNDS = { horizontal: "", vertical: " or inside the bottom Captions band" } satisfies Record<Format, string>;
+
 /** The visual reviewer: judges one unit's rendered stills once, against its Storyboard entries and the Style Preset. */
 export function reviewSystem(format: Format, brief: PresetBrief): string {
   const { width, height } = FRAME_SIZES[format];
@@ -191,7 +194,7 @@ export function reviewSystem(format: Format, brief: PresetBrief): string {
 
 The frames are ${width}x${height} (${format}), drawn the way the video renders. Open each still with the Read tool.
 
-Report only concrete, fixable visual defects a viewer would notice: overlapping or colliding elements, text clipped or overflowing its box, content outside the frame${format === "vertical" ? " or inside the bottom Captions band" : ""}, unreadably small text, a Storyboard element missing, connectors that don't touch their nodes, a badly unbalanced or mostly empty composition, cramped layout, colors or treatments that ignore the Style Preset. Don't nitpick taste. Elements may still be arriving in a still taken mid-Scene; judge those by the Scene's last still.
+Report only concrete, fixable visual defects a viewer would notice: overlapping or colliding elements, text clipped or overflowing its box, content outside the frame${OUT_OF_BOUNDS[format]}, unreadably small text, a Storyboard element missing, connectors that don't touch their nodes, a badly unbalanced or mostly empty composition, cramped layout, colors or treatments that ignore the Style Preset. Don't nitpick taste. Elements may still be arriving in a still taken mid-Scene; judge those by the Scene's last still.
 
 If nothing is wrong, hand in looksRight true with no problems. Otherwise list each problem precisely enough for the unit's author to fix it (which element, where, what is wrong), and write the note: one plain sentence for the creator naming what still looks wrong, shown if the fix doesn't work out.
 

@@ -109,3 +109,35 @@ describe("visual review and repair", () => {
     expect(done.units.find(({ id }) => id === "s04")).toEqual({ id: "s04", status: "ready", attempts: 1 });
   });
 });
+
+describe("a visual review that throws", () => {
+  it(
+    "keeps the passing code and still saves the video",
+    async () => {
+      const script = { storyboard: [submitsStoryboard(storyboard)], "scene-code s01": [submitsCode(await unitCode("good", "s01"))] };
+      const { core, dir } = await connect({
+        root,
+        script,
+        wrap: (connector) => ({
+          ...connector,
+          startSession: async (options) => {
+            if (options.label?.startsWith("review")) {
+              throw new Error("The reviewer's process crashed");
+            }
+
+            return connector.startSession(options);
+          },
+        }),
+      });
+      const project = await newProject(core, dir);
+      const done = await generate(core, { projectId: project.id, format: "horizontal" });
+      const saved = JSON.parse(await readFile(join(project.path, "horizontal", "versions", "1.json"), "utf8")) as { units: Record<string, string> };
+
+      expect(done).toMatchObject({ state: "done", version: 1 });
+      expect(done.units.find(({ id }) => id === "s01")).toEqual({ id: "s01", status: "ready", attempts: 1 });
+      expect(Object.keys(saved.units)).toEqual(["s01"]);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+});
