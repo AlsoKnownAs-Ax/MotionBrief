@@ -85,7 +85,7 @@ export function frameMajor(version: string) {
 /**
  * Replays a corpus run through the core API, the way the paid run made it: a Project of a synthetic Voiceover whose
  * Transcript comes from fixture whisper output, `video.generate` with the replay connector handing in the recorded
- * Storyboard and each unit's Scene code, then `video.revise` per recorded Revision with its patch and regenerated
+ * Storyboard and each unit's Scene code, then `video.send` per recorded Revision with its patch and regenerated
  * units. The visual reviewer finds nothing. Everything else runs for real: validation, the Checker on every unit, the
  * rebuild rule, Versions and the Project store.
  */
@@ -178,12 +178,12 @@ function whisperOutput({ duration, words }: StoryboardTranscript): RawWhisperOut
   });
 }
 
-/** Starts a Revision and resolves with its last status once it has ended. */
+/** Sends a Revision through the chat, as the creator does, and resolves with its last status once it has ended. */
 async function revise(core: CoreClient, video: VideoRef, message: string, scope: string[]): Promise<RevisionStatus> {
   const stop = new AbortController();
   const statuses = await core.video.revision(video, { signal: stop.signal });
   await statuses.next();
-  await core.video.revise({ ...video, message, scope });
+  await core.video.send({ ...video, message, scope });
 
   try {
     for await (const status of statuses) {
