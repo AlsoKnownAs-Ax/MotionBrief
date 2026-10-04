@@ -1,0 +1,501 @@
+import { join } from "node:path";
+import { z } from "zod";
+import {
+  UnitCodeSchema,
+  type CoreClient,
+  type GenerationStatus,
+  type Project,
+  type RevisionStatus,
+  type StoryboardIssue,
+  type StoryboardRules,
+  type StoryboardTranscript,
+  type Transcript,
+  type UnitCode,
+  type VideoRef,
+} from "../../contract";
+import type { AgentEvent } from "../../modules/connector";
+import { FRAME_CONTRACT_VERSION } from "../../modules/frame";
+import { readVersion, type StoredVersion } from "../../modules/projects";
+import { applyPatch, PatchSchema, scopeIssues } from "../../modules/revision";
+import { StoryboardSchema, validateStoryboard, type Storyboard } from "../../modules/storyboard";
+import { storyboardRules } from "../../modules/style";
+import { handedIn, replayScript, sessionsOf, SUBMIT_TOOLS, type RecordedSession, type Recorder } from "./recorder";
+import type { BundledPresetId, EvalCase, ScriptedRevision } from "./release-set";
+import {
+  blockReasons,
+  fallbackRate,
+  firstTryTokenLintRate,
+  type CaseResult,
+  type EvalResult,
+  type GenerationResult,
+  type RevisionResult,
+  type UsageResult,
+  type Verdict,
+} from "./results";
+
+export type EvalOptions = {
+  /** The core API, on a core whose connector is the recorder's. */
+  core: CoreClient;
+  recorder: Recorder;
+  runId: string;
+  cases: EvalCase[];
+  /** Where the eval's Projects are created. */
+  projectsDir: string;
+  /** Where each case's video is exported as an MP4 for the human verdict; nothing is exported when absent. */
+  exportDir?: string;
+  /** Asked once every case has run: whether the videos are good enough to release, and why. */
+  verdict: (cases: CaseResult[]) => Promise<Verdict>;
+  log?: (line: string) => void;
+  now?: () => number;
+};
+
+/** A saved Version's text outputs, as the replay corpus takes them. */
+export type VersionOutput = {
+  version: number;
+  frameContractVersion: string;
+  preset: BundledPresetId;
+  rules: StoryboardRules;
+  storyboard: unknown;
+  /** Scene code of every unit that has some; the others play as their fallback Scene. */
+  code: Record<string, UnitCode>;
+};
+
+export type CaseOutput = {
+  caseId: string;
+  /** The Transcript every Version of the case was written from. */
+  transcript: StoryboardTranscript;
+  versions: VersionOutput[];
+  /** Every agent turn of the case, by session label, for the replay connector. */
+  replay: Record<string, AgentEvent[][]>;
+};
+
+/**
+ * Runs a release set through the core API, as the app would: each case's Voiceover becomes a Project, is transcribed
+ * and generated, then revised by the scripted Revisions; the human judges the result. Measures each step from the
+ * core's statuses, the saved Versions and the recorded agent sessions.
+ */
+export async function runEval(options: EvalOptions): Promise<{ result: EvalResult; outputs: CaseOutput[] }> {
+  const { core, runId, cases: evalCases, verdict: askVerdict, now = Date.now } = options;
+  const started = now();
+  const [{ appVersion }, connection] = await Promise.all([core.system.info(), core.connection.status()]);
+  const runs: { result: CaseResult; output: CaseOutput }[] = [];
+
+  for (const evalCase of evalCases) {
+    runs.push(await runCase(options, evalCase));
+  }
+
+  const cases = runs.map(({ result }) => result);
+  const verdict = await askVerdict(cases);
+  const measured = { cases, fallbackRate: fallbackRate(cases), verdict };
+  const reasons = blockReasons(measured);
+
+  return {
+    result: {
+      runId,
+      appVersion,
+      frameContractVersion: FRAME_CONTRACT_VERSION,
+      connection: { method: connection.method, plan: connection.login?.plan },
+      startedAt: new Date(started).toISOString(),
+      wallSeconds: seconds(now() - started),
+      ...measured,
+      firstTryTokenLintRate: firstTryTokenLintRate(cases),
+      blocked: reasons.length > 0,
+      blockReasons: reasons,
+    },
+    outputs: runs.map(({ output }) => output),
+  };
+}
+
+type CaseRun = {
+  options: EvalOptions;
+  evalCase: EvalCase;
+  project: Project;
+  ref: VideoRef;
+  transcript: Transcript;
+};
+
+async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ result: CaseResult; output: CaseOutput }> {
+  const { core, recorder, projectsDir, log = () => undefined, now = Date.now } = options;
+  const started = now();
+  const mark = recorder.mark();
+  log(`${evalCase.id}: transcribing ${evalCase.voiceover}`);
+  const project = await core.project.create({
+    voiceoverPath: evalCase.voiceover,
+    name: evalCase.id,
+    format: evalCase.format,
+    stylePreset: evalCase.preset,
+    folder: projectsDir,
+  });
+  const run: CaseRun = { options, evalCase, project, ref: { projectId: project.id, format: evalCase.format }, transcript: await transcribed(core, project.id) };
+
+  try {
+    log(`${evalCase.id}: generating`);
+    const { generation, stored } = await generated(run);
+    const { revisions, versions } = await revised(run, stored);
+    const exportPath = await exported(run);
+    const sessions = recorder.since(mark);
+
+    return {
+      result: {
+        id: evalCase.id,
+        voiceover: evalCase.voiceover,
+        voiceoverSeconds: project.voiceover.duration,
+        format: evalCase.format,
+        preset: evalCase.preset,
+        models: versions.at(-1)?.version.models ?? {},
+        generation,
+        revisions,
+        usage: usageOf(sessions, project.voiceover.duration),
+        exportPath,
+        wallSeconds: seconds(now() - started),
+      },
+      output: {
+        caseId: evalCase.id,
+        transcript: { duration: run.transcript.duration, words: run.transcript.words.map(({ text, start }) => ({ text, start })) },
+        versions: versions.map((stored) => versionOutput(evalCase, stored)),
+        replay: replayScript(sessions),
+      },
+    };
+  } finally {
+    await core.project.close({ projectId: project.id });
+  }
+}
+
+/** Waits for the Project's Voiceover to be transcribed and answers with its Transcript. */
+async function transcribed(core: CoreClient, projectId: string): Promise<Transcript> {
+  for await (const status of await core.project.transcription({ projectId })) {
+    if (status.state === "failed") {
+      throw new Error(`Transcribing failed: ${status.error?.message ?? "no reason given"}`);
+    }
+
+    if (status.state === "done") {
+      return { language: status.language ?? "auto", duration: status.duration, words: status.words };
+    }
+  }
+
+  throw new Error("The transcription stream ended");
+}
+
+/** Reads statuses until one is settled, then stops listening. */
+async function settled<T>(statuses: AsyncIterable<T>, isSettled: (status: T) => boolean, listening: AbortController): Promise<T> {
+  try {
+    for await (const status of statuses) {
+      if (isSettled(status)) {
+        return status;
+      }
+    }
+  } finally {
+    listening.abort();
+  }
+
+  throw new Error("The status stream ended");
+}
+
+async function generated(run: CaseRun): Promise<{ generation: GenerationResult; stored?: StoredVersion }> {
+  const { options, ref, project } = run;
+  const { core, recorder, now = Date.now } = options;
+  const started = now();
+  const mark = recorder.mark();
+  const listening = new AbortController();
+  const statuses = await core.video.generation(ref, { signal: listening.signal });
+  await statuses.next();
+  await core.video.generate(ref);
+  const status = await settled(statuses, ({ state }) => state === "done" || state === "failed", listening);
+  const sessions = recorder.since(mark);
+  const stored = await storedVersion(project, ref, status.version);
+  const lint = await firstTryTokenLint(run, sessions, stored, unitIds(status));
+
+  return {
+    generation: {
+      state: settledState(status),
+      error: status.error,
+      version: status.version,
+      storyboardAttempts: sum(sessionsOf(sessions, "storyboard").map(({ turns }) => turns.length)),
+      storyboardFailed: status.error?.code === "STORYBOARD_INVALID",
+      units: status.units.map((unit) => ({ ...unit, contractRetries: contractRetries(sessions, unit.id), firstTryTokenLint: lint.get(unit.id) })),
+      reviewNotes: (stored?.version.flags ?? []).filter(({ kind }) => kind === "review-note").map(({ unit, reason }) => ({ unit, note: reason })),
+      wallSeconds: seconds(now() - started),
+    },
+    stored,
+  };
+}
+
+function settledState({ state }: GenerationStatus): "done" | "failed" {
+  if (state === "done") {
+    return "done";
+  }
+
+  return "failed";
+}
+
+function unitIds({ units }: GenerationStatus | RevisionStatus): string[] {
+  return units.map(({ id }) => id);
+}
+
+const REVISION_SETTLED = new Set<RevisionStatus["state"]>(["answered", "done", "failed", "stopped"]);
+
+/** Runs the case's scripted Revisions one after another, each on the newest Version; none when generating saved nothing. */
+async function revised(run: CaseRun, generated: StoredVersion | undefined): Promise<{ revisions: RevisionResult[]; versions: StoredVersion[] }> {
+  const { options, evalCase } = run;
+  const { log = () => undefined } = options;
+  const revisions: RevisionResult[] = [];
+  const versions = optional(generated);
+
+  for (const scripted of evalCase.revisions) {
+    const current = versions.at(-1);
+
+    if (!current) {
+      break;
+    }
+
+    log(`${evalCase.id}: revising (${scripted.scope})`);
+    const { revision, stored } = await revisedBy(run, current, scripted);
+    revisions.push(revision);
+    versions.push(...optional(stored));
+  }
+
+  return { revisions, versions };
+}
+
+async function revisedBy(run: CaseRun, current: StoredVersion, scripted: ScriptedRevision): Promise<{ revision: RevisionResult; stored?: StoredVersion }> {
+  const { options, ref, project } = run;
+  const { core, recorder, now = Date.now } = options;
+  const started = now();
+  const mark = recorder.mark();
+  const { data: storyboard } = StoryboardSchema.safeParse(current.version.storyboard);
+  const sceneIds = scopeOf(scripted, storyboard);
+  const listening = new AbortController();
+  const statuses = await core.video.revision(ref, { signal: listening.signal });
+  await statuses.next();
+  await core.video.revise({ ...ref, message: scripted.message, scope: sceneIds });
+  const status = await settled(statuses, ({ state }) => REVISION_SETTLED.has(state), listening);
+  const sessions = recorder.since(mark);
+  const patches = sessionsOf(sessions, "revision")
+    .flatMap((session) => handedIn(session, SUBMIT_TOOLS.patch))
+    .filter((patch) => patch !== undefined)
+    .map((patch) => ({ issues: patchIssues(run, current, storyboard, patch, sceneIds) }));
+  const stored = await storedVersion(project, ref, status.version);
+  const regenerated = status.units.filter(({ rebuild }) => rebuild === "regenerate").map(({ id }) => id);
+  const lint = await firstTryTokenLint(run, sessions, stored, regenerated);
+
+  return {
+    revision: {
+      ...scripted,
+      sceneIds,
+      state: status.state,
+      error: status.error,
+      summary: status.summary,
+      reply: status.reply,
+      version: status.version,
+      patches,
+      firstPatchValid: patches[0]?.issues.length === 0,
+      scopeViolations: patches.flatMap(({ issues }) => issues).filter(({ code }) => code === "SCOPE").length,
+      units: status.units.map((unit) => ({ ...unit, contractRetries: contractRetries(sessions, unit.id), firstTryTokenLint: lint.get(unit.id) })),
+      notApplied: status.notApplied ?? [],
+      wallSeconds: seconds(now() - started),
+    },
+    stored,
+  };
+}
+
+/** A Scene-scoped Revision selects the middle Scene of the current Version; a whole-video one selects none. */
+function scopeOf({ scope }: ScriptedRevision, storyboard: Storyboard | undefined): string[] {
+  if (scope === "whole-video" || !storyboard) {
+    return [];
+  }
+
+  return optional(storyboard.scenes[Math.floor(storyboard.scenes.length / 2)]?.id);
+}
+
+/** What the Revision agent's patch had wrong as handed in: the validator's issues, or those of its scope. */
+function patchIssues({ evalCase, transcript }: CaseRun, { version }: StoredVersion, storyboard: Storyboard | undefined, raw: unknown, scope: string[]): StoryboardIssue[] {
+  const { success, data: patch, error } = z.object(PatchSchema).safeParse(raw);
+
+  if (!success) {
+    return [{ code: "SCHEMA", field: "", message: error.message }];
+  }
+
+  if (!storyboard) {
+    return [];
+  }
+
+  const rules = storyboardRules(version.preset, { format: evalCase.format, captions: patch.captions ?? version.captions });
+  const { data: revised, error: invalid } = validateStoryboard(applyPatch(storyboard, patch), transcript, rules);
+
+  if (invalid) {
+    return invalid.issues;
+  }
+
+  return scopeIssues(storyboard, revised, patch, scope);
+}
+
+async function storedVersion(project: Project, { format }: VideoRef, version: number | undefined): Promise<StoredVersion | undefined> {
+  if (version === undefined) {
+    return undefined;
+  }
+
+  const { data: stored, error } = await readVersion(project.path, format, version);
+
+  if (error) {
+    throw new Error(`Version ${version} of ${project.name} can't be read: ${error.code}`);
+  }
+
+  return stored;
+}
+
+/**
+ * Turns that sent a unit back to its agent: every turn of its Scene-code sessions after each session's first, less
+ * the repair turns its visual reviews asked for.
+ */
+function contractRetries(sessions: RecordedSession[], unit: string): number {
+  const writing = sessionsOf(sessions, `scene-code ${unit}`);
+  const repairs = sessionsOf(sessions, `review ${unit}`).filter(asksForRepair).length;
+
+  return Math.max(0, sum(writing.map(({ turns }) => turns.length)) - writing.length - repairs);
+}
+
+const VerdictSchema = z.object({ looksRight: z.boolean(), problems: z.array(z.string()) });
+
+/** A review that found problems, which the Scene-code agent then gets one repair turn for. */
+function asksForRepair(session: RecordedSession): boolean {
+  return handedIn(session, SUBMIT_TOOLS.review).some((raw) => {
+    const { success, data: verdict } = VerdictSchema.safeParse(raw);
+
+    return success && !verdict.looksRight && verdict.problems.some((problem) => problem.trim() !== "");
+  });
+}
+
+/**
+ * Whether each unit's first code passed the token lint: the first code its agent handed in, checked in the Version's
+ * Storyboard and Preset with every other unit drawn as its fallback Scene. Units that handed in nothing, or whose
+ * code couldn't be checked, are left out.
+ */
+async function firstTryTokenLint({ options, evalCase, transcript }: CaseRun, sessions: RecordedSession[], stored: StoredVersion | undefined, units: string[]) {
+  const firsts = Object.fromEntries(units.flatMap((unit) => optional(firstCode(sessions, unit)).map((code) => [unit, code] as const)));
+  const checked = Object.keys(firsts);
+
+  if (!stored || checked.length === 0) {
+    return new Map<string, boolean>();
+  }
+
+  const { version } = stored;
+  const rules = storyboardRules(version.preset, { format: evalCase.format, captions: version.captions });
+  // The Checker being unavailable leaves the rate unmeasured rather than failing the eval.
+  const report = await options.core.checker
+    .check({ storyboard: version.storyboard, transcript, rules, preset: version.preset, code: firsts })
+    .catch(() => undefined);
+
+  if (!report) {
+    return new Map<string, boolean>();
+  }
+
+  const failing = new Set(report.findings.filter(({ source }) => source === "tokens").map(({ unit }) => unit));
+
+  return new Map(checked.map((unit) => [unit, !failing.has(unit)]));
+}
+
+function firstCode(sessions: RecordedSession[], unit: string): UnitCode | undefined {
+  const [first] = sessionsOf(sessions, `scene-code ${unit}`);
+  const code = first ? handedIn(first, SUBMIT_TOOLS.sceneCode).find((input) => input !== undefined) : undefined;
+
+  return UnitCodeSchema.safeParse(code).data;
+}
+
+/** Exports the video as it now is, for the maintainer to watch before giving a verdict. */
+async function exported({ options, evalCase, ref }: CaseRun): Promise<string | undefined> {
+  const { core, exportDir, log = () => undefined } = options;
+
+  if (!exportDir) {
+    return undefined;
+  }
+
+  const { preview } = await core.video.open(ref);
+
+  if (!preview) {
+    return undefined;
+  }
+
+  const path = join(exportDir, `${evalCase.id}.mp4`);
+  log(`${evalCase.id}: exporting ${path}`);
+
+  for await (const status of await core.export.mp4({ previewId: preview.id, path, video: ref })) {
+    if (status.state === "failed") {
+      log(`${evalCase.id}: export failed (${status.error.code})`);
+      return undefined;
+    }
+
+    if (status.state === "done") {
+      return status.path;
+    }
+  }
+
+  return undefined;
+}
+
+function versionOutput(evalCase: EvalCase, { version, code }: StoredVersion): VersionOutput {
+  return {
+    version: version.version,
+    frameContractVersion: version.frameContractVersion,
+    preset: evalCase.preset,
+    rules: storyboardRules(version.preset, { format: evalCase.format, captions: version.captions }),
+    storyboard: version.storyboard,
+    code,
+  };
+}
+
+/** A case's cost, tokens per model and plan usage, per minute of its Voiceover. */
+function usageOf(sessions: RecordedSession[], voiceoverSeconds: number): UsageResult {
+  const minutes = Math.max(voiceoverSeconds, 1) / 60;
+  const costUsd = sum(sessions.map((session) => session.costUsd));
+  const byModel = Map.groupBy(
+    sessions.flatMap(({ usage }) => usage),
+    ({ model }) => model,
+  );
+  const byWindow = Map.groupBy(
+    sessions.flatMap(({ planUsage }) => planUsage),
+    ({ window }) => window,
+  );
+
+  return {
+    costUsd,
+    costUsdPerMinute: costUsd / minutes,
+    models: [...byModel].map(([model, usages]) => ({
+      model,
+      inputTokens: sum(usages.map(({ inputTokens }) => inputTokens)),
+      outputTokens: sum(usages.map(({ outputTokens }) => outputTokens)),
+      cacheReadTokens: sum(usages.map(({ cacheReadTokens }) => cacheReadTokens)),
+      cacheWriteTokens: sum(usages.map(({ cacheWriteTokens }) => cacheWriteTokens)),
+      costUsd: sum(usages.map((usage) => usage.costUsd)),
+    })),
+    plan: [...byWindow].map(([window, reports]) => ({
+      window,
+      utilizationPerMinute: spread(reports.flatMap(({ utilization }) => optional(utilization))) / minutes,
+      resetsAt: reports.at(-1)?.resetsAt,
+    })),
+  };
+}
+
+/** A plan window's use only grows until it resets, so a case used the spread between its lowest and highest report. */
+function spread(values: number[]): number {
+  if (values.length === 0) {
+    return 0;
+  }
+
+  return Math.max(...values) - Math.min(...values);
+}
+
+function sum(values: number[]): number {
+  return values.reduce((total, value) => total + value, 0);
+}
+
+function seconds(ms: number): number {
+  return Math.round(ms / 100) / 10;
+}
+
+function optional<T>(value: T | undefined): T[] {
+  if (value === undefined) {
+    return [];
+  }
+
+  return [value];
+}

@@ -25,6 +25,7 @@
     "postinstall": "node scripts/deps/postinstall.ts",
     "deps:fetch": "node scripts/deps/postinstall.ts",
     "deps:pin": "node scripts/deps/pin.ts",
+    "eval": "node scripts/eval.ts",
     "package": "electron-vite build && node scripts/release/licenses.ts && electron-builder --publish never",
     "package:smoke": "node scripts/release/smoke.ts"
   },

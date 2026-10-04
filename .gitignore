@@ -10,3 +10,6 @@ dist/
 
 # Native binaries fetched by postinstall from deps.json
 vendor/
+
+# The paid eval's app data, Projects and exports (npm run eval); results and the replay corpus are committed
+eval/.work/

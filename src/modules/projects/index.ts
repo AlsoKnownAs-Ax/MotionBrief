@@ -12,4 +12,4 @@ export {
 } from "./projects";
 export { createStatusStore } from "./status";
 export type { VideoDocumentError } from "./video";
-export type { Flag, GenerationRecord, RevisionRecord, Version, VersionError, VideoContent } from "./videos";
+export { readVersion, type Flag, type GenerationRecord, type RevisionRecord, type StoredVersion, type Version, type VersionError, type VideoContent } from "./videos";
