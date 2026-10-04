@@ -945,6 +945,31 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return enqueue(project, () => step(project.dir));
   }
 
+  /** The job holding each video, by `projectId format`. */
+  const reservations = new Map<string, object>();
+
+  /**
+   * Reserves the video for one job that saves a Version: a first generation, a Retry, a Revision or a Restore. Take it
+   * synchronously before reading the Version the job starts from, and release it once the job can save no more.
+   * Resolves to the release; none while another job holds the video.
+   */
+  function reserve(projectId: string, format: Format): (() => void) | undefined {
+    const key = `${projectId} ${format}`;
+
+    if (reservations.has(key)) {
+      return undefined;
+    }
+
+    const holder = {};
+    reservations.set(key, holder);
+
+    return () => {
+      if (reservations.get(key) === holder) {
+        reservations.delete(key);
+      }
+    };
+  }
+
   /** Work on open Projects that must end, and save, before one closes. */
   const closing: ((projectId: string) => Promise<void>)[] = [];
 
@@ -1027,6 +1052,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     readChat: (projectId: string, format: Format) => read(projectId, (dir) => readChat(dir, format)),
     whenClosing,
     admits,
+    reserve,
     lastExportPath,
     rememberExportPath,
     storedVideo,

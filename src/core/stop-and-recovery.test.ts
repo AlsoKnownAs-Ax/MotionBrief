@@ -406,6 +406,7 @@ async function fakedGeneration(project: Project, transcript: unknown, script: Pa
     },
     whenClosing: () => undefined,
     admits: () => true,
+    reserve: () => () => undefined,
   } as unknown as Projects;
   const checker = { check: async () => ({ data: { frameContractVersion: "1.0.0", findings: [] }, error: null }) } as unknown as Checker;
   const previews = { open: async () => ({ data: null, error: { code: "VOICEOVER_MISSING", path: "" } }) } as unknown as Previews;

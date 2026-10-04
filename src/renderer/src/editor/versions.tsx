@@ -33,7 +33,11 @@ export function Versions() {
       }
 
       setVersions(data ?? undefined);
-      setError(listError ? "The Versions couldn't be read from the Project folder." : undefined);
+      setError(undefined);
+
+      if (listError) {
+        setError("The Versions couldn't be read from the Project folder.");
+      }
     });
 
     return () => {

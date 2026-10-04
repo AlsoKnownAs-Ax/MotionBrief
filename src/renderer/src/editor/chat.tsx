@@ -206,9 +206,10 @@ function ScopeChips({ scenes }: { scenes: TimelineScene[] }) {
 function QueueBar() {
   const queued = useRevision((state) => queuedCount(state.chat));
   const isPaused = useRevision((state) => state.chat?.isPaused ?? false);
+  const saveError = useRevision((state) => state.chat?.saveError);
   const resumeQueue = useRevision((state) => state.resumeQueue);
 
-  if (queued === 0) {
+  if (queued === 0 && !saveError) {
     return null;
   }
 
@@ -218,6 +219,11 @@ function QueueBar() {
       <span className="flex-1 text-app-sm text-ink">
         {queued} queued
         {isPaused ? <span className="text-ink-muted"> · paused</span> : null}
+        {saveError ? (
+          <span role="alert" className="block text-app-xs text-status-fallback-ink">
+            The chat couldn&rsquo;t be saved to {saveError.path || "the Project folder"}. Resume queue tries again.
+          </span>
+        ) : null}
       </span>
       {isPaused ? (
         <Button size="sm" onClick={resumeQueue}>
@@ -232,7 +238,7 @@ function QueueBar() {
 /** What the composer says under the request, first match wins: why it can't send, or where a request goes. */
 const HINTS = [
   { when: ({ isStored }: ComposerState) => !isStored, hint: "The fixture Project can't be revised", isBlocked: true },
-  { when: ({ isPaused }: ComposerState) => isPaused, hint: "Queues behind the paused requests", isBlocked: false },
+  { when: ({ isPaused }: ComposerState) => isPaused, hint: "Queues until Resume queue", isBlocked: false },
   { when: ({ isBusy }: ComposerState) => isBusy, hint: "Queues behind the current job", isBlocked: false },
 ];
 
@@ -245,7 +251,7 @@ function Composer({ scenes }: { scenes: TimelineScene[] }) {
   const stop = useRevision((state) => state.stop);
   const chatFocus = useRevision((state) => state.chatFocus);
   const working = useRevision((state) => isRevising(state.status));
-  const isPaused = useRevision((state) => (state.chat?.isPaused ?? false) && queuedCount(state.chat) > 0);
+  const isPaused = useRevision((state) => state.chat?.isPaused ?? false);
   const generating = useGeneration((state) => isGenerating(state.status));
   const isStored = useOpenVideo((state) => state.isStored);
   const textarea = useRef<HTMLTextAreaElement>(null);

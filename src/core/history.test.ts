@@ -196,6 +196,42 @@ describe("Versions", () => {
     await core.project.close({ projectId: project.id });
   }, 60_000);
 
+  it("never runs at once with a Revision started outside the chat", async () => {
+    const { core, replay, project, video } = await connect({ revision: [replies("Sure."), replies("Again.")] });
+    await twoVersions(project);
+    replay.hold("revision");
+
+    const raced = await Promise.allSettled([core.video.restore({ ...video, version: 1 }), core.video.revise({ ...video, message: "Faster", scope: [] })]);
+    const busy = core.video.restore({ ...video, version: 1 });
+
+    expect(raced.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+    await expect(busy).rejects.toMatchObject({ code: "BUSY" });
+    replay.release("revision");
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
+  it("never runs at once with a Retry", async () => {
+    const { core, replay, project, video } = await connect({});
+    await twoVersions(project);
+    // s05's subagent has no recorded turn: held, the Retry stays running until it is stopped.
+    replay.hold("scene-code s05");
+
+    const raced = await Promise.allSettled([core.video.retry({ ...video, units: ["s05"] }), core.video.restore({ ...video, version: 1 })]);
+    const fulfilled = raced.filter(({ status }) => status === "fulfilled");
+
+    expect(fulfilled).toHaveLength(1);
+
+    // Whichever won, a Retry going now keeps Restore out until it ends.
+    if (raced[1].status === "fulfilled") {
+      await core.video.retry({ ...video, units: ["s05"] });
+    }
+
+    await expect(core.video.restore({ ...video, version: 1 })).rejects.toMatchObject({ code: "BUSY" });
+    await core.video.stop(video);
+    replay.release("scene-code s05");
+    await core.project.close({ projectId: project.id });
+  }, 120_000);
+
   it("refuses a Version the video doesn't have", async () => {
     const { core, project, video } = await connect({});
     await twoVersions(project);
@@ -277,13 +313,71 @@ describe("the chat", () => {
       ["One", "stopped"],
       ["Two", "queued"],
     ]);
-    expect(replay.askedOf("revision").filter(({ message }) => message.includes("Two"))).toEqual([]);
+    // At most the stopped Revision's own turn was asked; "Two" did no work.
+    expect(replay.askedOf("revision").length).toBeLessThanOrEqual(1);
 
     await core.video.resumeQueue(video);
     const settled = await chat.until(isSettled);
     chat.stop();
 
     expect(settled).toMatchObject({ isPaused: false, entries: [{ state: "stopped" }, { state: "answered" }] });
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
+  it("keeps what is sent after a line a crash left half written", async () => {
+    const { core, project, video } = await connect({ revision: [replies("Sure.")] });
+    await twoVersions(project);
+    await writeFile(join(project.path, "horizontal", "chat.jsonl"), '{"id":"torn","kind":"request","at":"2026-10-04T12:00:00.000Z","mess');
+
+    await core.video.send({ ...video, message: "Faster", scope: [] });
+    const chat = await watchChat(core, video);
+    await chat.until(isSettled);
+    chat.stop();
+    await core.project.close({ projectId: project.id });
+    await core.project.open({ path: project.path });
+    const reopened = await watchChat(core, video);
+
+    expect(states(await reopened.until(() => true))).toEqual([["Faster", "answered"]]);
+    reopened.stop();
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
+  it("pauses the queue when how a Revision ended can't be saved, and saves it on Resume queue", async () => {
+    const { core, replay, project, video } = await connect({ revision: [replies("First."), replies("Second.")] });
+    await twoVersions(project);
+    replay.hold("revision");
+    const chat = await watchChat(core, video);
+    const first = await core.video.send({ ...video, message: "One", scope: [] });
+    await core.video.send({ ...video, message: "Two", scope: [] });
+
+    // The log can't be written to: a folder now stands where it was.
+    const log = join(project.path, "horizontal", "chat.jsonl");
+    const saved = await readFile(log, "utf8");
+    await rm(log);
+    await mkdir(log);
+    replay.release("revision");
+    const failed = await chat.until(({ saveError }) => saveError !== undefined);
+
+    expect(failed.isPaused).toBe(true);
+    expect(states(failed)).toEqual([
+      ["One", "answered"],
+      ["Two", "queued"],
+    ]);
+    expect(replay.askedOf("revision")).toHaveLength(1);
+
+    await rm(log, { recursive: true });
+    await writeFile(log, saved);
+    await core.video.resumeQueue(video);
+    const settled = await chat.until(isSettled);
+    chat.stop();
+    const lines = (await readFile(log, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as { id: string; state?: string });
+
+    expect(settled.saveError).toBeUndefined();
+    expect(states(settled)).toEqual([
+      ["One", "answered"],
+      ["Two", "answered"],
+    ]);
+    expect(lines.filter(({ id }) => id === first.id).at(-1)?.state).toBe("answered");
     await core.project.close({ projectId: project.id });
   }, 60_000);
 

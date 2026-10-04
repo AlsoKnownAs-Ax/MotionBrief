@@ -659,6 +659,11 @@ export const ChatStatusSchema = z.object({
    * Revision was stopped. Nothing is ever spent on its own.
    */
   isPaused: z.boolean(),
+  /**
+   * Set while how a request ended couldn't be saved to the Project folder: the queue pauses, the chat shows it as it
+   * ended, and Resume queue saves it again before running anything.
+   */
+  saveError: z.object({ path: z.string(), message: z.string() }).optional(),
 });
 
 /** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */

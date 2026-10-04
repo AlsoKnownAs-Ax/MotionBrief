@@ -31,6 +31,8 @@ type VideoChat = {
   running?: string;
   /** The last queue step or Restore; each runs after the one before. */
   step: Promise<unknown>;
+  /** Lines that couldn't be saved to the log, in order, saved again by Resume queue. */
+  unsaved: ChatLine[];
 };
 
 /** How a Revision's last status ends the request that started it. */
@@ -87,7 +89,7 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
     const entries = logged.map(closedIfRunning);
     const store = createStatusStore<ChatStatus>({ entries, isPaused: hasQueued(entries) });
 
-    return { data: { store, step: Promise.resolve() }, error: null };
+    return { data: { store, step: Promise.resolve(), unsaved: [] }, error: null };
   }
 
   /** Adds a line to the video's log, then to the chat it streams. */
@@ -176,36 +178,79 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
     await startNext(ref, chat);
   }
 
-  /** Records how the running request's Revision ended, then runs what queued behind it; a Stop pauses the queue. */
+  /** Records how the running request's Revision ended, in turn with the queue, then runs what queued behind it. */
   async function revisionEnded(ref: VideoRef, status: RevisionStatus) {
-    const loaded = videos.get(keyOf(ref));
-    const { data: chat } = (await loaded) ?? {};
+    const { data: chat } = (await videos.get(keyOf(ref))) ?? {};
 
     if (!chat) {
       return;
     }
 
+    await inTurn(chat, () => recordEnding(ref, chat, status));
+    await next(ref);
+  }
+
+  /**
+   * The request stays running until its ending is saved, so nothing starts before a Stop has paused the queue. An
+   * ending that can't be saved still shows, and pauses the queue until Resume queue saves it.
+   */
+  async function recordEnding(ref: VideoRef, chat: VideoChat, status: RevisionStatus) {
     const id = chat.running;
-    chat.running = undefined;
 
     if (id) {
       const { reply, summary, notApplied, version, error } = status;
-      await record(ref, chat, { id, state: endingOf(status.state), reply, summary, notApplied, version, error });
+      const line: ChatLine = { id, state: endingOf(status.state), reply, summary, notApplied, version, error };
+      const { error: recordError } = await record(ref, chat, line);
+
+      if (recordError) {
+        keepUnsaved(chat, line, recordError);
+      }
     }
 
     if (status.state === "stopped" && hasQueued(chat.store.get().entries)) {
       chat.store.update({ isPaused: true });
     }
 
-    await next(ref);
+    chat.running = undefined;
   }
 
-  /** Runs the paused queue. */
+  function keepUnsaved(chat: VideoChat, line: ChatLine, error: HistoryError) {
+    chat.unsaved.push(line);
+    const { entries } = chat.store.get();
+    chat.store.update({ entries: merged(entries, line), isPaused: true, saveError: saveErrorOf(error) });
+  }
+
+  /** Saves the chat lines that couldn't be saved before, in order; stops at the first that still can't. */
+  async function flush(ref: VideoRef, chat: VideoChat): Promise<Result<null, HistoryError>> {
+    for (const line of [...chat.unsaved]) {
+      const { error } = await projects.appendChat(ref.projectId, ref.format, line);
+
+      if (error) {
+        chat.store.update({ saveError: saveErrorOf(historyError(error)) });
+
+        return { data: null, error: historyError(error) };
+      }
+
+      chat.unsaved.shift();
+    }
+
+    chat.store.update({ saveError: undefined });
+
+    return { data: null, error: null };
+  }
+
+  /** Runs the paused queue, once what couldn't be saved before is saved. */
   async function resume(ref: VideoRef): Promise<Result<null, HistoryError>> {
     const { data: chat, error } = await chatOf(ref);
 
     if (error) {
       return { data: null, error };
+    }
+
+    const { error: flushError } = await inTurn(chat, () => flush(ref, chat));
+
+    if (flushError) {
+      return { data: null, error: flushError };
     }
 
     chat.store.update({ isPaused: false });
@@ -254,8 +299,23 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
     return inTurn(chat, () => restoreInTurn(ref, chat, number));
   }
 
+  /** Holds the video's reservation throughout, so no run or Revision starts from the Version before the Restore. */
   async function restoreInTurn(ref: VideoRef, chat: VideoChat, number: number): Promise<Result<{ version: number }, HistoryError>> {
-    if (isBusy(ref, chat)) {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "BUSY", projectId: ref.projectId } };
+    }
+
+    const restored = await restoreReserved(ref, chat, number);
+    release();
+
+    return restored;
+  }
+
+  async function restoreReserved(ref: VideoRef, chat: VideoChat, number: number): Promise<Result<{ version: number }, HistoryError>> {
+    // A request whose Revision ended but whose ending isn't recorded yet still counts as running.
+    if (chat.running !== undefined) {
       return { data: null, error: { code: "BUSY", projectId: ref.projectId } };
     }
 
@@ -312,6 +372,14 @@ function merged(entries: ChatEntry[], line: ChatLine): ChatEntry[] {
   }
 
   return entries.with(index, { ...entries[index]!, ...line });
+}
+
+function saveErrorOf(error: HistoryError): ChatStatus["saveError"] {
+  if (error.code === "FILE_FAILED" || error.code === "INVALID_VERSION") {
+    return { path: error.path, message: error.message };
+  }
+
+  return { path: "", message: error.code };
 }
 
 function endingOf(state: RevisionStatus["state"]): ChatRequestState {

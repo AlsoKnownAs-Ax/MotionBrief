@@ -76,7 +76,7 @@ type Store = ReturnType<typeof createStatusStore<RevisionStatus>>;
  * A video's running Revision. Once it starts saving its Version it is committing: Stop is too late from then on,
  * and the Revision ends `done`.
  */
-type Job = { controller: AbortController; isCommitting: boolean };
+type Job = { controller: AbortController; isCommitting: boolean; release: () => void };
 
 /** What a regenerated unit ended with: new code, or none; and the flag it carries in the new Version, if any. */
 type Regenerated = { code?: UnitCode; flag?: Flag };
@@ -106,18 +106,27 @@ export function createRevisions({ connector, checker, previews, stills, projects
   async function start(ref: VideoRef, request: RevisionRequest): Promise<Result<null, ReviseError>> {
     const { key, store } = storeOf(ref);
 
-    if (running.has(key)) {
+    // Reserved before the current Version is read, so no other job saves one under this Revision.
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
       return { data: null, error: { code: "REVISING", projectId: ref.projectId } };
     }
 
-    const job: Job = { controller: new AbortController(), isCommitting: false };
+    const job: Job = { controller: new AbortController(), isCommitting: false, release };
     running.set(key, job);
     const { data: run, error } = await prepare(ref, request, store, job);
 
     if (error) {
       running.delete(key);
+      release();
 
       return { data: null, error };
+    }
+
+    // Stopped while it was being prepared: nothing runs, and Stop already said it ended.
+    if (job.controller.signal.aborted) {
+      return { data: null, error: null };
     }
 
     store.set({ state: "revising", request, affected: request.scope, units: [] });
@@ -130,6 +139,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
         }
 
         running.delete(key);
+        release();
         ended.forEach((listener) => listener(ref, store.get()));
       });
 
@@ -197,8 +207,10 @@ export function createRevisions({ connector, checker, previews, stills, projects
       return;
     }
 
+    // A stopped Revision never saves, so the video is free at once.
     running.delete(key);
     job.controller.abort();
+    job.release();
     store.update({ state: "stopped", affected: [] });
     ended.forEach((listener) => listener(ref, store.get()));
   }
