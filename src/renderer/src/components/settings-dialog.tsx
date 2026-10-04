@@ -1,11 +1,14 @@
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { create } from "zustand";
 import { accountLabel, useClaudeStatus, useRemoveApiKey, useSetApiKey } from "@renderer/claude/connection";
 import { ApiKeyForm } from "@renderer/claude/connect-claude";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
+import { core, orpc, queryClient } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
-import type { ConnectionStatus } from "../../../contract";
+import { sizeLabel } from "@renderer/new-project/labels";
+import type { CacheStatus, ConnectionStatus } from "../../../contract";
 
 export const useSettingsDialog = create<{ isOpen: boolean; setIsOpen: (isOpen: boolean) => void }>((set) => ({
   isOpen: false,
@@ -34,6 +37,7 @@ export function SettingsDialog() {
           <DialogDescription>Changes apply to the next run.</DialogDescription>
         </DialogHeader>
         <ClaudeSettings onOpenSetup={() => setIsOpen(false)} />
+        <StorageSettings />
       </DialogContent>
     </Dialog>
   );
@@ -153,6 +157,40 @@ function ApiKeyRow({ maskedKey }: { maskedKey?: string }) {
       </Button>
     </Row>
   );
+}
+
+/** The app cache: resampled audio and raw Whisper output, all of which MotionBrief can make again. */
+function StorageSettings() {
+  const { data: status } = useQuery(orpc.cache.status.queryOptions());
+  const clear = useMutation({
+    mutationFn: () => core.cache.clear(),
+    onSuccess: (cleared) => queryClient.setQueryData(orpc.cache.status.queryKey(), cleared),
+  });
+
+  return (
+    <section aria-labelledby="settings-storage" className="flex flex-col gap-1">
+      <h3 id="settings-storage" className="text-app-sm font-medium">
+        Storage
+      </h3>
+      <dl className="flex flex-col">
+        <Row label="Cache">
+          <span className="text-app-sm text-ink-muted tabular-nums">{cacheLabel(status)}</span>
+          <Button variant="ghost" size="sm" disabled={clear.isPending || status?.usedBytes === 0} onClick={() => clear.mutate()}>
+            Clear cache
+          </Button>
+        </Row>
+      </dl>
+      <p className="text-app-xs text-ink-muted">Resampled audio and raw transcriptions. Clearing it never touches a Project.</p>
+    </section>
+  );
+}
+
+function cacheLabel(status: CacheStatus | undefined) {
+  if (!status) {
+    return "Checking…";
+  }
+
+  return `${sizeLabel(status.usedBytes)} of ${sizeLabel(status.capBytes)}`;
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {

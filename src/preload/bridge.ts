@@ -11,4 +11,6 @@ export type Bridge = {
   showContextMenu: (items: ContextMenuItem[]) => Promise<string | null>;
   /** The native open-file dialog; resolves to the chosen file's path, or null when cancelled. */
   chooseFile: (options: ChooseFileOptions) => Promise<string | null>;
+  /** The path of a file dropped on the window; empty for anything that isn't a file on disk. */
+  pathForFile: (file: File) => string;
 };

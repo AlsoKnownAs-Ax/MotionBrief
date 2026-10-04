@@ -5,12 +5,14 @@ import { ShortcutsDialog } from "@renderer/components/shortcuts-dialog";
 import { TitleBar } from "@renderer/components/title-bar";
 import { useNavigation, type Screen } from "@renderer/navigation";
 import { Home } from "@renderer/screens/home";
+import { NewProject } from "@renderer/screens/new-project";
 import { Setup } from "@renderer/screens/setup";
 import { useStartTranscriptionModel } from "@renderer/setup/transcription-model-step";
 
 const SCREENS = {
   home: Home,
   setup: Setup,
+  "new-project": NewProject,
 } satisfies Record<Screen, ComponentType>;
 
 export function App() {

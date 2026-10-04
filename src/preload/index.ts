@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from "electron";
 import { CORE_PORT_MESSAGE, IPC, type AppCommand } from "../shared/ipc";
 import { toPlatform } from "../shared/shortcuts";
 import type { Bridge } from "./bridge";
@@ -30,6 +30,7 @@ const bridge: Bridge = {
   showAppMenu: (position) => ipcRenderer.send(IPC.showAppMenu, position),
   showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
   chooseFile: (options) => ipcRenderer.invoke(IPC.chooseFile, options),
+  pathForFile: (file) => webUtils.getPathForFile(file),
 };
 
 contextBridge.exposeInMainWorld("motionbrief", bridge);
