@@ -9,8 +9,11 @@ const ACCENT_MINIMUM = 3;
 /** Below this a fill barely stands out from bg. */
 const FILL_MINIMUM = 1.5;
 
-/** Below this outlines and connectors barely show. Bundled line colors are deliberately quiet (1.4–1.8:1). */
-const LINE_MINIMUM = 1.3;
+/**
+ * WCAG AA for graphics, which outlines and connectors are. Several bundled line colors are deliberately quiet,
+ * so this warns rather than blocks.
+ */
+const LINE_MINIMUM = 3;
 
 const TEXT_ROLES = ["ink", "muted"] as const;
 
@@ -23,9 +26,9 @@ const GROUNDS = ["bg", "surface"] as const;
  */
 export function checkContrast({ colors, fills = [] }: Palette): ContrastFinding[] {
   const finding = (level: ContrastFinding["level"], use: ContrastFinding["use"], role: PaletteRole, against: PaletteRole, minimum: number) => {
-    const ratio = round(contrastRatio(colors[role], colors[against]));
+    const ratio = contrastRatio(colors[role], colors[against]);
 
-    return ratio < minimum ? [{ level, use, role, against, ratio, minimum }] : [];
+    return ratio < minimum ? [{ level, use, role, against, ratio: round(ratio), minimum }] : [];
   };
 
   const text = TEXT_ROLES.flatMap((role) => GROUNDS.flatMap((ground) => finding("block", "text", role, ground, TEXT_MINIMUM)));
@@ -61,7 +64,7 @@ function linear(channel: number): number {
   return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
 }
 
-/** Ratios are shown to two decimals, so they are compared that way: 2.998:1 shows, and passes, as 3.00:1. */
+/** Ratios are shown to two decimals but compared unrounded, as WCAG asks: 2.998:1 fails 3:1. */
 function round(ratio: number): number {
   return Math.round(ratio * 100) / 100;
 }

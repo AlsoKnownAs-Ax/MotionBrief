@@ -36,7 +36,8 @@ export const WHITEBOARD: Palette = {
     muted: "#5b6678",
     accent: "#2563eb",
     accent2: "#0d9488",
-    accent3: "#d97706",
+    // A shade under Tailwind's amber-600 (2.998:1), so it reaches 3:1 on bg.
+    accent3: "#d77506",
     good: "#16a34a",
     bad: "#dc2626",
   },

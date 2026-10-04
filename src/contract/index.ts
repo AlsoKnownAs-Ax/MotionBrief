@@ -512,7 +512,7 @@ export const coreContract = {
     /** Makes the creator's own copy of any Preset, under a new id and name, to edit. */
     duplicate: oc
       .errors({ UNKNOWN_PRESET: { data: z.object({ id: z.string() }) }, FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) } })
-      .input(z.object({ id: z.string() }))
+      .input(z.object({ id: StylePresetIdSchema }))
       .output(ListedPresetSchema),
     /**
      * Saves the creator's edits to one of their own Presets, unless the contrast rule blocks its Palette. Answers
@@ -530,8 +530,12 @@ export const coreContract = {
       .output(z.object({ preset: ListedPresetSchema, findings: z.array(ContrastFindingSchema) })),
     /** Deletes one of the creator's own Presets; videos made with it keep their snapshot. */
     remove: oc
-      .errors({ READ_ONLY: { data: z.object({ id: z.string() }) }, FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) } })
-      .input(z.object({ id: z.string() })),
+      .errors({
+        READ_ONLY: { data: z.object({ id: z.string() }) },
+        UNKNOWN_PRESET: { data: z.object({ id: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(z.object({ id: StylePresetIdSchema })),
     /** A still of a small diagram drawn in the bundled frame in a Preset, as a JPEG data URL; cached by Preset. */
     sample: oc
       .errors({ CHECKER_UNAVAILABLE: { data: CheckerUnavailableSchema } })

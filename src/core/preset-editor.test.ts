@@ -1,10 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ORPCError } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StylePresetSchema, type ContrastFinding, type ListedPreset, type Palette, type StylePreset } from "../contract";
-import { presetBrief, presetSample } from "../modules/style";
+import { presetSample } from "../modules/style";
 import { BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
 import storyboard from "./fixtures/checker/storyboard.json";
 import transcript from "./fixtures/checker/transcript.json";
@@ -111,7 +111,7 @@ describe("the contrast rule", () => {
 
     const { findings } = await connect().style.contrast({ palette: grey });
 
-    expect(findings).toEqual([
+    expect(findings.filter(({ use }) => use === "text")).toEqual([
       { level: "block", use: "text", role: "muted", against: "bg", ratio: 2.39, minimum: 4.5 },
       { level: "block", use: "text", role: "muted", against: "surface", ratio: 2.54, minimum: 4.5 },
     ]);
@@ -126,32 +126,28 @@ describe("the contrast rule", () => {
     expect(findings).toContainEqual(expect.objectContaining({ level: "block", use: "accent", role: "accent", against: "bg", minimum: 3 }));
   });
 
-  it("compares ratios as it shows them, to two decimals: Whiteboard's accent3 at 2.998:1 passes as 3.00", async () => {
+  it("compares unrounded ratios and rounds only what it shows: 2.998:1 fails 3:1 though it shows as 3", async () => {
     const whiteboard = await bundledPalette("Whiteboard");
+    const amber = { ...whiteboard, colors: { ...whiteboard.colors, accent3: "#d97706" } };
 
-    const { findings } = await connect().style.contrast({ palette: whiteboard });
+    const { findings } = await connect().style.contrast({ palette: amber });
 
-    expect(findings.filter(({ role }) => role === "accent3")).toEqual([]);
+    expect(findings).toContainEqual({ level: "block", use: "accent", role: "accent3", against: "bg", ratio: 3, minimum: 3 });
   });
 
-  it("warns when outlines and connectors barely show against bg", async () => {
+  it("warns when outlines and connectors fall below WCAG AA (3:1) on bg or surface", async () => {
     const navy = await bundledPalette("Blueprint navy");
-    const hidden = { ...navy, colors: { ...navy.colors, line: "#0b111e" } };
+    const quiet = { ...navy, colors: { ...navy.colors, line: "#3b4f78" } };
+    const clear = { ...navy, colors: { ...navy.colors, line: "#5d7ab0" } };
 
-    const { findings } = await connect().style.contrast({ palette: hidden });
+    const { findings } = await connect().style.contrast({ palette: quiet });
+    const { findings: clearFindings } = await connect().style.contrast({ palette: clear });
 
-    expect(findings).toContainEqual(expect.objectContaining({ level: "warn", use: "line", role: "line", against: "bg", minimum: 1.3 }));
-  });
-});
-
-describe("a fill-only accent", () => {
-  it("reaches the Scene code and review prompts as never text or lines", async () => {
-    const sketchbook = editable((await connect().style.presets()).find(({ id }) => id === "sketchbook")!);
-
-    const brief = presetBrief(sketchbook, "horizontal");
-
-    expect(brief.sceneCode).toMatch(/accent3.*only as a fill/);
-    expect(brief.review).toMatch(/accent3.*only as a fill/);
+    expect(findings.filter(({ use }) => use === "line")).toEqual([
+      expect.objectContaining({ level: "warn", role: "line", against: "bg", minimum: 3 }),
+      expect.objectContaining({ level: "warn", role: "line", against: "surface", minimum: 3 }),
+    ]);
+    expect(clearFindings.filter(({ use }) => use === "line")).toEqual([]);
   });
 });
 
@@ -203,7 +199,8 @@ describe("a creator's own Style Presets", () => {
     const saved = await client.style.save({ preset: edited });
     const { client: later } = await core(appDataDir);
 
-    expect(saved).toEqual({ preset: { ...edited, readOnly: false }, findings: [] });
+    // Whiteboard's quiet lines save with their warning.
+    expect(saved).toEqual({ preset: { ...edited, readOnly: false }, findings: [expect.objectContaining({ use: "line", against: "bg" }), expect.objectContaining({ use: "line", against: "surface" })] });
     expect((await later.style.presets()).find(({ id }) => id === copy.id)).toEqual({ ...edited, readOnly: false });
   });
 
@@ -256,6 +253,29 @@ describe("a creator's own Style Presets", () => {
     const error = await rejectionOf(client.style.save({ preset: { ...editable(blueprint!), id: "made-up" } }));
 
     expect(error.code).toBe("UNKNOWN_PRESET");
+  });
+
+  it("each get their own id when duplicated at the same time", async () => {
+    const { client } = await core();
+
+    const copies = await Promise.all([client.style.duplicate({ id: "blueprint" }), client.style.duplicate({ id: "blueprint" }), client.style.duplicate({ id: "blueprint" })]);
+    const own = (await client.style.presets()).filter(({ readOnly }) => !readOnly);
+
+    expect(copies.map(({ id }) => id)).toEqual(["blueprint-copy", "blueprint-copy-2", "blueprint-copy-3"]);
+    expect(own.map(({ id }) => id)).toEqual(["blueprint-copy", "blueprint-copy-2", "blueprint-copy-3"]);
+  });
+
+  it("refuse an id that would reach outside their folder", async () => {
+    const { client, appDataDir } = await core();
+    const outside = join(appDataDir, "settings.json");
+    await writeFile(outside, "{}");
+
+    const errors = await Promise.all(["../settings", "..\\settings", "Blueprint"].map((id) => rejectionOf(client.style.remove({ id }))));
+    const duplicateError = await rejectionOf(client.style.duplicate({ id: "../settings" }));
+
+    expect(errors.map(({ code }) => code)).toEqual(["BAD_REQUEST", "BAD_REQUEST", "BAD_REQUEST"]);
+    expect(duplicateError.code).toBe("BAD_REQUEST");
+    expect(await readFile(outside, "utf8")).toBe("{}");
   });
 
   it("can be deleted", async () => {

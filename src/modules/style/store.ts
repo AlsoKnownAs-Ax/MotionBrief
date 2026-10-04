@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { z } from "zod";
-import { FontFamilySchema, StylePresetSchema, type BundledFont, type ContrastFinding, type FontFamily, type ListedPreset, type StylePreset } from "../../contract";
+import { FontFamilySchema, StylePresetIdSchema, StylePresetSchema, type BundledFont, type ContrastFinding, type FontFamily, type ListedPreset, type StylePreset } from "../../contract";
 import { bundledWeights } from "../frame";
 import { checkContrast } from "./contrast";
 import { listPresets } from "./presets";
@@ -42,6 +42,19 @@ export function createPresetStore({ dir }: { dir: string }) {
 
   async function get(id: string): Promise<ListedPreset | undefined> {
     return (await list()).find((preset) => preset.id === id);
+  }
+
+  /** Duplicate, save and delete run one at a time, so two copies never pick the same free id. */
+  let mutations: Promise<unknown> = Promise.resolve();
+
+  function serialized<A extends unknown[], T>(step: (...args: A) => Promise<T>) {
+    return (...args: A): Promise<T> => {
+      const run = mutations.then(() => step(...args));
+
+      mutations = run.catch(() => undefined);
+
+      return run;
+    };
   }
 
   async function duplicate(id: string): Promise<Result<ListedPreset, PresetStoreError>> {
@@ -103,6 +116,11 @@ export function createPresetStore({ dir }: { dir: string }) {
     }
 
     const path = pathOf(id);
+
+    if (!path) {
+      return { data: null, error: { code: "UNKNOWN_PRESET", id } };
+    }
+
     const { error } = await fileStep(path, () => rm(path, { force: true }));
 
     if (error) {
@@ -119,8 +137,10 @@ export function createPresetStore({ dir }: { dir: string }) {
     return files.filter((file) => file !== undefined).sort((a, b) => a.createdAt - b.createdAt);
   }
 
-  function readOne(id: string): Promise<PresetFile | undefined> {
-    return readFileAt(pathOf(id));
+  async function readOne(id: string): Promise<PresetFile | undefined> {
+    const path = pathOf(id);
+
+    return path ? readFileAt(path) : undefined;
   }
 
   /** A file that isn't a valid Preset is left alone and not listed. */
@@ -137,8 +157,12 @@ export function createPresetStore({ dir }: { dir: string }) {
   }
 
   /** Written in full beside its destination, then renamed into place, so a crash never leaves half a Preset. */
-  function write(file: PresetFile) {
+  async function write(file: PresetFile): Promise<Result<void, PresetStoreError>> {
     const path = pathOf(file.preset.id);
+
+    if (!path) {
+      return { data: null, error: { code: "UNKNOWN_PRESET", id: file.preset.id } };
+    }
 
     return fileStep(path, async () => {
       const staged = `${path}.${randomUUID()}.tmp`;
@@ -153,11 +177,14 @@ export function createPresetStore({ dir }: { dir: string }) {
     });
   }
 
-  function pathOf(id: string) {
-    return join(dir, `${id}.json`);
+  /** A Preset's file, or undefined for an id that isn't kebab-case or would land outside the Preset folder. */
+  function pathOf(id: string): string | undefined {
+    const path = resolve(dir, `${id}.json`);
+
+    return StylePresetIdSchema.safeParse(id).success && dirname(path) === resolve(dir) ? path : undefined;
   }
 
-  return { list, get, duplicate, save, remove };
+  return { list, get, duplicate: serialized(duplicate), save: serialized(save), remove: serialized(remove) };
 }
 
 /** The frame's families with the weights it ships. */
