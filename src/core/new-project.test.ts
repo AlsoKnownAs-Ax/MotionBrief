@@ -438,5 +438,15 @@ describe("new Project", { timeout: 30_000 }, () => {
       await transcribed(core, (await create(core, { voiceoverPath: source })).id);
       expect(whisper.runs).toHaveLength(4);
     });
+
+    it("leaves preview pages, which keep themselves to the newest few, out of its size and Clear cache", async () => {
+      const core = connect({ whisper: await twoChunks() });
+      const page = join(cacheDir, "preview", "page", "index.html");
+      await mkdir(join(page, ".."), { recursive: true });
+      await writeFile(page, "<!doctype html>");
+
+      expect(await core.cache.clear()).toMatchObject({ usedBytes: 0 });
+      expect(await readFile(page, "utf8")).toBe("<!doctype html>");
+    });
   });
 });

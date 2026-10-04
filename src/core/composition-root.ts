@@ -50,6 +50,9 @@ export type CoreOptions = {
   sampleDir?: string;
 };
 
+/** The cache folder's subfolder of assembled preview pages. */
+const PREVIEW_DIR = "preview";
+
 /** The one place that picks implementations and wires the modules into the core API. */
 export function createCore({
   appVersion,
@@ -73,9 +76,9 @@ export function createCore({
   const checker = createChecker({ chromePath });
   const transcriptionModel = createTranscriptionModel({ appDataDir, pin: modelPin, disk });
   const media = createMedia({ ffmpegPath: ffmpegPath(), ffprobePath: ffprobePath() });
-  const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes });
-  // Assembled pages are a cache: any of them can be built again from its source.
-  const previews = createPreviews({ rootDir: join(appDataDir, "cache", "preview"), chromePath });
+  // Assembled pages are folders that keep themselves to the newest few, so the cache's per-file LRU leaves them alone.
+  const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR] });
+  const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;

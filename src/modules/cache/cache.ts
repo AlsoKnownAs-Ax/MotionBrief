@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, rename, rm, stat, utimes } from "node:fs/promises";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import type { CacheStatus } from "../../contract";
 
 export type Result<T, E> = { data: T; error: null } | { data: null; error: E };
@@ -11,6 +11,8 @@ export type CacheOptions = {
   /** The app's cache folder, outside any Project. */
   dir: string;
   capBytes: number;
+  /** Subfolders another module keeps in the cache folder and manages itself (preview pages): never counted or evicted. */
+  unmanaged?: string[];
 };
 
 export type Cache = ReturnType<typeof createCache>;
@@ -28,7 +30,9 @@ type Entry = { key: string; path: string; bytes: number; usedAt: number };
  * every Project shares them. Least recently used entries are evicted to stay under the cap. Keys are relative paths
  * such as `audio/<sha256>.wav`.
  */
-export function createCache({ dir, capBytes }: CacheOptions) {
+export function createCache({ dir, capBytes, unmanaged = [] }: CacheOptions) {
+  const skipped = [STAGING, ...unmanaged];
+
   /** Entries in use, by how many users: eviction and Clear cache leave them alone. */
   const held = new Map<string, number>();
 
@@ -132,7 +136,7 @@ export function createCache({ dir, capBytes }: CacheOptions) {
     const files = (found ?? [])
       .filter((entry) => entry.isFile())
       .map((entry) => join(entry.parentPath, entry.name))
-      .filter((path) => !relative(dir, path).startsWith(STAGING));
+      .filter((path) => !skipped.includes(relative(dir, path).split(sep)[0] ?? ""));
     const entries = await Promise.all(files.map(entryAt));
 
     return entries.filter((entry) => entry !== undefined);

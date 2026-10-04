@@ -1,11 +1,13 @@
+import { useQuery } from "@tanstack/react-query";
 import { FileAudioIcon, FileVideoIcon, TriangleAlertIcon } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Input } from "@renderer/components/ui/input";
+import { orpc } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
-import type { Format, Project, TranscriptionStatus } from "../../../contract";
+import type { Format, ListedPreset, Project, TranscriptionStatus } from "../../../contract";
 import { clockLabel, FORMAT_OPTIONS, LANGUAGES, languageName, sizeLabel } from "./labels";
-import { BUNDLED_PRESETS, type PresetChoice } from "./presets";
+import { presetBlurb } from "./presets";
 
 export type ProjectChanges = { name?: string; format?: Format; stylePreset?: string; language?: string };
 
@@ -25,7 +27,7 @@ export function ProjectForm({ project, transcription, onChange }: ProjectFormPro
       <Field label="Format" help="You can add the other Format later, from the same Transcript.">
         <FormatChoice value={project.format} onChange={(format) => void onChange({ format })} />
       </Field>
-      <Field label="Style Preset" help={`${blurbOf(project.stylePreset)}. Palette and typography can change later without the agent.`}>
+      <Field label="Style Preset" help={`${presetBlurb(project.stylePreset)}. Palette and typography can change later without the agent.`}>
         <PresetChoices value={project.stylePreset} onChange={(stylePreset) => void onChange({ stylePreset })} />
       </Field>
       <LanguageField project={project} transcription={transcription} onChange={(language) => void onChange({ language })} />
@@ -159,10 +161,13 @@ function FormatChoice({ value, onChange }: { value: Format; onChange: (format: F
   );
 }
 
+/** The core's Style Presets, Blueprint first. */
 function PresetChoices({ value, onChange }: { value: string; onChange: (stylePreset: string) => void }) {
+  const { data: presets = [] } = useQuery(orpc.style.presets.queryOptions());
+
   return (
     <RadioGroup.Root aria-label="Style Preset" value={value} onValueChange={onChange} className="grid grid-cols-2 gap-2">
-      {BUNDLED_PRESETS.map((preset) => (
+      {presets.map((preset) => (
         <RadioGroup.Item
           key={preset.id}
           value={preset.id}
@@ -177,7 +182,9 @@ function PresetChoices({ value, onChange }: { value: string; onChange: (stylePre
 }
 
 /** A small drawing in the Preset's Palette: two boxes joined by a connector, on its background. */
-function PresetArt({ preset: { colors } }: { preset: PresetChoice }) {
+function PresetArt({ preset }: { preset: ListedPreset }) {
+  const { colors } = preset.palette;
+
   return (
     <svg aria-hidden="true" viewBox="0 0 160 72" className="aspect-[16/7] w-full rounded-md">
       <rect width="160" height="72" fill={colors.bg} />
@@ -233,8 +240,4 @@ function detectedLabel(project: Project, transcription?: TranscriptionStatus) {
   }
 
   return `Detected ${languageName(transcription.language)}. `;
-}
-
-function blurbOf(id: string) {
-  return BUNDLED_PRESETS.find((preset) => preset.id === id)?.blurb ?? "Your own Style Preset";
 }
