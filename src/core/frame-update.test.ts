@@ -213,6 +213,36 @@ describe("opening a Project recorded against an older frame major", { timeout: T
     expect(Object.keys(saved.units)).toEqual(["s01", "s02", "s03", "s04"]);
     expect(saved.flags.map(({ unit }) => unit)).toEqual(["s05"]);
   });
+
+  it("re-opened, streams no finished run's preview over the newest Version's", async () => {
+    await setup.core.project.close({ projectId: video.projectId });
+    const again = await openVideo(setup.core, path);
+    let first: GenerationStatus | undefined;
+
+    for await (const status of await setup.core.video.generation(again.video)) {
+      first = status;
+      break;
+    }
+
+    expect(again.opened.version).toBe(3);
+    expect(sceneStatuses(again.opened).s03).toBe("ready");
+    expect(first).toMatchObject({ state: "idle" });
+    expect(first?.preview).toBeUndefined();
+  });
+});
+
+describe("opening a video twice at once after a frame major update", { timeout: TIMEOUT_MS }, () => {
+  it("re-checks it once and saves one Version", async () => {
+    const { core, dir } = await connect();
+    const path = await fixtureProject(core, dir, OLDER_MAJOR, { s03: "raw-color" });
+    const { project } = await core.project.open({ path });
+    const video = { projectId: project.id, format: "horizontal" as const };
+    const opens = await Promise.all([core.video.open(video), core.video.open(video)]);
+
+    expect(opens.map(({ version }) => version)).toEqual([2, 2]);
+    expect(opens.filter(({ frameUpdate }) => frameUpdate !== undefined)).toHaveLength(1);
+    expect(await readdir(join(path, "horizontal", "versions"))).toEqual(["1.json", "2.json"]);
+  });
 });
 
 describe("opening a Project whose units pass the new frame major", { timeout: TIMEOUT_MS }, () => {

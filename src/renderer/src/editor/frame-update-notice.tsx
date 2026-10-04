@@ -27,25 +27,38 @@ export function FrameUpdateNotice() {
   }
 
   const units = [...new Set(scenes.map((scene) => scene.unit))];
-  const scenesLabel = count === 1 ? "1 Scene" : `${count} Scenes`;
 
   return (
     <div role="status" className="flex min-h-9 shrink-0 items-center gap-3 border-b border-hairline-soft bg-status-flagged-tint px-4 py-1.5 text-app-sm">
       <TriangleAlertIcon aria-hidden="true" className="size-4 shrink-0 text-status-flagged" />
       <p className="min-w-0 flex-1">
         <span>This version of MotionBrief updated the Scene frame.</span>{" "}
-        <span className="text-ink-muted">
-          {count === 1 ? "1 Scene no longer passes its checks, so it plays as a fallback until you retry." : `${count} Scenes no longer pass its checks, so they play as fallbacks until you retry.`}
-        </span>
-        {retryError && <span className="text-status-fallback-ink"> {retryError}</span>}
+        <span className="text-ink-muted">{failingMessage(count)}</span>
+        {retryError ? <span className="text-status-fallback-ink"> {retryError}</span> : null}
       </p>
       <Button size="sm" onClick={() => void retry(units)}>
         <RotateCcwIcon aria-hidden="true" />
-        Retry {scenesLabel}
+        Retry {scenesLabel(count)}
       </Button>
       <Button variant="ghost" size="icon-sm" aria-label="Dismiss" title="Dismiss" onClick={dismiss}>
         <XIcon />
       </Button>
     </div>
   );
+}
+
+function scenesLabel(count: number) {
+  if (count === 1) {
+    return "1 Scene";
+  }
+
+  return `${count} Scenes`;
+}
+
+function failingMessage(count: number) {
+  if (count === 1) {
+    return "1 Scene no longer passes its checks, so it plays as a fallback until you retry.";
+  }
+
+  return `${count} Scenes no longer pass its checks, so they play as fallbacks until you retry.`;
 }

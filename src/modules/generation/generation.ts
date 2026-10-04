@@ -32,7 +32,7 @@ import {
 import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
 import type { Clock } from "../system";
-import { writeStoryboard, writeUnitCode } from "./agents";
+import { writeStoryboard, writeUnitCode, type UnitOutcome } from "./agents";
 import { failingUnits, needsRecheck } from "./frame-update";
 
 /** The model each agent role runs on until Settings choose others (Storyboard and Scene code: Opus). */
@@ -81,6 +81,8 @@ const IDLE: GenerationStatus = { state: "idle", units: [] };
 export function createGeneration({ connector, checker, previews, projects, clock, workDir, models = DEFAULT_MODELS }: GenerationOptions) {
   const videos = new Map<string, ReturnType<typeof createStatusStore<GenerationStatus>>>();
   const running = new Set<string>();
+  /** The last open or Retry start queued on each video. */
+  const steps = new Map<string, Promise<unknown>>();
 
   function storeOf({ projectId, format }: VideoRef) {
     const key = `${projectId} ${format}`;
@@ -285,20 +287,13 @@ export function createGeneration({ connector, checker, previews, projects, clock
    * with no agent: those that fail become flagged fallbacks in a new Version, and none is regenerated.
    */
   async function open(ref: VideoRef): Promise<Result<OpenedVideo, OpenVideoError>> {
-    const { data: saved, error } = await savedVideo(ref);
+    const { data: checked, error } = await exclusive(storeOf(ref).key, () => openChecked(ref));
 
     if (error) {
       return { data: null, error };
     }
 
-    const { transcript, voiceoverPath, stored } = saved;
-    const { data: checked, error: checkError } = await recheck(ref, transcript, stored);
-
-    if (checkError) {
-      return { data: null, error: checkError };
-    }
-
-    const { version, code, frameUpdate } = checked;
+    const { transcript, voiceoverPath, version, code, frameUpdate } = checked;
     const rules = storyboardRules(version.preset, { format: ref.format, captions: version.captions });
     const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, voiceover: voiceoverPath };
     const { data: preview, error: previewError } = await previews.open(source);
@@ -308,6 +303,47 @@ export function createGeneration({ connector, checker, previews, projects, clock
     }
 
     return { data: { version: version.version, preview, frameUpdate }, error: null };
+  }
+
+  /**
+   * The newest Version, read and re-checked one open at a time per video, so two opens can't both re-check it and
+   * each save a Version. A finished generation's status is reset, so the window following it gets this Version's
+   * preview instead of the generation's last one; a Retry still running keeps streaming.
+   */
+  async function openChecked(ref: VideoRef): Promise<Result<SavedVideo & Rechecked, OpenVideoError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: checked, error: checkError } = await recheck(ref, saved.transcript, saved.stored);
+
+    if (checkError) {
+      return { data: null, error: checkError };
+    }
+
+    const { key, store } = storeOf(ref);
+
+    if (!running.has(key)) {
+      store.set(IDLE);
+    }
+
+    return { data: { ...saved, ...checked }, error: null };
+  }
+
+  /** Runs one open or Retry start of a video at a time, each after the one before. */
+  function exclusive<T>(key: string, step: () => Promise<T>): Promise<T> {
+    const done = (steps.get(key) ?? Promise.resolve()).then(step);
+    const settled = done.catch(() => undefined);
+    steps.set(key, settled);
+    void settled.then(() => {
+      if (steps.get(key) === settled) {
+        steps.delete(key);
+      }
+    });
+
+    return done;
   }
 
   /** The video's newest Version with what it plays from; one with no Version yet has no video. */
@@ -357,7 +393,11 @@ export function createGeneration({ connector, checker, previews, projects, clock
     if (failing.size === 0) {
       const { error: rememberError } = await projects.rememberFrameCheck(projectId, format, { version: version.version, frameContractVersion: FRAME_CONTRACT_VERSION });
 
-      return rememberError ? { data: null, error: versionError(rememberError) } : { data: { version, code }, error: null };
+      if (rememberError) {
+        return { data: null, error: versionError(rememberError) };
+      }
+
+      return { data: { version, code }, error: null };
     }
 
     const kept = Object.fromEntries(Object.entries(version.units).filter(([unit]) => !failing.has(unit)));
@@ -384,7 +424,12 @@ export function createGeneration({ connector, checker, previews, projects, clock
    * Regenerates flagged units of the newest Version with the Scene-code model, each checked and retried as in a first
    * generation, and saves the outcome as a new Version. Progress streams through `watch`.
    */
-  async function retry(ref: VideoRef, units: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+  function retry(ref: VideoRef, units: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+    // In turn with opens, so a re-check never saves a Version under a Retry starting from the one before it.
+    return exclusive(storeOf(ref).key, () => startRetry(ref, units));
+  }
+
+  async function startRetry(ref: VideoRef, units: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
     const { data: saved, error } = await savedVideo(ref);
 
     if (error) {
@@ -436,7 +481,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
       models: { ...version.models, sceneCode: models.sceneCode },
     };
     const code = { ...stored.code };
-    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retrying.has(id) ? "queued" : code[id] ? "ready" : "fallback", attempts: 0 }]));
+    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retryStatus(id, retrying, code), attempts: 0 }]));
     const publish = publisher({ ref, storyboard, transcript, rules, preset, code, progress, store });
     const failed = (fileError: FileFailure) => publish({ state: "failed", error: { code: "FILE_FAILED", path: fileError.path, message: fileError.message } });
 
@@ -474,7 +519,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
           content.flags.push(flagOf(unit, outcome.reason));
         }
 
-        await publish({}, { id: unit.id, status: outcome.code ? "ready" : "fallback", attempts: outcome.attempts });
+        await publish({}, { id: unit.id, status: outcomeStatus(outcome), attempts: outcome.attempts });
 
         return undefined;
       },
@@ -512,6 +557,27 @@ export type OpenVideoError =
   | PreviewError;
 
 export type RetryError = { code: "GENERATING"; projectId: string } | { code: "NOT_FLAGGED"; unit: string };
+
+/** How a unit starts a Retry: waiting to be rewritten, playing its code, or still a fallback Scene. */
+function retryStatus(id: string, retrying: Set<string>, code: Record<string, UnitCode>): GenerationUnit["status"] {
+  if (retrying.has(id)) {
+    return "queued";
+  }
+
+  if (code[id]) {
+    return "ready";
+  }
+
+  return "fallback";
+}
+
+function outcomeStatus(outcome: UnitOutcome): GenerationUnit["status"] {
+  if (outcome.code) {
+    return "ready";
+  }
+
+  return "fallback";
+}
 
 /** What a Version plays and how it was made, without what makes it a Version. */
 function contentOf({ storyboard, preset, captions, units, flags, models, frameContractVersion }: Version): VideoContent {
