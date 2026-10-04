@@ -14,6 +14,7 @@ import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
 import { useNavigation } from "@renderer/navigation";
 import { UsageControl } from "@renderer/usage/usage-control";
+import type { Format, VideoRef } from "../../../contract";
 
 /** The editor's part of the title bar: back to Home, the Project's name, the video's Format and its generation. */
 export function EditorToolbar() {
@@ -43,10 +44,10 @@ export function EditorToolbar() {
 /** The editor's actions on the right of the title bar: the open video's usage, then Export MP4. */
 export function EditorActions() {
   const followed = useGeneration((state) => state.video);
-  const projectId = useOpenVideo((state) => (state.isStored ? state.projectId : undefined));
+  const isStored = useOpenVideo((state) => state.isStored);
+  const projectId = useOpenVideo((state) => state.projectId);
   const format = useOpenVideo((state) => state.preview?.timeline.format);
-  // The fixture Project isn't open in the Project store, so it has no usage of its own.
-  const video = followed ?? (projectId && format ? { projectId, format } : undefined);
+  const video = followed ?? storedVideo(isStored, projectId, format);
 
   return (
     <>
@@ -54,6 +55,15 @@ export function EditorActions() {
       <ExportControl />
     </>
   );
+}
+
+/** The open video, once its Format is known; the fixture Project isn't open in the Project store, so it has no usage. */
+function storedVideo(isStored: boolean, projectId: string, format: Format | undefined): VideoRef | undefined {
+  if (!isStored || !format) {
+    return undefined;
+  }
+
+  return { projectId, format };
 }
 
 /** The generation's progress while it runs, and its failure. The Scenes carry their own badges. */

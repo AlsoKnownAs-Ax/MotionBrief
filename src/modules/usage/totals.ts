@@ -38,11 +38,29 @@ export function usedSince(now: ModelUsage, before: ModelUsage | undefined): Tota
   };
 }
 
+/** The highest of each counter a session has reported, so a report that went down doesn't count again what it lost. */
+export function highWater(now: ModelUsage, before: ModelUsage | undefined): ModelUsage {
+  const highest = (key: keyof Totals) => Math.max(now[key], before?.[key] ?? 0);
+
+  return {
+    model: now.model,
+    inputTokens: highest("inputTokens"),
+    outputTokens: highest("outputTokens"),
+    cacheReadTokens: highest("cacheReadTokens"),
+    cacheWriteTokens: highest("cacheWriteTokens"),
+    costUsd: highest("costUsd"),
+  };
+}
+
 /** The totals as the creator sees them: without dollars on a subscription. */
 export function shown(totals: Totals, withCost: boolean): UsageTotals {
   const { costUsd, ...tokens } = totals;
 
-  return withCost ? { ...tokens, costUsd } : tokens;
+  if (!withCost) {
+    return tokens;
+  }
+
+  return { ...tokens, costUsd };
 }
 
 export function cents(dollars: number): number {

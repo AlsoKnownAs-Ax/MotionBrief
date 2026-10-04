@@ -4,7 +4,7 @@ import { createStatusStore, type Projects } from "../projects";
 import type { SettingsStore } from "../settings";
 import type { Clock } from "../system";
 import { createLedger } from "./ledger";
-import { addTotals, cents, EMPTY, shown, usedSince, type Totals } from "./totals";
+import { addTotals, cents, EMPTY, highWater, shown, usedSince, type Totals } from "./totals";
 
 /** What a first generation costs per Voiceover minute before any has finished here: $3-5 in the spike (#7). */
 const SEED_COST_PER_MINUTE = 4;
@@ -86,9 +86,10 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
     const inFlight = new Set<Session>();
     // The connection the run started on decides whether it is billed, even if the creator changes it meanwhile.
     const isBilled = connectionMethod().then(async (connectedWith) => {
-      run.capUsd = connectedWith === "api-key" ? (await settings.get()).costCapUsd : undefined;
+      const billed = connectedWith === "api-key";
+      run.capUsd = await capOf(billed);
 
-      return connectedWith === "api-key";
+      return billed;
     });
     runs.set(key, run);
     changed();
@@ -100,9 +101,9 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
      */
     async function record(role: ModelRole, model: string, used: Totals): Promise<boolean> {
       const billed = await isBilled;
-      const capUsd = billed ? (await settings.get()).costCapUsd : undefined;
+      const capUsd = await capOf(billed);
       // Nothing awaits from here to the cap check, so parallel agents' reports are counted one at a time.
-      const counted = billed ? used : { ...used, costUsd: 0 };
+      const counted = billedOnly(used, billed);
       const before = run.roles.get(role)?.totals ?? EMPTY;
       run.roles.set(role, { model, totals: addTotals(before, counted) });
       run.total = addTotals(run.total, counted);
@@ -116,7 +117,7 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
 
       const isUnderCap = run.state !== "capped";
       changed();
-      await Promise.all([ledger.addToDay(today(), counted), addToVideo(ref, billed ? counted : withoutCost(counted))]);
+      await Promise.all([ledger.addToDay(today(), counted), addToVideo(ref, shown(counted, billed))]);
       changed();
 
       return isUnderCap;
@@ -131,7 +132,8 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
 
     /**
      * A turn whose usage didn't arrive before the cap was reached ends as stopped by the cap: Stop's rule that only
-     * finished work is kept. Session usage is cumulative, so each report counts what was used since the one before.
+     * finished work is kept. Session usage is cumulative, so each report counts what was used past the highest one
+     * before it; a report that went down (a crashed run reports zeros) counts nothing and leaves the mark where it was.
      */
     async function* meteredTurn(session: Session, message: string, role: ModelRole, model: string, reported: Map<string, ModelUsage>): AsyncGenerator<AgentEvent> {
       if (isCapped()) {
@@ -148,8 +150,9 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
             isCounted = !isCapped();
 
             for (const used of event.usage) {
-              const since = usedSince(used, reported.get(used.model));
-              reported.set(used.model, used);
+              const before = reported.get(used.model);
+              const since = usedSince(used, before);
+              reported.set(used.model, highWater(used, before));
               isCounted = (await record(role, model, since)) && isCounted;
             }
           }
@@ -226,7 +229,11 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
     changed();
   }
 
-  async function storedVideoTotals(ref: VideoRef): Promise<Totals | undefined> {
+  async function storedVideoTotals(ref: VideoRef | undefined): Promise<Totals | undefined> {
+    if (!ref) {
+      return undefined;
+    }
+
     const key = videoKey(ref);
     const known = videoTotals.get(key);
 
@@ -249,22 +256,41 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
   async function status(ref: VideoRef | undefined): Promise<UsageStatus> {
     // Dollars only where they are billed: on an API key.
     const withCost = method === "api-key";
-    const run = ref ? runs.get(videoKey(ref)) : undefined;
-    const video = ref ? await storedVideoTotals(ref) : undefined;
-    const plan = method === "subscription" ? currentWindows(await ledger.plan()) : [];
+    const video = await storedVideoTotals(ref);
 
     return {
       method,
-      run: run && {
-        state: run.state,
-        roles: [...run.roles].map(([role, { model, totals }]): RoleUsage => ({ role, model, ...shown(totals, withCost) })),
-        total: shown(run.total, withCost),
-        ...(withCost && run.capUsd !== undefined ? { capUsd: run.capUsd } : {}),
-      },
+      run: runStatus(runOf(ref), withCost),
       video: video && shown(video, withCost),
       today: shown(await ledger.day(today()), withCost),
-      plan,
+      plan: await planWindows(),
     };
+  }
+
+  function runOf(ref: VideoRef | undefined) {
+    if (!ref) {
+      return undefined;
+    }
+
+    return runs.get(videoKey(ref));
+  }
+
+  /** Subscription only: the plan's windows that haven't reset since they were reported. */
+  async function planWindows() {
+    if (method !== "subscription") {
+      return [];
+    }
+
+    return currentWindows(await ledger.plan());
+  }
+
+  /** A billed run stops at the creator's cap; nothing else has one. */
+  async function capOf(billed: boolean) {
+    if (!billed) {
+      return undefined;
+    }
+
+    return (await settings.get()).costCapUsd;
   }
 
   /** Streams the usage of a video's runs (the video of an open Project), today's and the plan's, now and after every change. */
@@ -272,8 +298,9 @@ export function createUsage({ connector, settings, projects, clock, appDataDir }
     if (ref) {
       const { error } = await projects.video(ref.projectId, ref.format);
 
+      // Only an open Project's video can be watched, whatever kept it from being read.
       if (error) {
-        return { data: null, error: error.code === "UNKNOWN_PROJECT" ? error : { code: "UNKNOWN_PROJECT", projectId: ref.projectId } };
+        return { data: null, error: { code: "UNKNOWN_PROJECT", projectId: ref.projectId } };
       }
     }
 
@@ -309,6 +336,29 @@ function videoKey({ projectId, format }: VideoRef) {
   return `${projectId} ${format}`;
 }
 
-function withoutCost(totals: Totals) {
-  return shown(totals, false);
+function runStatus(run: RunState | undefined, withCost: boolean): UsageStatus["run"] {
+  if (!run) {
+    return undefined;
+  }
+
+  const status = {
+    state: run.state,
+    roles: [...run.roles].map(([role, { model, totals }]): RoleUsage => ({ role, model, ...shown(totals, withCost) })),
+    total: shown(run.total, withCost),
+  };
+
+  if (!withCost || run.capUsd === undefined) {
+    return status;
+  }
+
+  return { ...status, capUsd: run.capUsd };
+}
+
+/** A subscription isn't billed per run, so its runs count tokens and no dollars. */
+function billedOnly(used: Totals, billed: boolean): Totals {
+  if (billed) {
+    return used;
+  }
+
+  return { ...used, costUsd: 0 };
 }

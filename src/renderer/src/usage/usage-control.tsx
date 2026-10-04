@@ -6,8 +6,8 @@ import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { Progress } from "@renderer/components/ui/progress";
 import { orpc } from "@renderer/core/connection";
-import type { PlanWindow, UsageStatus, VideoRef } from "../../../contract";
-import { dollars, modelLabel, percent, resetsLabel, ROLE_LABELS, ROLES, tokensLabel, totalsLabel, WINDOW_LABELS } from "./labels";
+import type { AuthMethod, PlanWindow, Settings, UsageStatus, UsageTotals, VideoRef } from "../../../contract";
+import { amountLabel, dollars, modelLabel, percent, resetsLabel, ROLE_LABELS, ROLES, totalsLabel, WINDOW_LABELS, windowUsedLabel } from "./labels";
 import { useUsage } from "./usage";
 
 /** A window this full is close to stopping runs. */
@@ -55,23 +55,81 @@ function Summary({ status }: { status: UsageStatus | undefined }) {
     return (
       <>
         <span className="text-app-xs text-ink-muted">5-hour window</span>
-        <Progress value={used} status={used >= NEARLY_FULL ? "flagged" : "neutral"} className="w-14" aria-label="5-hour window used" />
+        <Progress value={used} status={windowStatus(used)} className="w-14" aria-label="5-hour window used" />
         <span className="tabular-nums">{used}%</span>
       </>
     );
   }
 
-  const { run } = status;
-  const shown = run ?? (status.video ? { total: status.video } : { total: status.today });
-  const scope = run ? (run.state === "running" ? "this run" : "last run") : status.video ? "this video" : "today";
-  const cost = shown.total.costUsd;
+  const { totals, note } = summaryOf(status);
 
   return (
     <>
-      <span className="tabular-nums">{cost === undefined ? tokensLabel(shown.total) : dollars(cost)}</span>
-      <span className="text-app-xs text-ink-muted tabular-nums">{run?.capUsd !== undefined ? `of ${dollars(run.capUsd)} cap` : scope}</span>
+      <span className="tabular-nums">{amountLabel(totals)}</span>
+      <span className="text-app-xs text-ink-muted tabular-nums">{note}</span>
     </>
   );
+}
+
+/** A window this full shows amber. */
+function windowStatus(used: number) {
+  if (used >= NEARLY_FULL) {
+    return "flagged";
+  }
+
+  return "neutral";
+}
+
+/** The most current usage there is: the video's run, else the video's totals, else today's; and what it is out of. */
+function summaryOf({ run, video, today }: UsageStatus): { totals: UsageTotals; note: string } {
+  if (run?.capUsd !== undefined) {
+    return { totals: run.total, note: `of ${dollars(run.capUsd)} cap` };
+  }
+
+  if (run) {
+    return { totals: run.total, note: RUN_SCOPES[run.state] };
+  }
+
+  if (video) {
+    return { totals: video, note: "this video" };
+  }
+
+  return { totals: today, note: "today" };
+}
+
+const RUN_SCOPES = {
+  running: "this run",
+  finished: "last run",
+  capped: "last run",
+} satisfies Record<NonNullable<UsageStatus["run"]>["state"], string>;
+
+const CONNECTION_TITLES = {
+  subscription: "Claude subscription",
+  "api-key": "Anthropic API key",
+} satisfies Record<AuthMethod, string>;
+
+function connectionTitle(method: AuthMethod | undefined) {
+  if (!method) {
+    return "Usage";
+  }
+
+  return CONNECTION_TITLES[method];
+}
+
+function approvalLabel(settings: Settings) {
+  if (!settings.approveCost) {
+    return "Off";
+  }
+
+  return "Before each first generation";
+}
+
+function capLabel(settings: Settings) {
+  if (settings.costCapUsd === undefined) {
+    return "None";
+  }
+
+  return `${dollars(settings.costCapUsd)} per run`;
 }
 
 function Details({ status }: { status: UsageStatus | undefined }) {
@@ -81,16 +139,16 @@ function Details({ status }: { status: UsageStatus | undefined }) {
 
   return (
     <div className="flex flex-col gap-3">
-      <h2 className="text-app-sm font-medium">{isSubscription ? "Claude subscription" : status?.method === "api-key" ? "Anthropic API key" : "Usage"}</h2>
+      <h2 className="text-app-sm font-medium">{connectionTitle(status?.method)}</h2>
       {status?.run ? <RunDetails run={status.run} /> : null}
       <dl className="flex flex-col">
         {status?.video ? <Line label="This video">{totalsLabel(status.video)}</Line> : null}
-        {status ? <Line label="Today">{totalsLabel(status.today)}</Line> : <Line label="Today">Checking.</Line>}
+        {status ? <Line label="Today">{totalsLabel(status.today)}</Line> : null}
         {isSubscription ? <PlanWindows windows={status.plan} /> : null}
         {status?.method === "api-key" && settings ? (
           <>
-            <Line label="Approval">{settings.approveCost ? "Before each first generation" : "Off"}</Line>
-            <Line label="Cap">{settings.costCapUsd === undefined ? "None" : `${dollars(settings.costCapUsd)} per run`}</Line>
+            <Line label="Approval">{approvalLabel(settings)}</Line>
+            <Line label="Cap">{capLabel(settings)}</Line>
           </>
         ) : null}
       </dl>
@@ -145,8 +203,7 @@ function PlanWindows({ windows }: { windows: PlanWindow[] }) {
   }
 
   return windows.map(({ window, utilization, resetsAt, isRejected }) => {
-    const used = percent(utilization);
-    const parts = [isRejected ? "Limit reached" : used === undefined ? undefined : `${used}% used`, resetsLabel(resetsAt)].filter(Boolean);
+    const parts = [windowUsedLabel(utilization, isRejected), resetsLabel(resetsAt)].filter(Boolean);
 
     return (
       <Line key={window} label={WINDOW_LABELS[window]}>

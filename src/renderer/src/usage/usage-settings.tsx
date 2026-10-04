@@ -98,10 +98,12 @@ export function CostSettings() {
 
 /** Dollars, saved on Enter or when it loses focus; empty removes the cap. */
 function CapInput({ id, settings, onSave }: { id: string; settings: Settings; onSave: (costCapUsd: number | null) => void }) {
-  const saved = settings.costCapUsd === undefined ? "" : settings.costCapUsd.toFixed(2);
+  const saved = settings.costCapUsd?.toFixed(2) ?? "";
   const [text, setText] = useState(saved);
   const amount = Number(text);
-  const isValid = text.trim() === "" || (Number.isFinite(amount) && amount > 0);
+  const isEmpty = text.trim() === "";
+  const isValid = isEmpty || (Number.isFinite(amount) && amount > 0);
+  const errorId = `${id}-error`;
 
   function save(event?: FormEvent) {
     event?.preventDefault();
@@ -110,7 +112,12 @@ function CapInput({ id, settings, onSave }: { id: string; settings: Settings; on
       return;
     }
 
-    onSave(text.trim() === "" ? null : amount);
+    if (isEmpty) {
+      onSave(null);
+      return;
+    }
+
+    onSave(amount);
   }
 
   return (
@@ -124,16 +131,16 @@ function CapInput({ id, settings, onSave }: { id: string; settings: Settings; on
         placeholder="No cap"
         value={text}
         aria-invalid={!isValid}
-        aria-describedby={isValid ? undefined : `${id}-error`}
+        aria-errormessage={errorId}
         onChange={(event) => setText(event.target.value)}
         onBlur={() => save()}
         className="h-control-sm w-24 text-app-sm tabular-nums"
       />
-      {isValid ? null : (
-        <span id={`${id}-error`} role="alert" className="text-app-xs text-status-fallback-ink">
+      {!isValid ? (
+        <span id={errorId} role="alert" className="text-app-xs text-status-fallback-ink">
           Use an amount above {dollars(0)}
         </span>
-      )}
+      ) : null}
     </form>
   );
 }

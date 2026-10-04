@@ -23,10 +23,9 @@ export function useUsage(video: VideoRef | undefined) {
     }
 
     const controller = new AbortController();
-    const watched = projectId && format ? { projectId, format } : undefined;
 
     void (async () => {
-      for await (const status of await core.usage.watch({ video: watched }, { signal: controller.signal })) {
+      for await (const status of await core.usage.watch({ video: watchedVideo(projectId, format) }, { signal: controller.signal })) {
         setHeard({ key, status });
       }
     })().catch(() => {
@@ -36,5 +35,17 @@ export function useUsage(video: VideoRef | undefined) {
     return () => controller.abort();
   }, [projectId, format, key, coreStatus]);
 
-  return heard?.key === key ? heard.status : undefined;
+  if (heard?.key !== key) {
+    return undefined;
+  }
+
+  return heard.status;
+}
+
+function watchedVideo(projectId: string | undefined, format: VideoRef["format"] | undefined): VideoRef | undefined {
+  if (!projectId || !format) {
+    return undefined;
+  }
+
+  return { projectId, format };
 }

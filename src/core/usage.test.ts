@@ -154,6 +154,34 @@ describe("usage on an API key", () => {
   });
 });
 
+describe("a session's usage reports", () => {
+  it(
+    "count each counter past its highest report, so one that went down doesn't count twice",
+    async () => {
+      // Claude reports running totals; a crashed run may report zeros before carrying on.
+      const reports = [used(OPUS, 100, 40, 0.1), used(OPUS, 0, 0, 0), used(OPUS, 150, 60, 0.15)];
+      const script = {
+        storyboard: [submitsStoryboard(storyboard)],
+        "scene-code s01": reports.map((report): AgentEvent[] => [usage(report), { type: "turn-completed", status: "completed", text: "Thinking about it." }]),
+      };
+      const { core, dir } = await connectCore({ root, script });
+      const project = await transcribedProject(core, dir);
+      const video: VideoRef = { projectId: project.id, format: "horizontal" };
+      const usageStream = await usageOf(core, video);
+
+      await core.video.generate({ ...video, approved: true });
+      const finished = await usageStream.until((status) => status.run?.state === "finished");
+      usageStream.stop();
+
+      expect(finished.run?.roles).toEqual([
+        { role: "sceneCode", model: OPUS, inputTokens: 150, outputTokens: 60, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: expect.closeTo(0.15) },
+      ]);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+});
+
 describe("the cost cap on an API key", () => {
   it(
     "stops the run once its parallel agents together reach it, as Stop does",

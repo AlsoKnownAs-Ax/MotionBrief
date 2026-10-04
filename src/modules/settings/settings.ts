@@ -53,7 +53,7 @@ export function createSettings({ appDataDir }: { appDataDir: string }) {
       const next: Settings = {
         models: { ...before.models, ...models },
         approveCost: approveCost ?? before.approveCost,
-        ...(costCapUsd === null ? {} : { costCapUsd: costCapUsd ?? before.costCapUsd }),
+        ...capOf(costCapUsd, before.costCapUsd),
       };
 
       try {
@@ -73,6 +73,21 @@ export function createSettings({ appDataDir }: { appDataDir: string }) {
   }
 
   return { get, update };
+}
+
+/** The cap after a change: `null` removes it, absent keeps the saved one. */
+function capOf(requested: number | null | undefined, saved: number | undefined): Pick<Settings, "costCapUsd"> {
+  if (requested === null) {
+    return {};
+  }
+
+  const costCapUsd = requested ?? saved;
+
+  if (costCapUsd === undefined) {
+    return {};
+  }
+
+  return { costCapUsd };
 }
 
 async function writeAtomically(path: string, content: string) {

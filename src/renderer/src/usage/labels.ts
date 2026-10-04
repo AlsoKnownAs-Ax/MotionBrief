@@ -39,7 +39,20 @@ export function tokensLabel({ inputTokens, outputTokens, cacheReadTokens, cacheW
 
 /** Tokens, with dollars where the connection reports them. */
 export function totalsLabel(totals: UsageTotals) {
-  return totals.costUsd === undefined ? tokensLabel(totals) : `${dollars(totals.costUsd)} · ${tokensLabel(totals)}`;
+  if (totals.costUsd === undefined) {
+    return tokensLabel(totals);
+  }
+
+  return `${dollars(totals.costUsd)} · ${tokensLabel(totals)}`;
+}
+
+/** Dollars where the connection reports them, tokens otherwise. */
+export function amountLabel(totals: UsageTotals) {
+  if (totals.costUsd === undefined) {
+    return tokensLabel(totals);
+  }
+
+  return dollars(totals.costUsd);
 }
 
 const TIME = new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -51,11 +64,32 @@ export function resetsLabel(resetsAt: number | undefined, now = Date.now()) {
     return undefined;
   }
 
-  const isToday = new Date(resetsAt).toDateString() === new Date(now).toDateString();
+  if (new Date(resetsAt).toDateString() === new Date(now).toDateString()) {
+    return `resets ${TIME.format(resetsAt)}`;
+  }
 
-  return `resets ${(isToday ? TIME : DAY_AND_TIME).format(resetsAt)}`;
+  return `resets ${DAY_AND_TIME.format(resetsAt)}`;
 }
 
 export function percent(utilization: number | undefined) {
-  return utilization === undefined ? undefined : Math.round(utilization * 100);
+  if (utilization === undefined) {
+    return undefined;
+  }
+
+  return Math.round(utilization * 100);
+}
+
+/** "34% used", or that the limit is reached. */
+export function windowUsedLabel(utilization: number | undefined, isRejected: boolean) {
+  if (isRejected) {
+    return "Limit reached";
+  }
+
+  const used = percent(utilization);
+
+  if (used === undefined) {
+    return undefined;
+  }
+
+  return `${used}% used`;
 }

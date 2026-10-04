@@ -932,16 +932,20 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   };
 }
 
+/** Adds a run's usage to the video's; dollars appear once a billed run added some. */
 function sumUsage(before: UsageTotals | undefined, used: UsageTotals): UsageTotals {
-  const cost = (before?.costUsd ?? 0) + (used.costUsd ?? 0);
-
-  return {
+  const tokens = {
     inputTokens: (before?.inputTokens ?? 0) + used.inputTokens,
     outputTokens: (before?.outputTokens ?? 0) + used.outputTokens,
     cacheReadTokens: (before?.cacheReadTokens ?? 0) + used.cacheReadTokens,
     cacheWriteTokens: (before?.cacheWriteTokens ?? 0) + used.cacheWriteTokens,
-    ...(before?.costUsd === undefined && used.costUsd === undefined ? {} : { costUsd: cost }),
   };
+
+  if (before?.costUsd === undefined && used.costUsd === undefined) {
+    return tokens;
+  }
+
+  return { ...tokens, costUsd: (before?.costUsd ?? 0) + (used.costUsd ?? 0) };
 }
 
 function lockedError(dir: string, { host, isThisComputer, isStale, lockedAt }: Lock): ProjectsError {
