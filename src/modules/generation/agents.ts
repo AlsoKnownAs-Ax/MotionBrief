@@ -33,6 +33,8 @@ export type AgentRun = {
   model: string;
   /** A folder of its own sessions can be given as their workspace. */
   workDir: string;
+  /** Stops the run: the agent's turn is interrupted and no further turn starts. */
+  signal?: AbortSignal;
 };
 
 export type StoryboardError = { code: "STORYBOARD_INVALID"; issues: StoryboardIssue[] } | { code: "AGENT_FAILED"; error: ConnectorError };
@@ -61,7 +63,7 @@ export async function writeStoryboard({ transcript, rules, brief, ...run }: Stor
 
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
       submitted = undefined;
-      const turnError = await runTurn(session, message);
+      const turnError = await runTurn(session, message, run.signal);
 
       if (turnError) {
         return { data: null, error: { code: "AGENT_FAILED", error: turnError } };
@@ -89,9 +91,9 @@ export async function writeStoryboard({ transcript, rules, brief, ...run }: Stor
 
 /**
  * How a unit ended: its passing Scene code, with the reviewer's note when its repair was reverted, or
- * why it plays as its fallback Scene.
+ * why it plays as its fallback Scene, with the connector's error when the agent couldn't carry on.
  */
-export type UnitOutcome = { code: UnitCode; attempts: number; note?: string } | { code: null; attempts: number; reason: string };
+export type UnitOutcome = { code: UnitCode; attempts: number; note?: string } | { code: null; attempts: number; reason: string; error?: ConnectorError };
 
 /** A visual review of passing code: what to repair, or `null` when it looks right or couldn't be reviewed. */
 export type ReviewCode = (code: UnitCode) => Promise<{ problems: string[]; note: string } | null>;
@@ -154,6 +156,11 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
 
   /** The one review and repair pass of passing code: the repair is kept only if it passes the checks too. */
   async function reviewed(session: Session, code: UnitCode): Promise<UnitOutcome> {
+    // Code that passed before the run stopped is kept as it is.
+    if (run.signal?.aborted) {
+      return { code, attempts };
+    }
+
     const problems = await review(code);
 
     if (!problems) {
@@ -163,7 +170,7 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
     const reverted = { code, attempts, note: problems.note };
     submitted = undefined;
     onProgress("writing", attempts);
-    const turnError = await runTurn(session, repairMessage(problems.problems));
+    const turnError = await runTurn(session, repairMessage(problems.problems), run.signal);
     const repair = handedIn();
 
     if (turnError || !repair) {
@@ -186,12 +193,16 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
     let reason = "";
 
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
+      if (run.signal?.aborted) {
+        return { data: { code: null, attempts, reason: "Stopped before its Scene code passed the checks." }, error: null };
+      }
+
       submitted = undefined;
       onProgress("writing", attempts);
-      const turnError = await runTurn(session, message);
+      const turnError = await runTurn(session, message, run.signal);
 
       if (turnError) {
-        return { data: { code: null, attempts, reason: `The agent stopped: ${turnError.message}` }, error: null };
+        return { data: { code: null, attempts, reason: `The agent stopped: ${turnError.message}`, error: turnError }, error: null };
       }
 
       if (!submitted) {
@@ -221,7 +232,7 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
   });
 
   if (outcome.error) {
-    return { code: null, attempts, reason: `The agent couldn't start: ${outcome.error.error.message}` };
+    return { code: null, attempts, reason: `The agent couldn't start: ${outcome.error.error.message}`, error: outcome.error.error };
   }
 
   return outcome.data;
@@ -240,7 +251,7 @@ type SessionSetup = { label: string; systemPrompt: string; hostTools: HostTool[]
 
 /** Runs `work` in a fresh session with a workspace folder of its own, closing both afterwards. */
 export async function withSession<T, E>(
-  { connector, model, workDir }: AgentRun,
+  { connector, model, workDir, signal }: AgentRun,
   setup: SessionSetup,
   work: (session: Session, workspaceDir: string) => Promise<Result<T, E>>,
 ): Promise<Result<T, E | { code: "AGENT_FAILED"; error: ConnectorError }>> {
@@ -254,9 +265,14 @@ export async function withSession<T, E>(
       return { data: null, error: { code: "AGENT_FAILED", error } };
     }
 
+    // Stop interrupts the turn running now; `runTurn` starts no other.
+    const interrupt = () => void session.interrupt();
+    signal?.addEventListener("abort", interrupt, { once: true });
+
     try {
       return await work(session, workspaceDir);
     } finally {
+      signal?.removeEventListener("abort", interrupt);
       session.close();
     }
   } finally {
@@ -265,7 +281,11 @@ export async function withSession<T, E>(
 }
 
 /** Sends one message and waits for the agent's turn to end; a turn that doesn't complete answers with its error. */
-export async function runTurn(session: Session, message: string): Promise<ConnectorError | undefined> {
+export async function runTurn(session: Session, message: string, signal?: AbortSignal): Promise<ConnectorError | undefined> {
+  if (signal?.aborted) {
+    return { code: "AGENT_UNAVAILABLE", message: "The run was stopped" };
+  }
+
   for await (const event of session.sendTurn(message)) {
     if (event.type !== "turn-completed") {
       continue;
