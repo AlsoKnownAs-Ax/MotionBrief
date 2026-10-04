@@ -10,6 +10,7 @@ import { FRAME_CONTRACT_VERSION } from "../modules/frame";
 import { bundledPreset } from "../modules/style";
 import { createCore } from "./composition-root";
 import { createReplayConnector, type ReplayScript } from "./fixtures/replay-connector";
+import { submitsReview } from "./test-support/generation";
 import { voiceover } from "./test-support/media";
 import { fakeWhisper, whisperFixture } from "./test-support/whisper";
 
@@ -80,9 +81,9 @@ type FixtureUnits = Partial<Record<"s01" | "s02" | "s03" | "s04", "good" | "raw-
 
 /**
  * A closed, transcribed Project whose 16:9 video has Version 1, written against `frameContractVersion`: s01 to s04
- * play the given Scene code, and s05 is already a flagged fallback.
+ * play the given Scene code with the given review notes, and s05 is already a flagged fallback.
  */
-async function fixtureProject(core: CoreClient, dir: string, frameContractVersion: string, variants: FixtureUnits = {}) {
+async function fixtureProject(core: CoreClient, dir: string, frameContractVersion: string, variants: FixtureUnits = {}, notes: Record<string, string> = {}) {
   await mkdir(join(dir, "user"), { recursive: true });
   const project = await core.project.create({ voiceoverPath: await voiceover(join(dir, "user"), "Caching.wav", [{ tone: 33.6 }]), format: "horizontal" });
 
@@ -110,8 +111,11 @@ async function fixtureProject(core: CoreClient, dir: string, frameContractVersio
     preset: bundledPreset("blueprint"),
     captions: false,
     units,
-    flags: [{ unit: "s05", kind: "fallback", reason: "- [contract MISSING_ELEMENT] s05-title never appears" }],
-    models: { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5" },
+    flags: [
+      ...Object.entries(notes).map(([unit, reason]) => ({ unit, kind: "review-note", reason })),
+      { unit: "s05", kind: "fallback", reason: "- [contract MISSING_ELEMENT] s05-title never appears" },
+    ],
+    models: { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5", review: "claude-sonnet-5-5" },
     frameContractVersion,
     createdAt: "2026-01-02T03:04:05.000Z",
     origin: "generation",
@@ -132,7 +136,7 @@ async function versionFile(path: string, number: number) {
   return JSON.parse(await readFile(join(path, "horizontal", "versions", `${number}.json`), "utf8")) as {
     origin: string;
     units: Record<string, string>;
-    flags: { unit: string; reason: string }[];
+    flags: { unit: string; kind: string; reason: string }[];
     frameContractVersion: string;
   };
 }
@@ -152,7 +156,10 @@ describe("opening a Project recorded against an older frame major", { timeout: T
   let video: VideoRef;
 
   beforeAll(async () => {
-    setup = await connect({ "scene-code s03": [submitsCode(await unitCode("good", "s03"))] });
+    setup = await connect({
+      "scene-code s03": [submitsCode(await unitCode("good", "s03"))],
+      "review s03": [submitsReview({ looksRight: true, problems: [], note: "" })],
+    });
     path = await fixtureProject(setup.core, setup.dir, OLDER_MAJOR, { s03: "raw-color" });
     ({ opened, video } = await openVideo(setup.core, path));
   }, TIMEOUT_MS);
@@ -206,7 +213,7 @@ describe("opening a Project recorded against an older frame major", { timeout: T
     }
 
     expect(statuses.at(-1)).toMatchObject({ state: "done", version: 3 });
-    expect(setup.replay.asked.map(({ options }) => options.label)).toEqual(["scene-code s03"]);
+    expect(setup.replay.asked.map(({ options }) => options.label)).toEqual(["scene-code s03", "review s03"]);
 
     const saved = await versionFile(path, 3);
     expect(saved.origin).toBe("retry");
@@ -228,6 +235,46 @@ describe("opening a Project recorded against an older frame major", { timeout: T
     expect(sceneStatuses(again.opened).s03).toBe("ready");
     expect(first).toMatchObject({ state: "idle" });
     expect(first?.preview).toBeUndefined();
+  });
+});
+
+describe("review notes across a frame major update and a Retry", { timeout: TIMEOUT_MS }, () => {
+  const CROWDED = "The kicker crowds the headline.";
+  const TOO_SMALL = "The number is too small to read.";
+
+  it("keeps a passing unit's note, swaps a failing unit's note for its fallback flag, and keeps a note whose Retry fails", async () => {
+    const { core, replay, dir } = await connect();
+    const path = await fixtureProject(core, dir, OLDER_MAJOR, { s03: "raw-color" }, { s02: CROWDED, s03: TOO_SMALL });
+    const { opened, video } = await openVideo(core, path);
+
+    expect(opened.frameUpdate?.units).toEqual(["s03"]);
+    expect(sceneStatuses(opened)).toMatchObject({ s02: "flagged", s03: "fallback" });
+    expect((await versionFile(path, 2)).flags.filter(({ unit }) => unit !== "s05")).toEqual([
+      { unit: "s02", kind: "review-note", reason: CROWDED },
+      { unit: "s03", kind: "fallback", reason: expect.stringContaining("tokens") },
+    ]);
+
+    // No code is recorded for s02, so its Retry fails: it keeps playing its code, with its note.
+    const stream = await core.video.generation(video);
+    await core.video.retry({ ...video, units: ["s02"] });
+    let last: GenerationStatus | undefined;
+
+    for await (const status of stream) {
+      last = status;
+
+      if (status.state === "done" || status.state === "failed") {
+        break;
+      }
+    }
+
+    expect(last).toMatchObject({ state: "done", version: 3 });
+    expect(last?.units.find(({ id }) => id === "s02")?.status).toBe("flagged");
+    expect(replay.asked.map(({ options }) => options.label)).toContain("scene-code s02");
+
+    const saved = await versionFile(path, 3);
+    expect(Object.keys(saved.units)).toEqual(["s01", "s02", "s04"]);
+    expect(saved.flags).toContainEqual({ unit: "s02", kind: "review-note", reason: CROWDED });
+    expect(saved.flags.filter(({ unit }) => unit === "s02")).toHaveLength(1);
   });
 });
 

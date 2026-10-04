@@ -305,7 +305,7 @@ export function createGeneration({ connector, checker, previews, stills, project
 
     const { transcript, voiceoverPath, version, code, frameUpdate } = checked;
     const rules = storyboardRules(version.preset, { format: ref.format, captions: version.captions });
-    const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, voiceover: voiceoverPath };
+    const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, notes: reviewNotes(version.flags), voiceover: voiceoverPath };
     const { data: preview, error: previewError } = await previews.open(source);
 
     if (previewError) {
@@ -411,7 +411,9 @@ export function createGeneration({ connector, checker, previews, stills, project
     }
 
     const kept = Object.fromEntries(Object.entries(version.units).filter(([unit]) => !failing.has(unit)));
-    const flags = [...version.flags, ...[...failing].map(([unit, reason]): Flag => ({ unit, kind: "fallback", reason }))];
+    // A failing unit's review note goes with its code: it plays as a fallback now.
+    const passingFlags = version.flags.filter((flag) => !failing.has(flag.unit));
+    const flags = [...passingFlags, ...[...failing].map(([unit, reason]): Flag => ({ unit, kind: "fallback", reason }))];
     const content: VideoContent = { ...contentOf(version), units: kept, flags, frameContractVersion: FRAME_CONTRACT_VERSION };
     const createdAt = new Date(clock.now()).toISOString();
     const { data: number, error: saveError } = await projects.saveVersion(projectId, format, { ...content, origin: "frame-update", createdAt });
@@ -491,8 +493,10 @@ export function createGeneration({ connector, checker, previews, stills, project
       models: { ...version.models, sceneCode: models.sceneCode },
     };
     const code = { ...stored.code };
-    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retryStatus(id, retrying, code), attempts: 0 }]));
-    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, progress, store });
+    const notes = reviewNotes(content.flags);
+    const previousNotes = reviewNotes(version.flags);
+    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retryStatus(id, retrying, code, notes), attempts: 0 }]));
+    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store });
     const failed = (fileError: FileFailure) => publish({ state: "failed", error: { code: "FILE_FAILED", path: fileError.path, message: fileError.message } });
 
     await publish({ state: "writing" });
@@ -513,8 +517,11 @@ export function createGeneration({ connector, checker, previews, stills, project
           brief,
           unit,
           baseline,
+          review: (passing) => reviewUnit({ connector, workDir, model: models.review, stills, storyboard, transcript, rules, preset, brief, unit, code: passing }),
           onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
         });
+
+        const previousNote = previousNotes[unit.id];
 
         if (outcome.code) {
           const { data: hash, error: unitError } = await projects.writeUnit(projectId, format, outcome.code);
@@ -525,11 +532,20 @@ export function createGeneration({ connector, checker, previews, stills, project
 
           code[unit.id] = outcome.code;
           content.units[unit.id] = hash;
+
+          if (outcome.note) {
+            notes[unit.id] = outcome.note;
+            content.flags.push({ unit: unit.id, kind: "review-note", reason: outcome.note });
+          }
+        } else if (code[unit.id] && previousNote !== undefined) {
+          // A unit retried for its review note keeps the code it played, with its note, rather than becoming a fallback.
+          notes[unit.id] = previousNote;
+          content.flags.push({ unit: unit.id, kind: "review-note", reason: previousNote });
         } else {
           content.flags.push(flagOf(unit, outcome.reason));
         }
 
-        await publish({}, { id: unit.id, status: outcomeStatus(outcome), attempts: outcome.attempts });
+        await publish({}, { id: unit.id, status: playingStatus(unit.id, code, notes), attempts: outcome.attempts });
 
         return undefined;
       },
@@ -568,10 +584,19 @@ export type OpenVideoError =
 
 export type RetryError = { code: "GENERATING"; projectId: string } | { code: "NOT_FLAGGED"; unit: string };
 
-/** How a unit starts a Retry: waiting to be rewritten, playing its code, or still a fallback Scene. */
-function retryStatus(id: string, retrying: Set<string>, code: Record<string, UnitCode>): GenerationUnit["status"] {
+/** How a unit starts a Retry: waiting to be rewritten, or as it plays. */
+function retryStatus(id: string, retrying: Set<string>, code: Record<string, UnitCode>, notes: Record<string, string>): GenerationUnit["status"] {
   if (retrying.has(id)) {
     return "queued";
+  }
+
+  return playingStatus(id, code, notes);
+}
+
+/** A unit plays its code, flagged when it has a review note, or its fallback Scene. */
+function playingStatus(id: string, code: Record<string, UnitCode>, notes: Record<string, string>): GenerationUnit["status"] {
+  if (code[id] && notes[id]) {
+    return "flagged";
   }
 
   if (code[id]) {
@@ -581,12 +606,9 @@ function retryStatus(id: string, retrying: Set<string>, code: Record<string, Uni
   return "fallback";
 }
 
-function outcomeStatus(outcome: UnitOutcome): GenerationUnit["status"] {
-  if (outcome.code) {
-    return "ready";
-  }
-
-  return "fallback";
+/** The review notes among a Version's flags, by unit; a fallback flag is not one. */
+function reviewNotes(flags: Flag[]): Record<string, string> {
+  return Object.fromEntries(flags.filter(({ kind }) => kind === "review-note").map(({ unit, reason }) => [unit, reason]));
 }
 
 /** What a Version plays and how it was made, without what makes it a Version. */
