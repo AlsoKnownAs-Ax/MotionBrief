@@ -432,6 +432,8 @@ export const OpenedProjectSchema = z.object({
   project: ProjectSchema,
   /** Relative to the Project folder. */
   backupPath: z.string().optional(),
+  /** Videos whose first generation the app quit or crashed during: saved as a Version on this open, by Stop's rules. */
+  recovered: z.array(z.object({ format: FormatSchema, version: z.number().int().positive() })).optional(),
 });
 
 export const TranscriptionErrorSchema = z.object({
@@ -481,9 +483,23 @@ export const GenerationUnitSchema = z.object({
 /** Why the video so far couldn't be shown, such as its Voiceover having moved. */
 export const GenerationPreviewErrorSchema = z.object({ code: z.string(), message: z.string() });
 
+/**
+ * Why a run ended early, keeping its finished units: the creator pressed Stop, the subscription plan's limit was
+ * reached (until `resetsAt`, epoch ms), Claude's login failed, or the Project was closed.
+ */
+export const GenerationStopSchema = z.object({
+  cause: z.enum(["stopped", "plan-limit", "authentication", "closed"]),
+  resetsAt: z.number().optional(),
+});
+
 export const GenerationStatusSchema = z.object({
-  /** `idle` until Generate is pressed; `planning` while the Storyboard is written; `writing` while its units are. */
+  /**
+   * `idle` until Generate is pressed, and again after a stop before the Storyboard was valid; `planning` while the
+   * Storyboard is written; `writing` while its units are, or flagged units are retried.
+   */
   state: z.enum(["idle", "planning", "writing", "done", "failed"]),
+  /** Set when the run ended early. `done` then has a complete Version whose unfinished units are flagged fallbacks. */
+  stopped: GenerationStopSchema.optional(),
   /** Every unit, once the Storyboard is valid. */
   units: z.array(GenerationUnitSchema),
   /** The video so far, once the Storyboard is valid: it plays as units finish, the rest as the Storyboard animatic. */
@@ -791,6 +807,27 @@ export const coreContract = {
       .input(VideoRefSchema),
     /** Streams the video's generation now and after every change, until the window stops listening. */
     generation: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(GenerationStatusSchema)),
+    /**
+     * Stops the video's run and resolves once it has ended. Finished units are kept and unfinished ones become flagged
+     * fallbacks in a saved Version; before the Storyboard is valid nothing is saved. Nothing running: nothing happens.
+     */
+    stop: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema),
+    /**
+     * Regenerates flagged fallback units of the newest Version, `units` or every flagged one, with the Scene-code model.
+     * Starts and returns at once; streams through `generation`. Units that now pass make a new Version.
+     */
+    retry: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        GENERATING: { data: z.object({ projectId: z.string() }) },
+        /** The video has no Version yet. */
+        NOT_GENERATED: { data: z.object({ projectId: z.string() }) },
+        /** These units aren't flagged fallbacks, or none is. */
+        NOT_FLAGGED: { data: z.object({ units: z.array(z.string()) }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(VideoRefSchema.extend({ units: z.array(z.string()).optional() })),
   },
   cache: {
     status: oc.output(CacheStatusSchema),
@@ -859,4 +896,5 @@ export type GenerationEstimate = z.infer<typeof GenerationEstimateSchema>;
 export type GenerationError = z.infer<typeof GenerationErrorSchema>;
 export type GenerationUnit = z.infer<typeof GenerationUnitSchema>;
 export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
+export type GenerationStop = z.infer<typeof GenerationStopSchema>;
 export type GenerationPreviewError = z.infer<typeof GenerationPreviewErrorSchema>;

@@ -1,8 +1,11 @@
-import { CircleAlertIcon, HouseIcon, LoaderCircleIcon } from "lucide-react";
+import { CircleAlertIcon, CirclePauseIcon, HouseIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { ConnectClaude } from "@renderer/claude/connect-claude";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
-import { generationErrorMessage, useGeneration } from "@renderer/editor/generation";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
+import { Progress } from "@renderer/components/ui/progress";
+import { generationErrorMessage, stopHeadline, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
 import { useOpenVideo } from "@renderer/editor/open-video";
@@ -38,25 +41,33 @@ export function EditorToolbar() {
   );
 }
 
-/** The generation's progress while it runs, and its failure. The Scenes carry their own badges. */
+/** The job status: the run's progress and Stop while it runs, and its failure. The Scenes carry their own badges. */
 function GenerationBadge() {
   const status = useGeneration((state) => state.status);
+  const isStopping = useGeneration((state) => state.isStopping);
+  const stop = useGeneration((state) => state.stop);
 
-  if (status?.state === "planning") {
-    return (
-      <Badge role="status" status="working" pulse>
-        Planning the Storyboard
-      </Badge>
-    );
-  }
-
-  if (status?.state === "writing") {
-    const finished = status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length;
+  if (status?.state === "planning" || status?.state === "writing") {
+    const working = status.units.filter((unit) => unit.status === "queued" || unit.status === "writing" || unit.status === "checking").length;
+    const finished = status.units.length - working;
+    const label = status.state === "planning" ? "Planning the Storyboard" : `Writing Scenes · ${finished} of ${status.units.length}`;
+    // A Storyboard counts as the first tenth of the run.
+    const percent = status.state === "planning" ? 4 : Math.round(10 + (90 * finished) / Math.max(status.units.length, 1));
 
     return (
-      <Badge role="status" status="working" pulse>
-        Writing Scenes · {finished} of {status.units.length}
-      </Badge>
+      <div className="no-drag-region flex min-w-0 items-center gap-2.5 pl-1">
+        <div role="status" className="flex w-[200px] min-w-[120px] flex-col gap-[5px]">
+          <span className="flex items-center gap-1.5 text-app-xs">
+            <span aria-hidden="true" className="size-1.5 shrink-0 animate-pulse rounded-full bg-status-working" />
+            <span className="truncate">{isStopping ? "Stopping, saving finished Scenes" : label}</span>
+          </span>
+          <Progress value={percent} aria-label="Generation progress" />
+        </div>
+        <Button size="sm" disabled={isStopping} onClick={() => void stop()} title="Stop: finished Scenes are kept, the rest play as fallbacks">
+          <SquareIcon />
+          Stop
+        </Button>
+      </div>
     );
   }
 
@@ -121,11 +132,17 @@ export function Editor() {
   useSpaceToPlay();
 
   if (!preview) {
-    return <GenerationStage />;
+    return (
+      <>
+        <GenerationStage />
+        <ReconnectDialog />
+      </>
+    );
   }
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
+      <ReconnectDialog />
       <div className="flex min-h-0 flex-1">
         <section aria-label="Player" className="flex min-w-0 flex-1 flex-col gap-3 px-5 pt-4 pb-3.5">
           <GenerationNotice />
@@ -163,6 +180,25 @@ export function Editor() {
 function GenerationStage() {
   const status = useGeneration((state) => state.status);
   const lostError = useGeneration((state) => state.lostError);
+  const backToProject = useGeneration((state) => state.backToProject);
+
+  if (status?.stopped && status.state === "idle") {
+    return (
+      <main className="flex flex-1 items-center justify-center p-10">
+        <div role="status" className="flex max-w-[52ch] flex-col items-center gap-3 text-center">
+          <p className="flex items-center gap-2 text-app-body">
+            <CirclePauseIcon aria-hidden="true" className="size-4 shrink-0 text-ink-muted" />
+            {stopHeadline(status.stopped)}
+          </p>
+          <p className="text-app-sm text-ink-muted">
+            It stopped before the Storyboard was planned, so there’s no video yet. The Project keeps its Voiceover and Transcript; Generate again
+            whenever you’re ready.
+          </p>
+          <Button onClick={backToProject}>Back to the Project</Button>
+        </div>
+      </main>
+    );
+  }
 
   if (status?.error) {
     return (
@@ -238,5 +274,55 @@ function GenerationNotice() {
     );
   }
 
-  return null;
+  return <StopNotice />;
+}
+
+/** Why the run ended early, once its Version is saved: finished Scenes are kept and the rest are flagged fallbacks. */
+function StopNotice() {
+  const status = useGeneration((state) => state.status);
+  const setReconnectOpen = useGeneration((state) => state.setReconnectOpen);
+  const stopped = status?.state === "done" ? status.stopped : undefined;
+
+  if (!stopped) {
+    return null;
+  }
+
+  const isLimit = stopped.cause === "plan-limit" || stopped.cause === "authentication";
+
+  return (
+    <div
+      role={isLimit ? "alert" : "status"}
+      className="flex items-center gap-2.5 rounded-md bg-status-flagged-tint px-3 py-2 text-app-sm text-status-flagged"
+    >
+      <CirclePauseIcon aria-hidden="true" className="size-4 shrink-0" />
+      <span className="min-w-0 flex-1">
+        {stopHeadline(stopped)}. Finished Scenes are kept and the rest play as flagged fallbacks; Retry them when you’re ready.
+      </span>
+      {stopped.cause === "authentication" ? (
+        <Button size="sm" onClick={() => setReconnectOpen(true)}>
+          Reconnect
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** Opens by itself when Claude's login fails mid-run, so the creator can reconnect before retrying. */
+function ReconnectDialog() {
+  const isOpen = useGeneration((state) => state.isReconnectOpen);
+  const setReconnectOpen = useGeneration((state) => state.setReconnectOpen);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={setReconnectOpen}>
+      <DialogContent className="max-h-[calc(100vh-4rem)] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Reconnect Claude</DialogTitle>
+          <DialogDescription>
+            Claude’s login failed, so the run stopped and kept every finished Scene. Reconnect, then Retry the flagged Scenes.
+          </DialogDescription>
+        </DialogHeader>
+        <ConnectClaude />
+      </DialogContent>
+    </Dialog>
+  );
 }

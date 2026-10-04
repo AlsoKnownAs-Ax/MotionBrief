@@ -315,8 +315,8 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     RUN_TIMEOUT_MS,
   );
 
-  it("fails when the Storyboard agent can't run, such as when Claude isn't connected", async () => {
-    const { core, dir } = await connect({ script: { storyboard: [[{ type: "turn-completed", status: "failed", error: { code: "AUTHENTICATION_FAILED", message: "Log in" } }]] } });
+  it("fails when the Storyboard agent can't run", async () => {
+    const { core, dir } = await connect({ script: { storyboard: [[{ type: "turn-completed", status: "failed", error: { code: "MODEL_UNAVAILABLE", message: "No such model" } }]] } });
     const project = await newProject(core, dir);
     const video: VideoRef = { projectId: project.id, format: "horizontal" };
     const generation = await watch(core, video);
@@ -325,7 +325,22 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     const failed = await generation.until(({ state }) => state === "failed");
     generation.stop();
 
-    expect(failed.error).toEqual({ code: "AGENT_FAILED", error: { code: "AUTHENTICATION_FAILED", message: "Log in" } });
+    expect(failed.error).toEqual({ code: "AGENT_FAILED", error: { code: "MODEL_UNAVAILABLE", message: "No such model" } });
+    await core.project.close({ projectId: project.id });
+  });
+
+  it("stops as Stop does when Claude's login fails before the Storyboard exists, leaving no video", async () => {
+    const { core, dir } = await connect({ script: { storyboard: [[{ type: "turn-completed", status: "failed", error: { code: "AUTHENTICATION_FAILED", message: "Log in" } }]] } });
+    const project = await newProject(core, dir);
+    const video: VideoRef = { projectId: project.id, format: "horizontal" };
+    const generation = await watch(core, video);
+
+    await core.video.generate(video);
+    const stopped = await generation.until(({ stopped }) => stopped !== undefined);
+    generation.stop();
+
+    expect(stopped).toMatchObject({ state: "idle", stopped: { cause: "authentication" } });
+    expect(await readdir(project.path)).not.toContain("horizontal");
     await core.project.close({ projectId: project.id });
   });
 

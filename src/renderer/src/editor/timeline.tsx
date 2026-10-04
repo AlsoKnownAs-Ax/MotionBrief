@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { ZoomInIcon, ZoomOutIcon } from "lucide-react";
+import { RotateCwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -7,6 +7,7 @@ import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
 import type { Preview, TimelineScene, TimelineWord, VideoTimeline } from "../../../contract";
+import { isGenerating, useGeneration } from "./generation";
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS } from "./labels";
 import { useOpenVideo } from "./open-video";
 import { formatTime, usePlayback } from "./playback";
@@ -40,6 +41,10 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
   const fixError = useOpenVideo((state) => state.fixError);
+  const retryError = useGeneration((state) => state.retryError);
+  const retry = useRetry();
+  const flagged = [...new Set(timeline.scenes.filter(({ status }) => status === "fallback").map(({ unit }) => unit))];
+  const headerError = fixError ?? retryError;
 
   return (
     <section aria-label="Scene timeline" className="flex shrink-0 flex-col bg-[#0b0b0b]" style={{ height }}>
@@ -48,14 +53,25 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
           <span className="font-medium">{timeline.scenes.length} Scenes</span>
           <span className="text-ink-muted tabular-nums"> · {formatTime(timeline.duration)}</span>
         </span>
-        {fixError ? (
-          <span role="alert" title={fixError} className="min-w-0 truncate text-app-xs text-status-fallback-ink">
-            {fixError}
+        {headerError ? (
+          <span role="alert" title={headerError} className="min-w-0 truncate text-app-xs text-status-fallback-ink">
+            {headerError}
           </span>
         ) : (
           <span className="min-w-0 truncate text-app-xs text-ink-muted">Click a Scene or a word to go to it. Double-click a word to fix it.</span>
         )}
         <span className="flex-1" />
+        {retry && flagged.length > 0 ? (
+          <Button
+            size="sm"
+            disabled={!retry.canRetry}
+            title="Regenerate every fallback Scene with the Scene-code model"
+            onClick={() => retry.run()}
+          >
+            <RotateCwIcon />
+            Retry all flagged ({flagged.length})
+          </Button>
+        ) : null}
         <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
       </header>
       <div ref={scrollRef} className="timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
@@ -73,6 +89,12 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
               onSeek={seek}
             />
           ))}
+          {retry &&
+            timeline.scenes
+              .filter(({ status }) => status === "fallback")
+              .map((scene) => (
+                <RetryScene key={scene.id} scene={scene} px={px} top={cardTop} disabled={!retry.canRetry} onRetry={() => retry.run([scene.unit])} />
+              ))}
           {timeline.scenes.map((scene) => (
             <TransitionMarker key={scene.id} scene={scene} px={px} top={cardTop + cardHeight / 2} />
           ))}
@@ -239,6 +261,48 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
         </span>
       )}
     </button>
+  );
+}
+
+/**
+ * Retry for the video's flagged fallback Scenes: only for a stored Project, and never while a run is going.
+ * Nothing retries them on its own.
+ */
+function useRetry() {
+  const isStored = useOpenVideo((state) => state.isStored);
+  const isRunning = useGeneration((state) => isGenerating(state.status));
+  const retry = useGeneration((state) => state.retry);
+
+  if (!isStored) {
+    return undefined;
+  }
+
+  return { canRetry: !isRunning, run: (units?: string[]) => void retry(units) };
+}
+
+type RetrySceneProps = { scene: TimelineScene; px: number; top: number; disabled: boolean; onRetry: () => void };
+
+/** Retry on a fallback Scene's card: regenerates its unit alone. Beside the card's button, since buttons don't nest. */
+function RetryScene({ scene, px, top, disabled, onRetry }: RetrySceneProps) {
+  const width = (scene.end - scene.start) * px - 3;
+
+  if (width < 36) {
+    return null;
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      disabled={disabled}
+      aria-label={`Retry ${sceneName(scene)}`}
+      title={`Retry ${sceneName(scene)}: regenerate its Scene code`}
+      className="absolute z-[3] bg-surface-2 hover:bg-surface-3"
+      style={{ left: scene.start * px + width - 30, top: top + 4 }}
+      onClick={onRetry}
+    >
+      <RotateCwIcon />
+    </Button>
   );
 }
 

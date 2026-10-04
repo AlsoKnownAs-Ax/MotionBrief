@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { StylePresetSchema, UnitCodeSchema, type Format, type UnitCode } from "../../contract";
@@ -43,12 +43,19 @@ export const VersionSchema = VideoContentSchema.extend({
   /** Counted from 1, in the order Versions were made. */
   version: z.number().int().positive(),
   createdAt: z.iso.datetime(),
-  /** What made it: a first generation, for now. */
-  origin: z.literal("generation"),
+  /** What made it: a first generation, or a Retry of flagged units. */
+  origin: z.enum(["generation", "retry"]),
 });
 
 /** A first generation in progress: its units are added as they finish, so a crash loses none of them. */
-export const GenerationRecordSchema = VideoContentSchema.extend({ startedAt: z.iso.datetime() });
+export const GenerationRecordSchema = VideoContentSchema.extend({
+  startedAt: z.iso.datetime(),
+  /** Every unit the Storyboard plans, in its order: those neither stored nor flagged weren't finished. */
+  planned: z.array(z.string()),
+});
+
+/** Why a unit of a first generation the app quit or crashed during plays as its fallback Scene. */
+const RECOVERED_REASON = "MotionBrief closed before this Scene was finished.";
 
 export type Flag = z.infer<typeof FlagSchema>;
 export type VideoContent = z.infer<typeof VideoContentSchema>;
@@ -122,6 +129,85 @@ export async function saveVersion(dir: string, format: Format, version: Omit<Ver
   }
 
   return { data: number, error: null };
+}
+
+/**
+ * Ends a first generation the app quit or crashed during by Stop's rules: its finished units are kept, the rest
+ * become flagged fallbacks, and the whole is saved as the next Version. Resolves to its number; none without one.
+ */
+export async function recoverGeneration(dir: string, format: Format, createdAt: string): Promise<Result<number | undefined, FileError>> {
+  const path = join(dir, format, GENERATION_FILE);
+  const { data: text } = await fileStep(path, () => readFile(path, "utf8"));
+  const parsed = text === null ? undefined : GenerationRecordSchema.safeParse(parseJson(text));
+
+  // Without a readable record there is nothing to keep; the next Generate overwrites it.
+  if (!parsed?.success) {
+    return { data: undefined, error: null };
+  }
+
+  const { planned } = parsed.data;
+  const content = VideoContentSchema.parse(parsed.data);
+  const unfinished = planned.filter((unit) => !content.units[unit] && !content.flags.some((flag) => flag.unit === unit));
+  const flags = [...content.flags, ...unfinished.map((unit) => ({ unit, kind: "fallback" as const, reason: RECOVERED_REASON }))];
+  const order = (unit: string) => planned.indexOf(unit);
+
+  return saveVersion(dir, format, { ...content, flags: flags.sort((a, b) => order(a.unit) - order(b.unit)), origin: "generation", createdAt });
+}
+
+/** The video's newest Version and the Scene code of its units; none before its first generation is saved. */
+export async function readLatestVersion(dir: string, format: Format): Promise<Result<StoredVersion | undefined, FileError>> {
+  const number = await latestVersion(dir, format);
+
+  if (number === undefined) {
+    return { data: undefined, error: null };
+  }
+
+  const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
+  const { data: version, error } = await readJson(path, VersionSchema);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const code: Record<string, UnitCode> = {};
+
+  for (const [unit, hash] of Object.entries(version.units)) {
+    const { data: unitCode, error: unitError } = await readJson(join(dir, format, UNITS_DIR, `${hash}.json`), UnitCodeSchema);
+
+    if (unitError) {
+      return { data: null, error: unitError };
+    }
+
+    code[unit] = unitCode;
+  }
+
+  return { data: { version, code }, error: null };
+}
+
+export type StoredVersion = { version: Version; code: Record<string, UnitCode> };
+
+async function readJson<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, FileError>> {
+  const { data: text, error } = await fileStep(path, () => readFile(path, "utf8"));
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const parsed = schema.safeParse(parseJson(text));
+
+  if (!parsed.success) {
+    return { data: null, error: { code: "FILE_FAILED", path, message: parsed.error.message } };
+  }
+
+  return { data: parsed.data, error: null };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The number of the video's newest Version; none before its first generation is saved. */

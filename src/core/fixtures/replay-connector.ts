@@ -25,6 +25,8 @@ const NO_TURN_LEFT: AgentEvent[] = [{ type: "turn-completed", status: "failed", 
  */
 export function createReplayConnector(script: ReplayScript, status: ConnectionStatus = { isConnected: true, method: "api-key" }) {
   const shared = Array.isArray(script) ? [...script] : undefined;
+  /** Each label's turns left, shared by its sessions: a later session (a Retry) replays the turns after the earlier one's. */
+  const byLabel = new Map(Array.isArray(script) ? [] : Object.entries(script).map(([label, turns]) => [label, [...turns]]));
   const asked: ReplayedTurn[] = [];
   const held = new Map<string, PromiseWithResolvers<void>>();
   let openSessions = 0;
@@ -36,7 +38,10 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
       return shared;
     }
 
-    return [...((script as Record<string, AgentEvent[][]>)[label ?? ""] ?? [])];
+    const turns = byLabel.get(label ?? "") ?? [];
+    byLabel.set(label ?? "", turns);
+
+    return turns;
   }
 
   const connector: Connector = {
@@ -48,6 +53,8 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
     startSession: async (options) => {
       const turns = turnsFor(options.label);
       let isOpen = true;
+      let interrupted = Promise.withResolvers<void>();
+      let isInterrupted = false;
       openSessions += 1;
       mostOpenSessions = Math.max(mostOpenSessions, openSessions);
 
@@ -57,7 +64,15 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
           sendTurn: async function* (message) {
             const turn: ReplayedTurn = { message, options, toolResults: [] };
             asked.push(turn);
-            await held.get(options.label ?? "")?.promise;
+            await Promise.race([held.get(options.label ?? "")?.promise, interrupted.promise]);
+
+            // Interrupted while held: the turn ends as an agent's interrupted turn does, its recorded turn unplayed.
+            if (isInterrupted) {
+              isInterrupted = false;
+              interrupted = Promise.withResolvers();
+              yield { type: "turn-completed", status: "interrupted" } satisfies AgentEvent;
+              return;
+            }
 
             for (const event of turns.shift() ?? NO_TURN_LEFT) {
               if (event.type === "tool-call") {
@@ -67,7 +82,10 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
               yield event;
             }
           },
-          interrupt: async () => {},
+          interrupt: async () => {
+            isInterrupted = true;
+            interrupted.resolve();
+          },
           close: () => {
             if (isOpen) {
               isOpen = false;

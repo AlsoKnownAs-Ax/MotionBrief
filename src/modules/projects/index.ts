@@ -10,4 +10,4 @@ export {
   type Trash,
 } from "./projects";
 export { createStatusStore } from "./status";
-export type { Flag, GenerationRecord, Version, VideoContent } from "./videos";
+export type { Flag, GenerationRecord, StoredVersion, Version, VideoContent } from "./videos";

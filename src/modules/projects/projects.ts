@@ -26,7 +26,17 @@ import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocumentError } from "./video";
-import { latestVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version } from "./videos";
+import { FormatSchema } from "../../contract";
+import {
+  latestVersion,
+  readLatestVersion,
+  recoverGeneration,
+  saveGeneration,
+  saveVersion,
+  writeUnit,
+  type GenerationRecord,
+  type Version,
+} from "./videos";
 
 /** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
 export type Trash = (path: string) => Promise<void>;
@@ -260,13 +270,40 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       return { data: null, error: loadError };
     }
 
+    const { data: recovered, error: recoverError } = await recoverGenerations(dir);
+
+    if (recoverError) {
+      await removeLock(dir);
+
+      return { data: null, error: recoverError };
+    }
+
     const project = await adopt(dir, key, loaded.document, connection);
 
     if (!project.document.transcript) {
       startTranscription(project);
     }
 
-    return { data: { project: toProject(project), backupPath: loaded.backupPath }, error: null };
+    return { data: { project: toProject(project), backupPath: loaded.backupPath, ...(recovered.length > 0 && { recovered }) }, error: null };
+  }
+
+  /** Saves, by Stop's rules, each video whose first generation was still running when the app last quit or crashed. */
+  async function recoverGenerations(dir: string): Promise<Result<{ format: Format; version: number }[], ProjectsError>> {
+    const recovered: { format: Format; version: number }[] = [];
+
+    for (const format of FormatSchema.options) {
+      const { data: version, error } = await recoverGeneration(dir, format, new Date(clock.now()).toISOString());
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      if (version !== undefined) {
+        recovered.push({ format, version });
+      }
+    }
+
+    return { data: recovered, error: null };
   }
 
   /** The document brought up to this app's schema, under an id no other known Project folder owns. */
@@ -829,6 +866,14 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return enqueue(project, () => step(project.dir));
   }
 
+  /** Work on open Projects that must end, and save, before one closes. */
+  const closing: ((projectId: string) => Promise<void>)[] = [];
+
+  /** Runs `stop` before the Project closes, while it can still save; the close waits for it. */
+  function whenClosing(stop: (projectId: string) => Promise<void>) {
+    closing.push(stop);
+  }
+
   /** Stops the Project's work, waits for its last write, and releases the lock. */
   async function close(projectId: string) {
     const project = open.get(projectId);
@@ -843,6 +888,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
         return;
       }
 
+      await Promise.all(closing.map((stop) => stop(projectId)));
       open.delete(projectId);
       project.job?.abort();
       await enqueue(project, () => removeLock(project.dir));
@@ -878,6 +924,9 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveGeneration: (projectId: string, format: Format, record: GenerationRecord) => write(projectId, (dir) => saveGeneration(dir, format, record)),
     /** Saves the video's next Version; resolves to its number. */
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
+    /** The video's newest Version with its units' Scene code; none before its first generation is saved. */
+    latestVersion: (projectId: string, format: Format) => write(projectId, (dir) => readLatestVersion(dir, format)),
+    whenClosing,
     lastExportPath,
     rememberExportPath,
     close,
