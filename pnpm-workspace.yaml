@@ -1,3 +1,5 @@
 allowBuilds:
   esbuild: true
   unrs-resolver: true
+  # Its postinstall downloads a Chrome; the frame runs the pinned chrome-headless-shell from deps.json.
+  puppeteer: false
