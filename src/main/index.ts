@@ -6,6 +6,7 @@ import { app, BrowserWindow, ipcMain, Menu } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
 import { IPC, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
+import { handleConnectionStoreMessage } from "./connection-store";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
 import { createWindow } from "./window";
@@ -34,6 +35,7 @@ function start() {
     appVersion: app.getVersion(),
     onExit: () => broadcast(IPC.coreExited),
     onRestart: () => broadcast(IPC.coreRestarted),
+    onRequest: handleConnectionStoreMessage,
   });
 
   app.on("before-quit", () => core.stop());

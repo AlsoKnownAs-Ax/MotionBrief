@@ -81,6 +81,46 @@ export const CheckerUnavailableSchema = z.object({
   detail: z.string(),
 });
 
+export const AuthMethodSchema = z.enum(["subscription", "api-key"]);
+
+/** The normalized error taxonomy of a connector; UI copy maps the codes to messages. */
+export const ConnectorErrorSchema = z.object({
+  code: z.enum([
+    "AUTHENTICATION_FAILED",
+    "PLAN_LIMIT",
+    "BILLING",
+    "RATE_LIMITED",
+    "MODEL_UNAVAILABLE",
+    "SERVICE_ERROR",
+    "AGENT_UNAVAILABLE",
+  ]),
+  message: z.string(),
+  resetsAt: z.number().optional(),
+});
+
+/** Where the connection to Claude stands. Holds no secret: an API key only ever appears masked. */
+export const ConnectionStatusSchema = z.object({
+  isConnected: z.boolean(),
+  method: AuthMethodSchema.optional(),
+  /** The subscription login found on this computer, labelled from Claude's account info. */
+  login: z.object({ email: z.string().optional(), plan: z.string().optional() }).optional(),
+  maskedKey: z.string().optional(),
+  /** Days until the subscription login expires, once Claude has warned about it. */
+  expiresInDays: z.number().optional(),
+  error: ConnectorErrorSchema.optional(),
+});
+
+export const SetupErrorSchema = z.object({
+  code: z.enum(["NO_LOGIN", "SIGN_IN_FAILED", "SIGN_IN_CANCELLED", "KEY_REJECTED", "KEY_CHECK_FAILED", "KEY_STORE_FAILED"]),
+  message: z.string(),
+});
+
+/** A setup step's outcome: the status after it, and why it failed if it did. */
+export const SetupResultSchema = z.object({
+  status: ConnectionStatusSchema,
+  error: SetupErrorSchema.optional(),
+});
+
 export const coreContract = {
   system: {
     info: oc.output(CoreInfoSchema),
@@ -121,6 +161,17 @@ export const coreContract = {
       )
       .output(z.object({ frameContractVersion: z.string(), findings: z.array(CheckFindingSchema) })),
   },
+  connection: {
+    /** Checks the connection with `claude auth status`; spends no tokens. */
+    status: oc.output(ConnectionStatusSchema),
+    /** Chooses the subscription login found on this computer. */
+    useLogin: oc.output(SetupResultSchema),
+    /** Runs the bundled `claude auth login`, which opens Anthropic's sign-in; abort the call to cancel. */
+    signIn: oc.output(SetupResultSchema),
+    /** Checks the key with the free count_tokens endpoint, then stores and chooses it. */
+    setApiKey: oc.input(z.object({ apiKey: z.string() })).output(SetupResultSchema),
+    removeApiKey: oc.output(SetupResultSchema),
+  },
 };
 
 export type CoreContract = typeof coreContract;
@@ -136,3 +187,8 @@ export type StoryboardIssue = z.infer<typeof StoryboardIssueSchema>;
 export type UnitCode = z.infer<typeof UnitCodeSchema>;
 export type CheckFinding = z.infer<typeof CheckFindingSchema>;
 export type CheckerUnavailable = z.infer<typeof CheckerUnavailableSchema>;
+export type AuthMethod = z.infer<typeof AuthMethodSchema>;
+export type ConnectorError = z.infer<typeof ConnectorErrorSchema>;
+export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;
+export type SetupError = z.infer<typeof SetupErrorSchema>;
+export type SetupResult = z.infer<typeof SetupResultSchema>;

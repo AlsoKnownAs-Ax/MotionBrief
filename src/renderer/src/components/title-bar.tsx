@@ -1,7 +1,8 @@
-import { MenuIcon } from "lucide-react";
+import { MenuIcon, SettingsIcon } from "lucide-react";
 import type { MouseEvent } from "react";
 import { BrandMark } from "@renderer/components/brand-mark";
 import { CoreStatus } from "@renderer/components/core-status";
+import { useSettingsDialog } from "@renderer/components/settings-dialog";
 import { Button } from "@renderer/components/ui/button";
 
 const isMac = window.motionbrief.platform === "darwin";
@@ -38,6 +39,15 @@ export function TitleBar() {
       </span>
       <span className="flex-1" />
       <CoreStatus />
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="no-drag-region"
+        aria-label="Settings"
+        onClick={() => useSettingsDialog.getState().setIsOpen(true)}
+      >
+        <SettingsIcon />
+      </Button>
     </header>
   );
 }
