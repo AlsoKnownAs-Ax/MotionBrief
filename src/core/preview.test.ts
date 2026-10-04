@@ -7,7 +7,7 @@ import type { Preview, SceneThumbnail, UnitCode, VideoSource } from "../contract
 import storyboard from "./fixtures/storyboard/horizontal.json";
 import transcript from "./fixtures/storyboard/transcript.json";
 import { chromeHeadlessShellPath } from "./native";
-import { BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
+import { BLUEPRINT, BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
 
 /** Hand-written Scene code for two units of the horizontal fixture; the rest play as fallback Scenes. */
 async function editorCode(): Promise<Record<string, UnitCode>> {
@@ -57,7 +57,7 @@ async function core() {
 }
 
 async function source(): Promise<VideoSource> {
-  return { storyboard, transcript, rules: RULES, code: await editorCode(), voiceover };
+  return { storyboard, transcript, rules: RULES, preset: BLUEPRINT, code: await editorCode(), voiceover };
 }
 
 describe("preview", () => {
@@ -195,7 +195,7 @@ describe("preview", () => {
     async () => {
       const { code } = await source();
 
-      const report = await (await core()).checker.check({ storyboard, transcript, rules: RULES, code });
+      const report = await (await core()).checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code });
 
       expect(report.findings).toEqual([]);
     },

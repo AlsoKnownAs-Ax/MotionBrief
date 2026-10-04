@@ -185,11 +185,13 @@ export const CheckerUnavailableSchema = z.object({
   detail: z.string(),
 });
 
-/** What a video is assembled from: its Storyboard, Transcript and units' Scene code, and its Voiceover. */
+/** What a video is assembled from: its Storyboard, Transcript, Style Preset snapshot and units' Scene code, and its Voiceover. */
 export const VideoSourceSchema = z.object({
   storyboard: z.unknown(),
   transcript: StoryboardTranscriptSchema,
   rules: StoryboardRulesSchema,
+  /** The video's Style Preset snapshot. */
+  preset: StylePresetSchema,
   /** Scene code per unit id; a unit without code plays as its fallback Scene. */
   code: z.record(z.string(), UnitCodeSchema),
   /** The Voiceover file, played as the video's audio track. Absent, the video plays silent. */

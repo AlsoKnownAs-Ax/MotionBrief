@@ -2,6 +2,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
 import type { StoryboardRules, UnitCode } from "../contract";
 import type { SampleProject } from "../modules/core-api";
+import { bundledPreset } from "../modules/style";
 
 /** A Blueprint-like horizontal video: every Transition allowed, Canvases where they help, no Captions. */
 const RULES: StoryboardRules = {
@@ -23,6 +24,7 @@ export function sampleProject(fixturesDir: string): SampleProject {
       storyboard: await readJson(join(fixturesDir, "storyboard", "horizontal.json")),
       transcript: await readJson(join(fixturesDir, "storyboard", "transcript.json")),
       rules: RULES,
+      preset: bundledPreset("blueprint"),
       code: await readUnits(join(fixturesDir, "editor")),
     }),
   };

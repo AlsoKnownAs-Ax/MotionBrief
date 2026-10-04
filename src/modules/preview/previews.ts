@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { Preview, SceneThumbnail, StoryboardIssue, VideoSource, VideoTimeline } from "../../contract";
 import { assemble, planUnits, type AssembledPage } from "../assembler";
 import { openFramePage, type FramePage, type FramePageError } from "../checker";
-import { BLUEPRINT, FRAME_CONTRACT_VERSION, type FrameTokens } from "../frame";
+import { FRAME_CONTRACT_VERSION } from "../frame";
 import { validateStoryboard } from "../storyboard";
 import { startPreviewServer, type PreviewServer } from "./server";
 import { timelineOf } from "./timeline";
@@ -43,7 +43,6 @@ type OpenPage = { dir: string; page: AssembledPage; timeline: VideoTimeline };
  * same source always builds the same page, and served on this computer for the player.
  */
 export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
-  const tokens: FrameTokens = BLUEPRINT;
   const pages = new Map<string, OpenPage>();
   const building = new Map<string, Promise<OpenPage>>();
   let server: Promise<PreviewServer> | undefined;
@@ -70,7 +69,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
 
     const id = pageId({ ...source, storyboard }, voiceover && { size: voiceover.size, modified: voiceover.mtimeMs });
     const page = await build(id, async (dir) => {
-      const assembled = await assemble({ dir, storyboard, transcript: source.transcript, tokens, code: source.code, voiceover: source.voiceover });
+      const assembled = await assemble({ dir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code, voiceover: source.voiceover });
 
       return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code) };
     });
@@ -179,13 +178,14 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
   return { open, thumbnails, close };
 }
 
-/** Same source, same id: the Storyboard, Transcript, code and Voiceover, and the frame they are built in. */
+/** Same source, same id: the Storyboard, Transcript, Style Preset, code and Voiceover, and the frame they are built in. */
 function pageId(source: VideoSource, voiceover: { size: number; modified: number } | undefined): string {
   const code = Object.fromEntries(Object.entries(source.code).sort(([a], [b]) => a.localeCompare(b)));
   const key = JSON.stringify({
     frame: FRAME_CONTRACT_VERSION,
     storyboard: source.storyboard,
     transcript: source.transcript,
+    preset: source.preset,
     code,
     voiceover: source.voiceover && { path: source.voiceover, ...voiceover },
   });
