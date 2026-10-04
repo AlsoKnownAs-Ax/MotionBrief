@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { ORPCError } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { StylePresetSchema, type ContrastFinding, type ListedPreset, type Palette, type StylePreset } from "../contract";
-import { presetBrief } from "../modules/style";
+import { presetBrief, presetSample } from "../modules/style";
 import { BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
 import storyboard from "./fixtures/checker/storyboard.json";
 import transcript from "./fixtures/checker/transcript.json";
@@ -301,6 +301,19 @@ describe("a Preset's sample", () => {
       expect(first.image).toMatch(/^data:image\/jpeg;base64,/);
       expect(again.image).toBe(first.image);
       expect(other.image).not.toBe(first.image);
+    },
+    BROWSER_TIMEOUT_MS,
+  );
+
+  it(
+    "is drawn from Scene code that passes the Checker, as agent-written code must",
+    async () => {
+      const [blueprint] = await connect().style.presets();
+      const { source } = presetSample(editable(blueprint!));
+
+      const { findings } = await connect().checker.check(source);
+
+      expect(findings).toEqual([]);
     },
     BROWSER_TIMEOUT_MS,
   );

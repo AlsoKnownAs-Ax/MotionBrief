@@ -34,40 +34,36 @@ const STORYBOARD = {
         nodes: [
           { id: "browser", label: "Browser", icon: "lucide:laptop", at: 1 },
           { id: "server", label: "Server", icon: "lucide:server", at: 4 },
-          { id: "database", label: "Database", icon: "lucide:database", at: 10 },
         ],
-        edges: [
-          { id: "browser-server", from: "browser", to: "server", at: 4 },
-          { id: "server-database", from: "server", to: "database", at: 10 },
-        ],
+        edges: [{ id: "browser-server", from: "browser", to: "server", at: 4 }],
       },
     },
   ],
 };
 
-/** Token-only Scene code, as the agent writes it: cards with icons, connectors, a label and one accented node. */
+/**
+ * Token-only Scene code, as the agent writes it: a title, two cards with icons, one accented, and a connector.
+ * Drawn large, since the still is shown a few hundred pixels wide.
+ */
 const CODE = {
-  css: `.ps-wrap { display: flex; flex-direction: column; justify-content: center; gap: 72px; }
-.ps-diagram { position: relative; display: flex; align-items: center; justify-content: space-between; padding: 0 40px; }
-.ps-node { display: flex; align-items: center; gap: 22px; padding: 26px 36px; min-width: 360px; }
-.ps-icon { font-size: 64px; color: var(--accent2); }
+  css: `.ps-wrap { display: flex; flex-direction: column; justify-content: center; gap: 96px; }
+.ps-diagram { position: relative; display: flex; align-items: center; justify-content: space-between; }
+.ps-node { display: flex; align-items: center; gap: 36px; padding: 44px 64px; }
+.ps-node .mb-body { font-size: 80px; }
+.ps-icon { font-size: 112px; color: var(--accent2); }
 .ps-key .ps-icon { color: var(--accent); }`,
   html: `<div class="mb-safe ps-wrap">
-  <div class="mb-label">request path</div>
+  <div class="mb-display">One round trip</div>
   <div class="ps-diagram">
-    <svg class="mb-wire"><path id="s01-browser-server"></path><path id="s01-server-database"></path></svg>
+    <svg class="mb-wire"><path id="s01-browser-server"></path></svg>
     <div id="s01-browser" class="mb-card ps-node"><i data-icon="lucide:laptop" class="ps-icon"></i><span class="mb-body">Browser</span></div>
     <div id="s01-server" class="mb-card ps-node ps-key"><i data-icon="lucide:server" class="ps-icon"></i><span class="mb-body">Server</span></div>
-    <div id="s01-database" class="mb-card ps-node"><i data-icon="lucide:database" class="ps-icon"></i><span class="mb-body">Database</span></div>
   </div>
 </div>`,
   js: `MB.connect("#s01-browser-server", "#s01-browser", "#s01-server");
-MB.connect("#s01-server-database", "#s01-server", "#s01-database");
 MB.reveal(tl, "#s01-browser", at("s01-browser"));
 MB.reveal(tl, "#s01-server", at("s01-server"));
-MB.draw(tl, "#s01-browser-server", at("s01-browser-server"));
-MB.reveal(tl, "#s01-database", at("s01-database"));
-MB.draw(tl, "#s01-server-database", at("s01-server-database"));`,
+MB.draw(tl, "#s01-browser-server", at("s01-browser-server"));`,
 };
 
 /** A one-Scene diagram in the Preset, horizontal and without Captions, shown once every element is in. */

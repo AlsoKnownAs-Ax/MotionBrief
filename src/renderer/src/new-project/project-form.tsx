@@ -1,11 +1,11 @@
-import { useQuery } from "@tanstack/react-query";
 import { FileAudioIcon, FileVideoIcon, TriangleAlertIcon } from "lucide-react";
 import { RadioGroup } from "radix-ui";
 import { useId, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Input } from "@renderer/components/ui/input";
-import { orpc } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
-import type { Format, ListedPreset, Project, TranscriptionStatus } from "../../../contract";
+import { PresetSample } from "@renderer/style/preset-sample";
+import { usePresets } from "@renderer/style/presets";
+import type { Format, Project, TranscriptionStatus } from "../../../contract";
 import { clockLabel, FORMAT_OPTIONS, LANGUAGES, languageName, sizeLabel } from "./labels";
 import { presetBlurb } from "./presets";
 
@@ -161,9 +161,9 @@ function FormatChoice({ value, onChange }: { value: Format; onChange: (format: F
   );
 }
 
-/** The core's Style Presets, Blueprint first. */
+/** The core's Style Presets, Blueprint first, each shown as the bundled frame draws it. */
 function PresetChoices({ value, onChange }: { value: string; onChange: (stylePreset: string) => void }) {
-  const { data: presets = [] } = useQuery(orpc.style.presets.queryOptions());
+  const { data: presets = [] } = usePresets();
 
   return (
     <RadioGroup.Root aria-label="Style Preset" value={value} onValueChange={onChange} className="grid grid-cols-2 gap-2">
@@ -173,29 +173,11 @@ function PresetChoices({ value, onChange }: { value: string; onChange: (stylePre
           value={preset.id}
           className="group flex flex-col gap-2 rounded-lg bg-surface-2 p-2 text-left outline-none transition-shadow hover:bg-surface-3 focus-visible:shadow-[0_0_0_1px_var(--brand)] data-[state=checked]:shadow-[0_0_0_2px_var(--brand)]"
         >
-          <PresetArt preset={preset} />
-          <span className="px-0.5 text-app-sm">{preset.name}</span>
+          <PresetSample preset={preset} />
+          <span className="truncate px-0.5 text-app-sm">{preset.name}</span>
         </RadioGroup.Item>
       ))}
     </RadioGroup.Root>
-  );
-}
-
-/** A small drawing in the Preset's Palette: two boxes joined by a connector, on its background. */
-function PresetArt({ preset }: { preset: ListedPreset }) {
-  const { colors } = preset.palette;
-
-  return (
-    <svg aria-hidden="true" viewBox="0 0 160 72" className="aspect-[16/7] w-full rounded-md">
-      <rect width="160" height="72" fill={colors.bg} />
-      <rect x="14" y="20" width="46" height="32" rx="6" fill={colors.surface} stroke={colors.line} strokeWidth="1.5" />
-      <rect x="100" y="20" width="46" height="32" rx="6" fill={colors.surface} stroke={colors.line} strokeWidth="1.5" />
-      <path d="M60 36 H100" stroke={colors.accent} strokeWidth="2.5" />
-      <circle cx="100" cy="36" r="3.5" fill={colors.accent} />
-      <rect x="22" y="31" width="30" height="4" rx="2" fill={colors.ink} />
-      <rect x="22" y="39" width="20" height="3" rx="1.5" fill={colors.accent2} />
-      <rect x="108" y="31" width="30" height="4" rx="2" fill={colors.ink} />
-    </svg>
   );
 }
 
