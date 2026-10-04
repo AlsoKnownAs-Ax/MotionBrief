@@ -1,10 +1,12 @@
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
-import { CORE_APP_DATA_FLAG, CORE_APP_VERSION_FLAG } from "../shared/ipc";
+import { CORE_APP_DATA_FLAG, CORE_APP_VERSION_FLAG, CORE_CACHE_DIR_FLAG, CORE_PROJECTS_DIR_FLAG } from "../shared/ipc";
 
 type CoreProcessOptions = {
   entry: string;
   appVersion: string;
   appDataDir: string;
+  projectsDir: string;
+  cacheDir: string;
   /** The core died unexpectedly; a restart is scheduled. */
   onExit: () => void;
   /** A replacement core is up; windows should reconnect. */
@@ -21,14 +23,20 @@ const CRASH_WINDOW_MS = 60_000;
  * Owns the single core utilityProcess: forks it, hands it window ports, and restarts it
  * when it dies so windows stay open and reconnect.
  */
-export function startCoreProcess({ entry, appVersion, appDataDir, onExit, onRestart, onRequest }: CoreProcessOptions) {
+export function startCoreProcess({ entry, appVersion, appDataDir, projectsDir, cacheDir, onExit, onRestart, onRequest }: CoreProcessOptions) {
   let isRunning = true;
   let isStopping = false;
   let crashTimes: number[] = [];
   let child = fork();
 
   function fork(): UtilityProcess {
-    const proc = utilityProcess.fork(entry, [`${CORE_APP_VERSION_FLAG}${appVersion}`, `${CORE_APP_DATA_FLAG}${appDataDir}`], {
+    const flags = [
+      `${CORE_APP_VERSION_FLAG}${appVersion}`,
+      `${CORE_APP_DATA_FLAG}${appDataDir}`,
+      `${CORE_PROJECTS_DIR_FLAG}${projectsDir}`,
+      `${CORE_CACHE_DIR_FLAG}${cacheDir}`,
+    ];
+    const proc = utilityProcess.fork(entry, flags, {
       serviceName: "MotionBrief Core",
       stdio: "inherit",
     });

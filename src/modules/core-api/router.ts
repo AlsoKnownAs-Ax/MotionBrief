@@ -1,6 +1,8 @@
-import { implement } from "@orpc/server";
+import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult } from "../../contract";
+import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
+import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import { BLUEPRINT } from "../frame";
 import { validateStoryboard } from "../storyboard";
@@ -12,12 +14,14 @@ export type CoreRouterDeps = {
   checker: Checker;
   connector: Connector;
   transcriptionModel: TranscriptionModel;
+  projects: Projects;
+  cache: Cache;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel, projects, cache }: CoreRouterDeps) {
   const api = implement(coreContract);
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -76,8 +80,34 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
       resume: api.transcriptionModel.resume.handler(() => transcriptionModel.resume()),
       import: api.transcriptionModel.import.handler(({ input }) => transcriptionModel.import(input.path)),
     },
+    project: {
+      defaults: api.project.defaults.handler(() => projects.defaults()),
+      create: api.project.create.handler(async ({ input }) => dataOrThrow(await projects.create(input))),
+      update: api.project.update.handler(async ({ input: { projectId, ...changes } }) => dataOrThrow(await projects.update(projectId, changes))),
+      transcription: api.project.transcription.handler(({ input, signal }) => dataOrThrow(projects.watchTranscription(input.projectId, signal))),
+      retryTranscription: api.project.retryTranscription.handler(({ input }) => {
+        dataOrThrow(projects.retryTranscription(input.projectId));
+      }),
+      close: api.project.close.handler(({ input }) => projects.close(input.projectId)),
+    },
+    cache: {
+      status: api.cache.status.handler(() => cache.status()),
+      clear: api.cache.clear.handler(() => cache.clear()),
+    },
   });
 }
+
+/** A Project store result as the core API answers it: the data, or the error as the contract defines it. */
+function dataOrThrow<T>({ data, error }: ProjectsResult<T>): T {
+  if (error) {
+    const { code, ...details } = error;
+    throw new ORPCError(code, { data: details });
+  }
+
+  return data;
+}
+
+type ProjectsResult<T> = { data: T; error: null } | { data: null; error: ProjectsError };
 
 function unavailable(error: Exclude<CheckerError, { code: "INVALID_STORYBOARD" | "UNKNOWN_UNIT" }>): CheckerUnavailable {
   if (error.code === "CHROME_MISSING") {

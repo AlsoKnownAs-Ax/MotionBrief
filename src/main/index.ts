@@ -2,6 +2,7 @@
  * Main process: windows, menus, OS integration, the single-instance lock and the core
  * process lifecycle. Product logic lives in the core, never here.
  */
+import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
@@ -38,6 +39,8 @@ function start() {
     entry: coreEntry,
     appVersion: app.getVersion(),
     appDataDir: app.getPath("userData"),
+    projectsDir: join(app.getPath("documents"), "MotionBrief"),
+    cacheDir: cacheDir(),
     onExit: () => broadcast(IPC.coreExited),
     onRestart: () => broadcast(IPC.coreRestarted),
     onRequest: handleConnectionStoreMessage,
@@ -124,6 +127,15 @@ function focusOrCreateWindow() {
   }
 
   window.focus();
+}
+
+/** The OS's place for regenerable files: never roamed or backed up, unlike app data. */
+function cacheDir() {
+  if (process.platform === "darwin") {
+    return join(app.getPath("home"), "Library", "Caches", "MotionBrief");
+  }
+
+  return join(process.env.LOCALAPPDATA ?? app.getPath("temp"), "MotionBrief", "Cache");
 }
 
 function devOnly<T>(value: T) {

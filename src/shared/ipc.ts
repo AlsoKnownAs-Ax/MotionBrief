@@ -25,6 +25,12 @@ export const CORE_APP_VERSION_FLAG = "--app-version=";
 /** Command-line flag main passes the app's per-user data folder to the core process with. */
 export const CORE_APP_DATA_FLAG = "--app-data=";
 
+/** Command-line flag main passes the default Projects folder (Documents/MotionBrief) with. */
+export const CORE_PROJECTS_DIR_FLAG = "--projects-dir=";
+
+/** Command-line flag main passes the app's cache folder with: local, never roaming. */
+export const CORE_CACHE_DIR_FLAG = "--cache-dir=";
+
 /**
  * core → main over the core's parent port: the Claude connection, which main keeps with
  * Electron safeStorage (the OS keychain), since the core can't use Electron. Main answers

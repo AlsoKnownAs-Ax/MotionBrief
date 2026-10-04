@@ -324,6 +324,18 @@ export function createTranscriptionModel({ appDataDir, pin, disk }: Transcriptio
       await loaded;
       yield* store.watch(signal);
     },
+    /** The installed model once it is ready, however long that takes; `undefined` if the signal aborts first. */
+    whenReady: async (signal: AbortSignal) => {
+      await loaded;
+
+      for await (const { state } of store.watch(signal)) {
+        if (state === "ready") {
+          return { path: modelFile, sha256: pin.sha256 };
+        }
+      }
+
+      return undefined;
+    },
     start: async () => {
       await loaded;
 
