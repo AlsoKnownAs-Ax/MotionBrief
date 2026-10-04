@@ -332,6 +332,8 @@ export const TranscriptWordSchema = z.object({
   /** Seconds into the Voiceover. */
   start: z.number().nonnegative(),
   end: z.number().nonnegative(),
+  /** What whisper-cli heard, once the creator fixed the word's text; absent while the word is as heard. */
+  heard: z.string().optional(),
 });
 
 /** A Voiceover's words with the time each is spoken; Project-level, shared by every Format. */
@@ -414,6 +416,20 @@ const PROJECT_ERRORS = {
   NAME_TAKEN: { data: z.object({ name: z.string() }) },
   UNKNOWN_PROJECT,
   FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+  /** The folder's `project.json` isn't a Project document this app reads. */
+  INVALID_DOCUMENT: { data: z.object({ path: z.string(), message: z.string() }) },
+};
+
+/** Why a word fix was refused. */
+const WORD_FIX_ERRORS = {
+  UNKNOWN_PROJECT,
+  /** Words can be fixed once the Transcript is saved, not while it is transcribed. */
+  TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+  /** `index` is past the end of the Transcript's `words`. */
+  UNKNOWN_WORD: { data: z.object({ index: z.number(), words: z.number() }) },
+  /** A word's text can't be empty. */
+  INVALID_WORD: { data: z.object({ text: z.string() }) },
+  FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
 };
 
 export const coreContract = {
@@ -551,6 +567,11 @@ export const coreContract = {
         }),
       )
       .output(ProjectSchema),
+    /**
+     * Opens a Project folder and locks it. A Project without a saved Transcript starts transcribing; one with a
+     * Transcript, word fixes and all, is never transcribed again.
+     */
+    open: oc.errors(PROJECT_ERRORS).input(z.object({ path: z.string() })).output(ProjectSchema),
     /** Changes an open Project's choices. A new name renames its folder; a new language transcribes it again. */
     update: oc
       .errors(PROJECT_ERRORS)
@@ -565,6 +586,14 @@ export const coreContract = {
       .output(ProjectSchema),
     /** Streams the Transcript as it is transcribed, then the saved Transcript. */
     transcription: oc.errors({ UNKNOWN_PROJECT }).input(ProjectIdInput).output(eventIterator(TranscriptionStatusSchema)),
+    /**
+     * Fixes a misheard word: changes the text of the word at `index` in the saved Transcript and keeps its timing.
+     * The Transcript is Project-level, so a fix never makes a Version. Answers with the word as saved.
+     */
+    fixWord: oc
+      .errors(WORD_FIX_ERRORS)
+      .input(ProjectIdInput.extend({ index: z.number().int().nonnegative(), text: z.string() }))
+      .output(TranscriptWordSchema),
     /** Transcribes again after a failure. */
     retryTranscription: oc.errors({ UNKNOWN_PROJECT }).input(ProjectIdInput),
     /** Stops working on the Project and releases its lock. */
