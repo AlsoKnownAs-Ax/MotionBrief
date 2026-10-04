@@ -969,7 +969,7 @@ function cents(dollars: number): number {
 }
 
 /** Runs `work` on every item, at most `limit` at once, and resolves with the results in order. */
-async function inParallel<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+export async function inParallel<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
   const results: R[] = [];
   let next = 0;
   const worker = async () => {

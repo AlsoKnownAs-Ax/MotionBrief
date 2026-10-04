@@ -42,15 +42,28 @@ const VideoContentSchema = z.object({
   frameContractVersion: z.string(),
 });
 
+/** What the creator asked of a Revision and what it did; the next Revision's agent reads these as the video's history. */
+export const RevisionRecordSchema = z.object({
+  request: z.string(),
+  /** The Scenes the request was scoped to; none for the whole video. */
+  scope: z.array(z.string()),
+  /** The agent's one-line summary of its change. */
+  summary: z.string(),
+  /** Scenes whose instruction couldn't be applied, so they kept their previous code. */
+  notApplied: z.array(z.string()),
+});
+
 export const VersionSchema = VideoContentSchema.extend({
   /** Counted from 1, in the order Versions were made. */
   version: z.number().int().positive(),
   createdAt: z.iso.datetime(),
   /**
    * What made it: a first generation; the re-check after a frame major update, which flagged units that no longer
-   * pass; or a Retry of flagged units.
+   * pass; a Retry of flagged units; or a Revision.
    */
-  origin: z.enum(["generation", "frame-update", "retry"]),
+  origin: z.enum(["generation", "frame-update", "retry", "revision"]),
+  /** Set on a Version a Revision made. */
+  revision: RevisionRecordSchema.optional(),
   /** The run that saved it, so its record, left behind by a crash just after, is never saved again. */
   runId: z.string().optional(),
 });
@@ -73,6 +86,7 @@ const RECOVERED_REASON = "MotionBrief closed before this Scene was finished.";
 export type Flag = z.infer<typeof FlagSchema>;
 export type VideoContent = z.infer<typeof VideoContentSchema>;
 export type Version = z.infer<typeof VersionSchema>;
+export type RevisionRecord = z.infer<typeof RevisionRecordSchema>;
 export type GenerationRecord = z.infer<typeof GenerationRecordSchema>;
 
 /** Stores a unit's Scene code under the hash of its file, once: Versions with the same code share it. */

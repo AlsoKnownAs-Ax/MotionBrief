@@ -7,6 +7,7 @@ import { cn } from "@renderer/lib/utils";
 import type { Preview, SceneStatus, TimelineScene } from "../../../contract";
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, withNote } from "./labels";
 import { formatTime, usePlayback } from "./playback";
+import { useRevision } from "./revision";
 
 /** The largest box of the video's aspect ratio that fits the stage. */
 function useFittedSize(width: number, height: number) {
@@ -115,13 +116,29 @@ type ScrubberProps = { scenes: TimelineScene[]; duration: number; time: number; 
 
 function Scrubber({ scenes, duration, time, onSeek }: ScrubberProps) {
   const percent = (seconds: number) => `${(seconds / Math.max(duration, 0.001)) * 100}%`;
+  const selection = useRevision((state) => state.selection);
+  const toggleScene = useRevision((state) => state.toggleScene);
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     const bar = event.currentTarget;
-    const seekTo = (clientX: number) => {
+    const timeAt = (clientX: number) => {
       const { left, width } = bar.getBoundingClientRect();
-      onSeek(((clientX - left) / width) * duration);
+
+      return ((clientX - left) / width) * duration;
     };
+    const seekTo = (clientX: number) => onSeek(timeAt(clientX));
+
+    // Shift or Ctrl selects the Scene under the pointer for a Revision instead of seeking.
+    if (event.shiftKey || event.ctrlKey || event.metaKey) {
+      const at = timeAt(event.clientX);
+      const scene = scenes.find(({ start, end }) => at >= start && at < end);
+
+      if (scene) {
+        toggleScene(scene.id, true);
+      }
+
+      return;
+    }
 
     bar.setPointerCapture(event.pointerId);
     seekTo(event.clientX);
@@ -159,10 +176,11 @@ function Scrubber({ scenes, duration, time, onSeek }: ScrubberProps) {
       {scenes.map((scene) => (
         <div
           key={scene.id}
-          title={withNote(`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${SCENE_STATUS[scene.status].label}`, scene)}
+          title={`${withNote(`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${SCENE_STATUS[scene.status].label}`, scene)}. Shift-click to select it for a Revision.`}
           className={cn(
             "absolute top-[9px] h-1.5 rounded-[2px] transition-[top,height] group-hover:top-2 group-hover:h-2",
             SEGMENT_COLORS[scene.status],
+            selection.includes(scene.id) && "shadow-[0_0_0_2px_var(--primary)]",
           )}
           style={{ left: percent(scene.start), width: `calc(${percent(scene.end - scene.start)} - 2px)` }}
         />

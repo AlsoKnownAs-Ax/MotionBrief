@@ -1,6 +1,8 @@
-import { HistoryIcon, MessageSquareIcon, PaletteIcon, type LucideIcon } from "lucide-react";
+import { HistoryIcon, PaletteIcon, type LucideIcon } from "lucide-react";
 import { Tabs } from "radix-ui";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { Chat } from "./chat";
+import { useRevision } from "./revision";
 
 const TABS = [
   { id: "chat", label: "Chat" },
@@ -10,8 +12,18 @@ const TABS = [
 
 /** The right panel: Chat, Style and Versions. */
 export function SidePanel({ width }: { width: number }) {
+  const [tab, setTab] = useState("chat");
+  const chatFocus = useRevision((state) => state.chatFocus);
+  const [seenFocus, setSeenFocus] = useState(chatFocus);
+
+  // Revise… brings the chat forward.
+  if (chatFocus !== seenFocus) {
+    setSeenFocus(chatFocus);
+    setTab("chat");
+  }
+
   return (
-    <Tabs.Root defaultValue="chat" className="flex min-h-0 shrink-0 flex-col gap-3 p-3" style={{ width }}>
+    <Tabs.Root value={tab} onValueChange={setTab} className="flex min-h-0 shrink-0 flex-col gap-3 p-3" style={{ width }}>
       <Tabs.List aria-label="Panel" className="flex gap-0.5 rounded-pill border border-hairline-soft bg-surface-1 p-[3px]">
         {TABS.map(({ id, label }) => (
           <Tabs.Trigger
@@ -24,9 +36,7 @@ export function SidePanel({ width }: { width: number }) {
         ))}
       </Tabs.List>
       <Tabs.Content value="chat" className="flex min-h-0 flex-1 outline-none">
-        <EmptyState icon={MessageSquareIcon} title="No messages yet">
-          Revisions to this video, and what the agent says about them, show here.
-        </EmptyState>
+        <Chat />
       </Tabs.Content>
       <Tabs.Content value="style" className="flex min-h-0 flex-1 outline-none">
         <EmptyState icon={PaletteIcon} title="Blueprint">

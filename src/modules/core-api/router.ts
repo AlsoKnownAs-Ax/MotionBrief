@@ -7,6 +7,7 @@ import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
 import type { Previews, StillError, Stills, ThumbnailsError } from "../preview";
+import type { ReviseError, Revisions } from "../revision";
 import { validateStoryboard } from "../storyboard";
 import { BUNDLED_PALETTES, bundledFonts, checkContrast, FONT_PAIRINGS, presetSample, type PresetStore, type PresetStoreError } from "../style";
 import type { System } from "../system";
@@ -28,6 +29,7 @@ export type CoreRouterDeps = {
   presets: PresetStore;
   stills: Stills;
   generation: Generation;
+  revisions: Revisions;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -49,6 +51,7 @@ export function createCoreRouter({
   presets,
   stills,
   generation,
+  revisions,
 }: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
@@ -212,6 +215,11 @@ export function createCoreRouter({
         dataOrThrow(await generation.start(input));
       }),
       generation: api.video.generation.handler(async ({ input, signal }) => dataOrThrow(await generation.watch(input, signal))),
+      revise: api.video.revise.handler(async ({ input: { projectId, format, ...request } }) => {
+        dataOrThrow(await revisions.start({ projectId, format }, request));
+      }),
+      revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
+      stopRevision: api.video.stopRevision.handler(({ input }) => revisions.stop(input)),
       stop: api.video.stop.handler(async ({ input }) => {
         dataOrThrow(await generation.stop(input));
       }),
@@ -236,7 +244,9 @@ function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null
   return result.data;
 }
 
-type CodedResult = { data: unknown; error: null } | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError };
+type CodedResult =
+  | { data: unknown; error: null }
+  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
 function stillUnavailable(error: StillError): CheckerUnavailable {

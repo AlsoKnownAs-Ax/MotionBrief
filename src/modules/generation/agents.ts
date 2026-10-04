@@ -112,6 +112,8 @@ type UnitRun = AgentRun & {
   review: ReviewCode;
   /** The unit is being written (`attempts` handed in so far) or checked. */
   onProgress: (status: "writing" | "checking", attempts: number) => void;
+  /** Said after the unit's brief in the first message, such as what a Revision asks of it. */
+  request?: string;
 };
 
 /**
@@ -121,7 +123,7 @@ type UnitRun = AgentRun & {
  * and repaired at most once; a repair that fails the checks is reverted to the passing code, which then
  * carries the reviewer's note.
  */
-export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, review, onProgress, ...run }: UnitRun): Promise<UnitOutcome> {
+export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, review, onProgress, request, ...run }: UnitRun): Promise<UnitOutcome> {
   let submitted: UnitCode | undefined;
   const submit = defineHostTool({
     name: SCENE_CODE_TOOL,
@@ -189,7 +191,7 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
   }
 
   const outcome = await withSession(run, options, async (session): Promise<Result<UnitOutcome, never>> => {
-    let message = unitMessage({ storyboard, preset, unit, transcript });
+    let message = request ? `${unitMessage({ storyboard, preset, unit, transcript })}\n\n${request}` : unitMessage({ storyboard, preset, unit, transcript });
     let reason = "";
 
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
@@ -247,7 +249,7 @@ function summary(findings: CheckFinding[]): string {
   return findings.map(findingLine).join("\n");
 }
 
-type SessionSetup = { label: string; systemPrompt: string; hostTools: HostTool[] };
+export type SessionSetup = { label: string; systemPrompt: string; hostTools: HostTool[] };
 
 /** Runs `work` in a fresh session with a workspace folder of its own, closing both afterwards. */
 export async function withSession<T, E>(
@@ -282,8 +284,18 @@ export async function withSession<T, E>(
 
 /** Sends one message and waits for the agent's turn to end; a turn that doesn't complete answers with its error. */
 export async function runTurn(session: Session, message: string, signal?: AbortSignal): Promise<ConnectorError | undefined> {
+  const { error } = await sendTurn(session, message, signal);
+
+  return error ?? undefined;
+}
+
+/**
+ * Sends one message and resolves with the text the agent's turn ended on, or the error it ended with. A stopped run
+ * starts no turn.
+ */
+export async function sendTurn(session: Session, message: string, signal?: AbortSignal): Promise<Result<string, ConnectorError>> {
   if (signal?.aborted) {
-    return { code: "AGENT_UNAVAILABLE", message: "The run was stopped" };
+    return { data: null, error: { code: "AGENT_UNAVAILABLE", message: "The run was stopped" } };
   }
 
   for await (const event of session.sendTurn(message)) {
@@ -292,11 +304,11 @@ export async function runTurn(session: Session, message: string, signal?: AbortS
     }
 
     if (event.status === "completed") {
-      return undefined;
+      return { data: event.text ?? "", error: null };
     }
 
-    return event.error ?? { code: "SERVICE_ERROR", message: `The agent's turn ended ${event.status}` };
+    return { data: null, error: event.error ?? { code: "SERVICE_ERROR", message: `The agent's turn ended ${event.status}` } };
   }
 
-  return { code: "AGENT_UNAVAILABLE", message: "The agent's turn ended without completing" };
+  return { data: null, error: { code: "AGENT_UNAVAILABLE", message: "The agent's turn ended without completing" } };
 }
