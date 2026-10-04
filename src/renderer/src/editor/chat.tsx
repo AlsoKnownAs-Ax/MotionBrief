@@ -1,4 +1,4 @@
-import { ArrowUpIcon, MessageSquareIcon, SquareIcon, XIcon } from "lucide-react";
+import { ArrowUpIcon, ClockIcon, MessageSquareIcon, PlayIcon, SquareIcon, XIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
@@ -8,7 +8,7 @@ import type { RevisionStatus, TimelineScene } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_TYPE_LABELS, sceneName } from "./labels";
 import { useOpenVideo } from "./open-video";
-import { isRevising, nameOf, useRevision, type ChatMessage } from "./revision";
+import { chatLines, isRevising, nameOf, queuedCount, useRevision, type ChatMessage } from "./revision";
 
 /** The Chat tab: flagged Scenes, the conversation with the Revision agent, and the composer scoped by the selection. */
 export function Chat() {
@@ -17,13 +17,16 @@ export function Chat() {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       <Thread scenes={scenes} />
+      <QueueBar />
       <Composer scenes={scenes} />
     </div>
   );
 }
 
 function Thread({ scenes }: { scenes: TimelineScene[] }) {
-  const messages = useRevision((state) => state.messages);
+  const entries = useRevision((state) => state.chat?.entries);
+  const notes = useRevision((state) => state.notes);
+  const messages = [...chatLines(entries ?? [], scenes), ...notes];
   const status = useRevision((state) => state.status);
   const generating = useGeneration((state) => isGenerating(state.status));
   const flagged = scenes.filter(({ status: sceneStatus }) => !generating && sceneStatus === "fallback");
@@ -150,6 +153,12 @@ const MESSAGES = {
         </span>
       ) : null}
       {message.text}
+      {message.isQueued ? (
+        <span className="mt-1.5 flex items-center gap-[5px] text-app-xs text-ink-muted">
+          <ClockIcon className="size-3" aria-hidden="true" />
+          Queued
+        </span>
+      ) : null}
     </div>
   ),
   agent: ({ message }) => (
@@ -221,14 +230,47 @@ function ScopeChips({ scenes }: { scenes: TimelineScene[] }) {
   );
 }
 
-/** Why the composer can't send right now, first match wins; none means it can. */
-const BLOCKED = [
-  { when: ({ isStored }: ComposerState) => !isStored, hint: "The fixture Project can't be revised" },
-  { when: ({ generating }: ComposerState) => generating, hint: "Revisions open once the video is generated" },
-  { when: ({ working }: ComposerState) => working, hint: "One Revision at a time; this one is running" },
+/** The requests waiting their turn, and Resume queue once a quit, crash or Stop paused them. */
+function QueueBar() {
+  const queued = useRevision((state) => queuedCount(state.chat));
+  const isPaused = useRevision((state) => state.chat?.isPaused ?? false);
+  const saveError = useRevision((state) => state.chat?.saveError);
+  const resumeQueue = useRevision((state) => state.resumeQueue);
+
+  if (queued === 0 && !saveError) {
+    return null;
+  }
+
+  return (
+    <div role="status" className="flex shrink-0 items-center gap-2 rounded-xl border border-hairline py-1.5 pr-1.5 pl-3 text-ink-muted">
+      <ClockIcon className="size-3.5" aria-hidden="true" />
+      <span className="flex-1 text-app-sm text-ink">
+        {queued} queued
+        {isPaused ? <span className="text-ink-muted"> · paused</span> : null}
+        {saveError ? (
+          <span role="alert" className="block text-app-xs text-status-fallback-ink">
+            The chat couldn&rsquo;t be saved to {saveError.path || "the Project folder"}. Resume queue tries again.
+          </span>
+        ) : null}
+      </span>
+      {isPaused ? (
+        <Button size="sm" onClick={resumeQueue}>
+          <PlayIcon />
+          Resume queue
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+/** What the composer says under the request, first match wins: why it can't send, or where a request goes. */
+const HINTS = [
+  { when: ({ isStored }: ComposerState) => !isStored, hint: "The fixture Project can't be revised", isBlocked: true },
+  { when: ({ isPaused }: ComposerState) => isPaused, hint: "Queues until Resume queue", isBlocked: false },
+  { when: ({ isBusy }: ComposerState) => isBusy, hint: "Queues behind the current job", isBlocked: false },
 ];
 
-type ComposerState = { isStored: boolean; generating: boolean; working: boolean };
+type ComposerState = { isStored: boolean; isBusy: boolean; isPaused: boolean };
 
 function Composer({ scenes }: { scenes: TimelineScene[] }) {
   const [text, setText] = useState("");
@@ -237,11 +279,12 @@ function Composer({ scenes }: { scenes: TimelineScene[] }) {
   const stop = useRevision((state) => state.stop);
   const chatFocus = useRevision((state) => state.chatFocus);
   const working = useRevision((state) => isRevising(state.status));
+  const isPaused = useRevision((state) => state.chat?.isPaused ?? false);
   const generating = useGeneration((state) => isGenerating(state.status));
   const isStored = useOpenVideo((state) => state.isStored);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const blocked = BLOCKED.find(({ when }) => when({ isStored, generating, working }));
-  const canSend = !blocked && !isSending && text.trim().length > 0;
+  const hint = HINTS.find(({ when }) => when({ isStored, isBusy: working || generating, isPaused }));
+  const canSend = !hint?.isBlocked && !isSending && text.trim().length > 0;
 
   useEffect(() => {
     if (chatFocus > 0) {
@@ -284,16 +327,15 @@ function Composer({ scenes }: { scenes: TimelineScene[] }) {
         onKeyDown={onKeyDown}
       />
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-app-xs text-ink-muted">{blocked?.hint ?? "Enter to send · Shift+Enter for a new line"}</span>
+        <span className="min-w-0 flex-1 truncate text-app-xs text-ink-muted">{hint?.hint ?? "Enter to send · Shift+Enter for a new line"}</span>
         {working ? (
           <Button size="icon-sm" aria-label="Stop the Revision" title="Stop the Revision" onClick={stop}>
             <SquareIcon className="size-3 fill-current" />
           </Button>
-        ) : (
-          <Button variant="primary" size="icon-sm" aria-label="Send (Enter)" title="Send (Enter)" disabled={!canSend} onClick={() => void submit()}>
-            <ArrowUpIcon />
-          </Button>
-        )}
+        ) : null}
+        <Button variant="primary" size="icon-sm" aria-label="Send (Enter)" title="Send (Enter)" disabled={!canSend} onClick={() => void submit()}>
+          <ArrowUpIcon />
+        </Button>
       </div>
     </div>
   );

@@ -1,0 +1,2 @@
+.compare { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 64px; }
+.side { display: flex; flex-direction: column; gap: 20px; width: 760px; padding: 36px 44px; box-sizing: border-box; }

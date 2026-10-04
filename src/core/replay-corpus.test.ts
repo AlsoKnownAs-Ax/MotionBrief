@@ -1,68 +1,83 @@
-import { readdir, readFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { StoryboardRulesSchema, StoryboardTranscriptSchema, type UnitCode } from "../contract";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import type { StylePreset } from "../contract";
 import { FRAME_CONTRACT_VERSION } from "../modules/frame";
-import { bundledPreset } from "../modules/style";
-import { BROWSER_TIMEOUT_MS, connect } from "./test-support/checker";
+import { applyPatch, type Patch } from "../modules/revision";
+import type { Storyboard } from "../modules/storyboard";
+import { bundledPreset, storyboardRules } from "../modules/style";
+import { BROWSER_TIMEOUT_MS } from "./test-support/checker";
+import { corpusEntries, frameMajor, PRESETS, replayRun, type ReplayedRun, type SavedVersion } from "./test-support/corpus";
 
-const FIXTURES = join(import.meta.dirname, "fixtures");
+const entries = await corpusEntries();
+const current = entries.filter(({ entry }) => frameMajor(entry.frameContractVersion) === frameMajor(FRAME_CONTRACT_VERSION));
 
-/**
- * The tier-2 replay corpus: committed agent outputs and hand-written fixtures, each recording the frame contract its
- * units were written against. Paths are relative to `fixtures/`; a unit's path names its `.css`, `.html` and `.js`.
- */
-const CorpusEntrySchema = z.object({
-  description: z.string(),
-  frameContractVersion: z.string(),
-  preset: z.enum(["blueprint", "whiteboard", "sketchbook", "terminal"]),
-  rules: StoryboardRulesSchema,
-  storyboard: z.string(),
-  transcript: z.string(),
-  units: z.record(z.string(), z.string()),
+// A run checks every unit in the pinned chrome-headless-shell and draws its review stills, each taking seconds.
+const RUN_TIMEOUT_MS = 600_000;
+
+let root: string;
+
+beforeAll(async () => {
+  root = await mkdtemp(join(tmpdir(), "motionbrief-replay-"));
 });
 
-const names = (await readdir(join(FIXTURES, "corpus"))).filter((name) => name.endsWith(".json"));
-const entries = await Promise.all(
-  names.map(async (name) => ({ name, entry: CorpusEntrySchema.parse(JSON.parse(await readFile(join(FIXTURES, "corpus", name), "utf8"))) })),
-);
+afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 
-function major(version: string) {
-  return version.split(".")[0];
-}
+/** The saved Preset with another bundled Preset's Palette and typography: its Motion, treatments and Transitions stay. */
+function swapped(preset: StylePreset, into: (typeof PRESETS)[number]): StylePreset {
+  const { palette, typography } = bundledPreset(into);
 
-async function json(path: string): Promise<unknown> {
-  return JSON.parse(await readFile(join(FIXTURES, path), "utf8"));
-}
-
-async function unitCode(path: string): Promise<UnitCode> {
-  const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(FIXTURES, `${path}.${part}`), "utf8")));
-
-  return { css: css ?? "", html: html ?? "", js: js ?? "" };
+  return { ...preset, palette, typography };
 }
 
 /**
- * Frame minor and patch releases must keep old units passing lint, check and the contract (ADR 0004): every unit
- * written against this frame major still passes. Units from older majors are re-checked when their Project opens.
+ * The tier-2 replay: committed agent outputs and hand-written fixtures re-run at zero cost through the core API with the
+ * replay connector. Frame minor and patch releases must keep old units passing lint, check and the contract (ADR
+ * 0004): every run written against this frame major still generates with no retries and no fallbacks, and each of its
+ * Revisions rebuilds exactly the units it rebuilt then. Runs from older majors are re-checked when their Project opens.
  */
 describe("the replay corpus", () => {
   it("has entries written against this frame major", () => {
-    expect(entries.filter(({ entry }) => major(entry.frameContractVersion) === major(FRAME_CONTRACT_VERSION))).not.toEqual([]);
+    expect(current).not.toEqual([]);
   });
 
-  describe.each(entries.filter(({ entry }) => major(entry.frameContractVersion) === major(FRAME_CONTRACT_VERSION)))("$name", ({ entry }) => {
-    it(
-      "still passes every check in this frame",
-      async () => {
-        const code = Object.fromEntries(await Promise.all(Object.entries(entry.units).map(async ([unit, path]) => [unit, await unitCode(path)] as const)));
-        const report = await connect().checker.check({
-          storyboard: await json(entry.storyboard),
-          transcript: StoryboardTranscriptSchema.parse(await json(entry.transcript)),
-          rules: entry.rules,
-          preset: bundledPreset(entry.preset),
-          code,
-        });
+  describe.each(current)("$name", ({ entry }) => {
+    let run: ReplayedRun;
+    let last: SavedVersion;
+
+    beforeAll(async () => {
+      run = await replayRun(entry, root);
+      last = run.versions.at(-1)!;
+    }, RUN_TIMEOUT_MS);
+
+    it("generates every unit from its recorded code, each passing the Checker on the first try", () => {
+      const [first] = run.versions;
+
+      expect(run.generation).toMatchObject({ state: "done", version: 1 });
+      expect(run.written[0]).toEqual(Object.keys(run.corpus.code).sort());
+      expect(run.generation.units.filter(({ attempts }) => attempts !== 1)).toEqual([]);
+      expect(first).toMatchObject({ number: 1, origin: "generation", flags: [], storyboard: run.corpus.storyboard, code: run.corpus.code });
+    });
+
+    it.each(entry.revisions.map((revision, index) => ({ ...revision, index })))("applies Revision $index: $request", ({ index, units }) => {
+      const before = run.versions[index]!;
+      const after = run.versions[index + 1];
+      const recorded = run.corpus.revisions[index]!;
+
+      expect(run.revisions[index]).toMatchObject({ state: "done", version: index + 2 });
+      expect(run.written[index + 1]).toEqual(Object.keys(units).sort());
+      expect(after).toMatchObject({ origin: "revision", flags: [], storyboard: applyPatch(before.storyboard as Storyboard, recorded.patch as Patch) });
+      expect(after?.code).toEqual(Object.fromEntries(Object.keys(after?.code ?? {}).map((unit) => [unit, recorded.code[unit] ?? before.code[unit]])));
+    });
+
+    // Scene code uses the frame's tokens only, so a Palette and typography swap re-renders the same code, which still passes.
+    it.each(PRESETS.filter((preset) => preset !== entry.preset))(
+      "still passes every check with %s's Palette and typography",
+      async (into) => {
+        const preset = swapped(last.preset, into);
+        const rules = storyboardRules(preset, { format: run.video.format, captions: last.captions });
+        const report = await run.core.checker.check({ storyboard: last.storyboard, transcript: run.corpus.transcript, rules, preset, code: last.code });
 
         expect(report.findings).toEqual([]);
       },

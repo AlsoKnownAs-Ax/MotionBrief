@@ -22,6 +22,8 @@
     "typecheck": "tsc -p tsconfig.node.json && tsc -p tsconfig.preload.json && tsc -p tsconfig.web.json && tsc -p tsconfig.scripts.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "contact-sheet": "vitest run --config vitest.run.config.ts contact-sheet",
+    "spike-check": "vitest run --config vitest.run.config.ts spike-check",
     "postinstall": "node scripts/deps/postinstall.ts",
     "deps:fetch": "node scripts/deps/postinstall.ts",
     "deps:pin": "node scripts/deps/pin.ts",

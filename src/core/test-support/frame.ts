@@ -17,18 +17,18 @@ export type OpenFrame = { page: FramePage; dir: string };
 
 /**
  * Assembles a Storyboard's units in the frame, in a Style Preset, and opens the page; units without code are
- * fallback Scenes. Captions are off unless asked for.
+ * fallback Scenes. Captions are off unless asked for; `scale` draws smaller screenshots.
  */
 export async function openFrame(
   storyboard: Storyboard,
   transcript: StoryboardTranscript,
   code: Record<string, UnitCode>,
   preset: StylePreset,
-  { captions = false }: { captions?: boolean } = {},
+  { captions = false, scale }: { captions?: boolean; scale?: number } = {},
 ): Promise<OpenFrame> {
   const dir = await mkdtemp(join(tmpdir(), "motionbrief-frame-"));
   const { width, height } = await assemble({ dir, storyboard, transcript, preset, code, captions });
-  const { data: page, error } = await openFramePage({ dir, chromePath: chromeHeadlessShellPath(), width, height });
+  const { data: page, error } = await openFramePage({ dir, chromePath: chromeHeadlessShellPath(), width, height, scale });
 
   if (error) {
     throw new Error(error.message);
