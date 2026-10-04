@@ -1,4 +1,4 @@
-import type { CaptionStyle, Format, StoryboardTranscript, StylePreset } from "../../contract";
+import type { CaptionStyle, Format, Motion, StoryboardTranscript, StylePreset } from "../../contract";
 import { FRAME_SIZES } from "../frame";
 
 /** A word of a caption line, timed in seconds on the Voiceover: current from `start` until `end`. */
@@ -35,7 +35,7 @@ export function captionLines(transcript: StoryboardTranscript, format: Format): 
   const groups = transcript.words.reduce<{ text: string; start: number }[][]>((lines, word, index) => {
     const line = lines.at(-1);
     const previous = transcript.words[index - 1];
-    const length = line ? line.reduce((sum, { text }) => sum + text.length + 1, word.text.length) : 0;
+    const length = (line ?? []).reduce((sum, { text }) => sum + text.length + 1, word.text.length);
 
     if (!line || (previous && CLAUSE_END.test(previous.text)) || length > maxChars) {
       return [...lines, [word]];
@@ -97,6 +97,9 @@ function captionsCss(format: Format, { palette, typography, treatments }: StyleP
 .mb-caption-pop .mb-caption-word { opacity: 0; }`;
 }
 
+/** How a word pops in: with a little spring, except in stepped Motion, which snaps. */
+const POP_EASE = { smooth: "back.out(2)", springy: "back.out(2)", snappy: "back.out(2)", stepped: "steps(2)" } satisfies Record<Motion["character"], string>;
+
 /** How the current word looks: in the accent, or on it when the Palette keeps the accent to fills, as it is too faint to read as text. */
 function currentWord({ palette }: StylePreset): { on: Record<string, string>; off: Record<string, string> } {
   const { ink, accent } = palette.colors;
@@ -132,8 +135,7 @@ function captionsJs(lines: CaptionLine[], preset: StylePreset): string {
   });`;
   }
 
-  // Stepped Motion snaps rather than springs.
-  const ease = preset.motion.character === "stepped" ? "steps(2)" : "back.out(2)";
+  const ease = POP_EASE[preset.motion.character];
 
   return `  ${timing}.forEach(function (words, line) {
     words.forEach(function (time, at) {

@@ -21,6 +21,8 @@ type OpenVideo = {
   wordFixes: Record<number, string>;
   /** Why the last word fix couldn't be saved. */
   fixError?: string;
+  /** Rebuilds the preview from the saved Transcript once a word fix is saved, so its Captions show the fix. */
+  onWordFixed?: () => void;
   /** Opens a video; one still being generated has no preview until its Storyboard is valid. */
   open: (project: { id: string; name: string; isStored?: boolean }, preview?: Preview) => void;
   /** Shows a newer preview of the same video, such as one with more of its units written, keeping the word fixes. */
@@ -58,6 +60,7 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
         preview,
         wordFixes: {},
         fixError: undefined,
+        onWordFixed: undefined,
       });
     },
     showPreview: (preview) => set({ preview }),
@@ -81,6 +84,7 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
       }
 
       show(index, saved.text);
+      get().onWordFixed?.();
     },
   };
 });

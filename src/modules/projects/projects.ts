@@ -25,7 +25,7 @@ import { folderKey, samePath } from "./paths";
 import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
-import { readVideo, saveVideo, type VideoDocumentError } from "./video";
+import { readVideo, saveVideo, type VideoDocument, type VideoDocumentError } from "./video";
 import { latestVersion, readVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type StoredVersion, type Version } from "./videos";
 
 /** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
@@ -742,7 +742,11 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return enqueue(project, async (): Promise<Result<StoredVersion | undefined, ProjectsError>> => {
       const number = await latestVersion(project.dir, format);
 
-      return number === undefined ? { data: undefined, error: null } : readVersion(project.dir, format, number);
+      if (number === undefined) {
+        return { data: undefined, error: null };
+      }
+
+      return readVersion(project.dir, format, number);
     });
   }
 
@@ -810,6 +814,28 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   }
 
   function rememberExportPath(projectId: string, format: Format, path: string): Promise<Result<null, ProjectsError | VideoDocumentError>> {
+    return changeVideo(projectId, format, { lastExportPath: path });
+  }
+
+  /** Whether the creator turned the video's Captions on or off; absent until they chose. */
+  async function captionsChoice(projectId: string, format: Format): Promise<Result<boolean | undefined, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { data: video, error } = await enqueue(project, () => readVideo(project.dir, format));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: video.captions, error: null };
+  }
+
+  /** Saves a change to the video's document, after the folder's earlier changes. */
+  function changeVideo(projectId: string, format: Format, change: VideoDocument): Promise<Result<null, ProjectsError | VideoDocumentError>> {
     const project = open.get(projectId);
 
     if (!project) {
@@ -823,7 +849,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
         return { data: null, error };
       }
 
-      const { error: saveError } = await saveVideo(project.dir, format, { ...video, lastExportPath: path });
+      const { error: saveError } = await saveVideo(project.dir, format, { ...video, ...change });
 
       if (saveError) {
         return { data: null, error: saveError };
@@ -896,6 +922,9 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
     lastExportPath,
     rememberExportPath,
+    captionsChoice,
+    /** Saves whether the video shows Captions. */
+    chooseCaptions: (projectId: string, format: Format, captions: boolean) => changeVideo(projectId, format, { captions }),
     close,
     disconnect,
     closeAll,

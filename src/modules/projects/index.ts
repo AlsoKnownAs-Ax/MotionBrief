@@ -10,4 +10,5 @@ export {
   type Trash,
 } from "./projects";
 export { createStatusStore } from "./status";
+export type { VideoDocumentError } from "./video";
 export type { Flag, GenerationRecord, StoredVersion, Version, VideoContent } from "./videos";

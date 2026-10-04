@@ -183,6 +183,25 @@ describe("the 9:16 version of a Project", () => {
     expect(await pageOf(tallVideo)).toMatch(/<span id="mb-caption-\d+-\d+" class="mb-caption-word">five<\/span>/);
   });
 
+  it("turns Captions on or off per video, saved with it and re-rendered with no agent run", async () => {
+    const asked = replay.asked.length;
+
+    // The 16:9 Storyboard was written with Captions off; turned on, its longer copy is still drawn.
+    const on = await core.video.setCaptions({ ...wide, captions: true });
+    const reopened = await core.video.open(wide);
+    const saved = JSON.parse(await readFile(join(project.path, "horizontal", "video.json"), "utf8")) as { captions?: boolean };
+    const off = await core.video.setCaptions({ ...wide, captions: false });
+
+    expect(on).toMatchObject({ version: 1, captions: true });
+    expect(await pageOf(on)).toContain('class="clip mb-caption mb-caption-highlight"');
+    expect(reopened).toMatchObject({ captions: true, preview: { id: on.preview?.id } });
+    expect(saved.captions).toBe(true);
+    expect(off).toMatchObject({ version: 1, captions: false });
+    expect(await pageOf(off)).not.toContain("mb-caption");
+    expect(replay.asked).toHaveLength(asked);
+    expect(await savedVersions(project, "horizontal")).toHaveLength(1);
+  });
+
   it("can't be generated twice", async () => {
     await expect(core.video.generate(tall)).rejects.toMatchObject({ code: "ALREADY_GENERATED", data: { version: 1 } });
   });

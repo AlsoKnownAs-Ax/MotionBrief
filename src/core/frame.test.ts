@@ -49,7 +49,7 @@ describe("the frame, in a headless browser", () => {
       frame = await openFrame(storyboard, transcript, { s01: await unitCode("s01"), s02: await unitCode("s02") });
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     const page = () => frame!.page;
 
@@ -240,7 +240,7 @@ describe("the frame, in a headless browser", () => {
       frame = await openFrame(storyboard, transcript, {});
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     const page = () => frame!.page;
 
@@ -285,7 +285,7 @@ describe("the frame, in a headless browser", () => {
       frame = await openFrame(horizontal, longTranscript, {});
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     const page = () => frame!.page;
 
@@ -334,7 +334,7 @@ describe("the frame, in a headless browser", () => {
       frame = await openFrame(storyboard, later, { s01: await unitCode("s01"), s02: await unitCode("s02") });
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     it("are injected into at(id) at assembly, so the same Scene code lands on the new word", async () => {
       expect(await frame!.page.evaluate<number>(`MB.scene("s01").at("s01-browser")`)).toBe(0.95);
@@ -356,7 +356,7 @@ describe("the frame, in a headless browser", () => {
       frame = await openFrame(vertical, longTranscript, {});
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     it("keeps Scene content above the Captions area, the bottom 420 px of the frame", async () => {
       await frame!.page.seek(2);

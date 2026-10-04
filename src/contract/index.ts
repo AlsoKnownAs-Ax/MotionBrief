@@ -225,6 +225,11 @@ export const VideoSourceSchema = z.object({
   pending: z.record(z.string(), UnitWorkSchema).optional(),
   /** The Voiceover file, played as the video's audio track. Absent, the video plays silent. */
   voiceover: z.string().optional(),
+  /**
+   * Whether Captions are drawn, when that differs from what the Storyboard was written for (`rules.captions`):
+   * Captions turned on later still check the Storyboard by the rules it was written to.
+   */
+  captions: z.boolean().optional(),
 });
 
 /**
@@ -794,6 +799,21 @@ export const coreContract = {
         VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
       })
       .input(VideoRefSchema)
+      .output(OpenedVideoSchema),
+    /**
+     * Turns the video's Captions on or off and saves the choice with the video; a video not generated yet is then
+     * generated with it. Re-renders with no agent run and answers with the video as it plays now. The Style tab's
+     * switch, which also saves a Version, builds on this.
+     */
+    setCaptions: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+      })
+      .input(VideoRefSchema.extend({ captions: z.boolean() }))
       .output(OpenedVideoSchema),
     /**
      * Generates the video from the Project's Transcript: a Storyboard, then each unit's Scene code, checked and

@@ -76,7 +76,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
         preset: source.preset,
         code: source.code,
         voiceover: source.voiceover,
-        captions: source.rules.captions,
+        captions: source.captions ?? source.rules.captions,
       });
 
       return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source };
@@ -209,7 +209,7 @@ function pageId(source: VideoSource, voiceover: { size: number; modified: number
     storyboard: source.storyboard,
     transcript: source.transcript,
     preset: source.preset,
-    captions: source.rules.captions,
+    captions: source.captions ?? source.rules.captions,
     code,
     voiceover: source.voiceover && { path: source.voiceover, ...voiceover },
   });

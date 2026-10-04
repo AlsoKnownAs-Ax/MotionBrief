@@ -203,16 +203,18 @@ function GenerationStage() {
   const video = useGeneration((state) => state.video);
   const lostError = useGeneration((state) => state.lostError);
 
-  if (video && stored?.state === "none" && (!status || status.state === "idle")) {
-    return <MissingFormat video={video} />;
+  const isIdle = !status || status.state === "idle";
+
+  if (video && stored && isIdle && !stored.isLoading && !stored.version && !stored.error) {
+    return <MissingFormat video={video} captions={stored.captions} />;
   }
 
-  if (stored?.state === "failed" && (!status || status.state === "idle")) {
+  if (stored?.error && isIdle) {
     return (
       <main className="flex flex-1 items-center justify-center p-10">
         <p role="alert" className="flex max-w-[60ch] items-start gap-2 text-app-body text-status-fallback-ink">
           <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-          {stored.message}
+          {stored.error}
         </p>
       </main>
     );
@@ -240,7 +242,7 @@ function GenerationStage() {
   }
 
   // Not generating: still finding out whether the Format has a video, or about to show it.
-  if (!status || status.state === "idle") {
+  if (isIdle) {
     return null;
   }
 

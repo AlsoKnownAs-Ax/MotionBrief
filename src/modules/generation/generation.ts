@@ -18,7 +18,7 @@ import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
 import type { PreviewError, Previews } from "../preview";
-import { createStatusStore, type Flag, type Projects, type ProjectsError, type ProjectVideo, type VideoContent } from "../projects";
+import { createStatusStore, type Flag, type Projects, type ProjectsError, type ProjectVideo, type VideoContent, type VideoDocumentError } from "../projects";
 import type { Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
 import type { Clock } from "../system";
@@ -28,6 +28,9 @@ import { writeStoryboard, writeUnitCode } from "./agents";
 export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5" };
 
 export type Models = typeof DEFAULT_MODELS;
+
+/** Captions are on by default in vertical and off in horizontal, until the creator chooses for the video. */
+const CAPTIONS_BY_DEFAULT = { vertical: true, horizontal: false } satisfies Record<Format, boolean>;
 
 /** Scene-code subagents running at once. */
 const PARALLEL_UNITS = 4;
@@ -111,6 +114,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
 
     const { key, store } = storeOf(ref);
     const { data: preset, error: presetError } = await presetFor(video, format);
+    const { data: choice, error: choiceError } = await projects.captionsChoice(projectId, format);
 
     if (running.has(key)) {
       return { data: null, error: { code: "GENERATING", projectId } };
@@ -128,10 +132,15 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: presetError };
     }
 
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
+    }
+
     running.add(key);
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
-    void generate({ ref, transcript, preset, store })
+    const captions = choice ?? CAPTIONS_BY_DEFAULT[format];
+    void generate({ ref, transcript, preset, captions, store })
       .catch((cause: unknown) => store.update({ state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
       .finally(() => running.delete(key));
 
@@ -180,28 +189,48 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: projectError(versionError) };
     }
 
+    const { data: choice, error: choiceError } = await projects.captionsChoice(projectId, format);
+
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
+    }
+
     if (!stored || !video.transcript) {
-      return { data: {}, error: null };
+      return { data: { captions: choice }, error: null };
     }
 
     const { version, code } = stored;
+    const captions = choice ?? version.captions;
+    // The Storyboard is checked by the rules it was written to; Captions turned on since are only drawn.
     const rules = storyboardRules(version.preset, { format, captions: version.captions });
-    const source = { storyboard: version.storyboard, transcript: video.transcript, rules, preset: version.preset, code, voiceover: video.voiceoverPath };
+    const source = { storyboard: version.storyboard, transcript: video.transcript, rules, preset: version.preset, code, voiceover: video.voiceoverPath, captions };
     const { data: preview, error: previewError } = await previews.open(source);
 
     if (previewError) {
       return { data: null, error: previewError };
     }
 
-    return { data: { version: version.version, captions: version.captions, preview }, error: null };
+    return { data: { version: version.version, captions, preview }, error: null };
   }
 
-  type Run = { ref: VideoRef; transcript: Transcript; preset: StylePreset; store: ReturnType<typeof createStatusStore<GenerationStatus>> };
+  /**
+   * Turns the video's Captions on or off, saves the choice with the video and re-renders it, with no agent run.
+   * The Style tab (#45) adds a Version per change on top of this.
+   */
+  async function setCaptions(ref: VideoRef, captions: boolean): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { error } = await projects.chooseCaptions(ref.projectId, ref.format, captions);
 
-  async function generate({ ref, transcript, preset, store }: Run) {
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    return open(ref);
+  }
+
+  type Run = { ref: VideoRef; transcript: Transcript; preset: StylePreset; captions: boolean; store: ReturnType<typeof createStatusStore<GenerationStatus>> };
+
+  async function generate({ ref, transcript, preset, captions, store }: Run) {
     const { projectId, format } = ref;
-    // Captions are on by default in vertical and off in horizontal.
-    const captions = format === "vertical";
     const rules = storyboardRules(preset, { format, captions });
     const brief = presetBrief(preset, format);
     const agent = { connector, workDir };
@@ -330,7 +359,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
     return { data: storeOf(ref).store.watch(signal), error: null };
   }
 
-  return { estimate, start, watch, open };
+  return { estimate, start, watch, open, setCaptions };
 }
 
 type PublishContext = {
@@ -370,7 +399,7 @@ function fileErrorOf(error: ProjectsError): FileFailure {
   return { path: "", message: error.code };
 }
 
-function projectError(error: ProjectsError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
+function projectError(error: ProjectsError | VideoDocumentError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
   if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
     return error;
   }

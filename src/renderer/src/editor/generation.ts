@@ -4,9 +4,16 @@ import { core } from "@renderer/core/connection";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import type { Format, GenerationError, GenerationStatus, VideoRef } from "../../../contract";
 import { useOpenVideo } from "./open-video";
+import { usePlayback } from "./playback";
 
-/** The open Format's stored video: being looked up, none yet, its newest Version, or why it couldn't be opened. */
-export type StoredVideo = { state: "loading" } | { state: "none" } | { state: "ready"; version: number } | { state: "failed"; message: string };
+/** The open Format's saved video: its newest Version (none before the first is saved), or why it couldn't be opened. */
+export type StoredVideo = {
+  isLoading: boolean;
+  version?: number;
+  /** Whether it shows Captions, or will once generated, as the creator chose; absent for the Format's default. */
+  captions?: boolean;
+  error?: string;
+};
 
 type GenerationStore = {
   /** The video the editor shows: the open Project and Format. */
@@ -39,10 +46,16 @@ export const useGeneration = create<GenerationStore>((set, get) => {
 
     void (async () => {
       for await (const status of await core.video.generation(video, { signal: current.signal })) {
+        const isNewlyDone = status.state === "done" && get().status?.state !== "done";
         set({ status });
 
-        if (status.preview) {
+        // Once done, the saved Version plays: it has the Transcript's newest word fixes.
+        if (status.preview && status.state !== "done") {
           useOpenVideo.getState().showPreview(status.preview);
+        }
+
+        if (isNewlyDone) {
+          void openStored(video);
         }
       }
 
@@ -57,9 +70,9 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     });
   }
 
-  /** Looks up the Format's saved video and shows it, unless a generation of it in this window shows it already. */
+  /** Looks up the Format's saved video and plays it, unless a generation of it is still writing it. */
   async function openStored(video: VideoRef) {
-    set({ stored: { state: "loading" } });
+    set(({ stored }) => ({ stored: { ...stored, isLoading: true } }));
     const { data: opened, error } = await safe(core.video.open(video));
 
     if (get().video !== video) {
@@ -67,31 +80,30 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     }
 
     if (error) {
-      set({ stored: { state: "failed", message: openErrorMessage(error) } });
+      set({ stored: { isLoading: false, error: openErrorMessage(error) } });
       return;
     }
 
-    if (!opened.version || !opened.preview) {
-      set({ stored: { state: "none" } });
-      return;
-    }
+    set({ stored: { isLoading: false, version: opened.version, captions: opened.captions } });
 
-    set({ stored: { state: "ready", version: opened.version } });
-
-    if (!get().status?.preview) {
+    if (opened.preview && !isGenerating(get().status)) {
       useOpenVideo.getState().showPreview(opened.preview);
     }
   }
 
-  function show(project: { id: string; name: string }, video: VideoRef) {
-    useOpenVideo.getState().open({ ...project, isStored: true });
-    set({ video, status: undefined, stored: undefined });
+  /** Follows the video's generation and plays its saved Version; a fixed word rebuilds it so its Captions show the fix. */
+  function show(video: VideoRef) {
+    set({ video, status: undefined, stored: { isLoading: true } });
+    useOpenVideo.setState({ onWordFixed: () => void openStored(video) });
     listen(video);
     void openStored(video);
   }
 
   return {
-    follow: show,
+    follow: (project, video) => {
+      useOpenVideo.getState().open({ ...project, isStored: true });
+      show(video);
+    },
     showFormat: (format) => {
       const { video } = get();
 
@@ -99,8 +111,10 @@ export const useGeneration = create<GenerationStore>((set, get) => {
         return;
       }
 
-      const { projectId, projectName } = useOpenVideo.getState();
-      show({ id: projectId, name: projectName }, { projectId: video.projectId, format });
+      // Both Formats share the Transcript, so word fixes carry over; only the player changes.
+      usePlayback.setState({ resumes: false });
+      useOpenVideo.setState({ preview: undefined });
+      show({ projectId: video.projectId, format });
     },
     reconnect: () => {
       const { video } = get();
@@ -114,6 +128,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       controller = undefined;
       const { projectId, isStored } = useOpenVideo.getState();
       set({ video: undefined, status: undefined, stored: undefined, lostError: undefined });
+      useOpenVideo.setState({ onWordFixed: undefined });
 
       if (isStored) {
         void safe(core.project.close({ projectId }));
@@ -127,16 +142,18 @@ export function isGenerating(status: GenerationStatus | undefined) {
   return status?.state === "planning" || status?.state === "writing";
 }
 
+const STORYBOARD_UNFIT = "This video's saved Storyboard doesn't fit its Transcript any more, so it can't play.";
+
+const OPEN_MESSAGES: Record<string, string> = {
+  VOICEOVER_MISSING: "The Voiceover isn't in the Project folder any more, so this video can't play.",
+  INVALID_STORYBOARD: STORYBOARD_UNFIT,
+  UNKNOWN_UNIT: STORYBOARD_UNFIT,
+};
+
 /** One sentence on why a saved video can't be played. */
 function openErrorMessage(error: unknown) {
-  if (error instanceof ORPCError && error.defined) {
-    switch (error.code) {
-      case "VOICEOVER_MISSING":
-        return "The Voiceover isn't in the Project folder any more, so this video can't play.";
-      case "INVALID_STORYBOARD":
-      case "UNKNOWN_UNIT":
-        return "This video's saved Storyboard doesn't fit its Transcript any more, so it can't play.";
-    }
+  if (error instanceof ORPCError && error.defined && error.code in OPEN_MESSAGES) {
+    return OPEN_MESSAGES[error.code];
   }
 
   return projectErrorMessage(error);

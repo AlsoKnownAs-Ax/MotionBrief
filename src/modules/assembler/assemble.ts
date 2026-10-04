@@ -57,11 +57,19 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
     await placeVoiceover(voiceover, join(dir, audio));
   }
 
-  const layer = captions ? captionsLayer({ transcript, format, preset }) : undefined;
+  const layer = captionsWhenOn(captions, { transcript, format, preset });
 
   await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, page, captions: layer, background: preset.palette.colors.bg }));
 
   return { format, width, height, duration, units };
+}
+
+function captionsWhenOn(captions: boolean, options: Parameters<typeof captionsLayer>[0]) {
+  if (!captions) {
+    return undefined;
+  }
+
+  return captionsLayer(options);
 }
 
 async function writeAsset(dir: string, { path, from, content }: PageAsset) {

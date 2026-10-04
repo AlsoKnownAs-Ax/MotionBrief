@@ -10,6 +10,8 @@ export const VIDEO_FILE = "video.json";
 export const VideoDocumentSchema = z.object({
   /** Where the creator last saved this video's MP4: a location they chose, outside the Project. */
   lastExportPath: z.string().optional(),
+  /** Whether the video shows Captions, once the creator chose; until then its Format's default. */
+  captions: z.boolean().optional(),
 });
 
 export type VideoDocument = z.infer<typeof VideoDocumentSchema>;

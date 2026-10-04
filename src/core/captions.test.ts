@@ -51,7 +51,7 @@ describe("Captions", () => {
       frame = await openFrame(vertical, transcript, {}, BLUEPRINT, { captions: true });
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     it("shows the Transcript's words in short lines, breaking after sentences and clauses", async () => {
       const lines: string[] = [];
@@ -126,7 +126,7 @@ describe("Captions", () => {
       frame = await openFrame(vertical, transcript, {}, sketchbook, { captions: true });
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     it("brings each word in as it is spoken, so later words aren't there yet", async () => {
       await page().seek(2.6);
@@ -163,7 +163,7 @@ describe("Captions", () => {
       frame = await openFrame(vertical, transcript, {}, whiteboard, { captions: true });
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     it("shows the whole line at once, every word alike in ink", async () => {
       await page().seek(2.2);
@@ -182,7 +182,7 @@ describe("Captions", () => {
       frame = await openFrame(horizontal, transcript, {}, inStyle(BLUEPRINT, "plain"), { captions: true });
     }, BROWSER_TIMEOUT_MS);
 
-    afterAll(() => closeFrame(frame));
+    afterAll(() => closeFrame(frame), BROWSER_TIMEOUT_MS);
 
     it("runs longer lines along the bottom of the frame", async () => {
       await page().seek(2.2);
