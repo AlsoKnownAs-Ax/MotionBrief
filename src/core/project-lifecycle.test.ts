@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises";
 import { hostname, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { createORPCClient } from "@orpc/client";
@@ -207,6 +207,31 @@ describe("Project lifecycle", { timeout: 30_000 }, () => {
       await expect(app.window("w2").project.open({ path: created.path, force: true })).rejects.toMatchObject({ code: "ALREADY_OPEN" });
     });
 
+    it("lets only one of two windows opening a Project at the same moment have it", async () => {
+      const app = await start();
+      const created = await createProject(app.window("setup"));
+
+      const results = await Promise.allSettled([
+        app.window("w1").project.open({ path: created.path }),
+        app.window("w2").project.open({ path: created.path }),
+      ]);
+
+      expect(results.filter(({ status }) => status === "fulfilled")).toHaveLength(1);
+      expect(results.find(({ status }) => status === "rejected")).toMatchObject({ reason: { code: "ALREADY_OPEN" } });
+    });
+
+    it("knows a Project reached through a junction or symlink is the same Project", async () => {
+      const app = await start();
+      const created = await createProject(app.window("w1"));
+      const alias = join(elsewhere, "Alias");
+      // A junction needs no admin rights on Windows; elsewhere it is a plain directory symlink.
+      await symlink(created.path, alias, process.platform === "win32" ? "junction" : "dir");
+      await app.window("w1").project.open({ path: created.path });
+
+      await expect(app.window("w2").project.open({ path: alias })).rejects.toMatchObject({ code: "ALREADY_OPEN" });
+      await expect(app.window("w2").project.delete({ path: alias })).rejects.toMatchObject({ code: "ALREADY_OPEN" });
+    });
+
     it("releases a window's Project when the window goes, and every lock when the app quits", async () => {
       const app = await start();
       const a = await createProject(app.window("w1"), { name: "A" });
@@ -283,7 +308,7 @@ describe("Project lifecycle", { timeout: 30_000 }, () => {
       const copy = await window.project.duplicate({ path: original.path });
 
       expect(copy).toMatchObject({ name: "Intro copy", path: join(projectsDir, "Intro copy") });
-      expect((await readdir(copy.path)).sort()).toEqual(["project.json", "voiceover.wav"]);
+      expect((await readdir(copy.path)).sort()).toEqual([".duplicate", "project.json", "voiceover.wav"]);
       expect((await documentOf(copy.path)).id).toBe(original.id);
       expect((await window.project.duplicate({ path: original.path })).name).toBe("Intro copy 2");
 
@@ -291,8 +316,23 @@ describe("Project lifecycle", { timeout: 30_000 }, () => {
 
       expect(opened.id).not.toBe(original.id);
       expect((await documentOf(copy.path)).id).toBe(opened.id);
+      expect(await readdir(copy.path)).not.toContain(".duplicate");
       const { project: reopenedOriginal } = await window.project.open({ path: original.path });
       expect(reopenedOriginal.id).toBe(original.id);
+    });
+
+    it("gives a duplicate its own id even when its original was never opened here", async () => {
+      const app = await start();
+      const window = app.window("w1");
+      const original = join(projectsDir, "Synced talk");
+      await writeSchemaOneProject(original);
+      const { id } = await documentOf(original);
+
+      const copy = await window.project.duplicate({ path: original });
+      const { project: opened } = await window.project.open({ path: copy.path });
+
+      expect(opened.id).not.toBe(id);
+      expect((await window.project.open({ path: original })).project.id).toBe(id);
     });
 
     it("gives a folder copied outside the app its own id, but keeps the id of a moved Project", async () => {
@@ -377,6 +417,38 @@ describe("Project lifecycle", { timeout: 30_000 }, () => {
 
       await expect(app.window("w2").project.rename({ path: created.path, name: "Other" })).rejects.toMatchObject({ code: "ALREADY_OPEN" });
       await expect(app.window("w2").project.delete({ path: created.path })).rejects.toMatchObject({ code: "ALREADY_OPEN" });
+    });
+
+    it.each([
+      ["another computer", async () => ({ host: "studio-mac", pid: 4242 })],
+      ["a MotionBrief that quit unexpectedly", async () => ({ host: hostname(), pid: await deadPid() })],
+    ])("asks before renaming or deleting a Project locked by %s", async (_case, lock) => {
+      const app = await start();
+      const window = app.window("w1");
+      const created = await createProject(window, { name: "Synced" });
+      await writeFile(join(created.path, ".lock"), JSON.stringify(await lock()));
+
+      await expect(window.project.rename({ path: created.path, name: "Other" })).rejects.toMatchObject({ code: "PROJECT_LOCKED" });
+      await expect(window.project.delete({ path: created.path })).rejects.toMatchObject({ code: "PROJECT_LOCKED" });
+      expect(await readdir(projectsDir)).toEqual(["Synced"]);
+
+      const renamed = await window.project.rename({ path: created.path, name: "Other", force: true });
+      await window.project.delete({ path: renamed.path, force: true });
+
+      expect(await readdir(trashDir)).toEqual(["Other"]);
+    });
+
+    it("won't rename or delete a folder that isn't a Project, even with a project.json", async () => {
+      const app = await start();
+      const window = app.window("w1");
+      const folder = join(elsewhere, "Not a Project");
+      await mkdir(folder);
+      await writeFile(join(folder, "project.json"), JSON.stringify({ schemaVersion: 1 }));
+
+      await expect(window.project.rename({ path: folder, name: "Renamed" })).rejects.toMatchObject({ code: "NOT_A_PROJECT" });
+      await expect(window.project.delete({ path: folder, force: true })).rejects.toMatchObject({ code: "NOT_A_PROJECT" });
+      expect(await readdir(elsewhere)).toEqual(["Not a Project"]);
+      expect(await readdir(trashDir)).toEqual([]);
     });
 
     it("Delete moves the folder to the Trash and off the list", async () => {

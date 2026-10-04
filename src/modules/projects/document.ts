@@ -41,16 +41,17 @@ export const ProjectDocumentSchema = z.object({
 export type ProjectDocument = z.infer<typeof ProjectDocumentSchema>;
 
 /**
- * What every schema version, past or future, is assumed to keep: enough to tell which version wrote it, and to list
- * it on Home.
+ * What every schema version, past or future, is assumed to keep: enough to tell which version wrote it, to list it on
+ * Home, and to tell a Project from any other folder with a project.json before renaming or trashing it.
  */
 const AnyDocumentSchema = z
   .object({
     schemaVersion: z.number().int().positive(),
-    id: z.string().optional(),
+    id: z.string().min(1),
+    createdAt: z.string(),
     appVersion: z.string().optional(),
     format: FormatSchema.optional().catch(undefined),
-    voiceover: z.object({ duration: z.number().nonnegative().optional().catch(undefined) }).loose().optional().catch(undefined),
+    voiceover: z.object({ duration: z.number().nonnegative().optional().catch(undefined) }).loose(),
   })
   .loose();
 

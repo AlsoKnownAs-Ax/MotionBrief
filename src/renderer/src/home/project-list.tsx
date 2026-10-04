@@ -1,4 +1,4 @@
-import { safe } from "@orpc/client";
+import { isDefinedError, safe } from "@orpc/client";
 import { useQueryClient } from "@tanstack/react-query";
 import { EllipsisIcon, FolderIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useId, useState, type KeyboardEvent, type MouseEvent } from "react";
@@ -13,7 +13,7 @@ import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { clockLabel, sizeLabel } from "@renderer/new-project/labels";
 import type { ProjectSummary } from "../../../contract";
 import { fileManagerName, modifiedLabel, trashName } from "./labels";
-import { openProject, useOpeningPath } from "./open-project";
+import { askAboutLock, openProject, useOpeningPath } from "./open-project";
 
 const ROW = "grid grid-cols-[minmax(0,1fr)_104px_60px_68px_76px_136px_28px] items-center gap-4 px-3";
 
@@ -47,11 +47,16 @@ function undoDelete(path: string) {
   usePendingDeletes.setState(({ paths }) => ({ paths: paths.filter((pending) => pending !== path) }));
 }
 
-async function commitDelete(path: string) {
+async function commitDelete(path: string, { force = false } = {}) {
   pendingTimers.delete(path);
-  const { error } = await safe(core.project.delete({ path }));
+  const { error } = await safe(core.project.delete({ path, force }));
   usePendingDeletes.setState(({ paths }) => ({ paths: paths.filter((pending) => pending !== path) }));
   refreshList();
+
+  if (isDefinedError(error) && error.code === "PROJECT_LOCKED") {
+    askAboutLock(error.data, { label: `Move to ${trashName()} anyway`, run: () => void commitDelete(path, { force: true }) });
+    return;
+  }
 
   if (error) {
     useToast.getState().show({ text: projectErrorMessage(error) });
@@ -222,6 +227,15 @@ async function duplicate({ path }: ProjectSummary) {
   useToast.getState().show({ text: `Duplicated as "${copy.name}".` });
 }
 
+async function renameAnyway(path: string, name: string) {
+  const { error } = await safe(core.project.rename({ path, name, force: true }));
+  refreshList();
+
+  if (error) {
+    useToast.getState().show({ text: projectErrorMessage(error) });
+  }
+}
+
 /** Renames the Project's folder on Enter or when the field loses focus; Escape keeps the old name. */
 function RenameField({ project, onDone }: { project: ProjectSummary; onDone: () => void }) {
   const id = useId();
@@ -243,6 +257,12 @@ function RenameField({ project, onDone }: { project: ProjectSummary; onDone: () 
     setIsSaving(true);
     const { error } = await safe(core.project.rename({ path: project.path, name: draft }));
     setIsSaving(false);
+
+    if (isDefinedError(error) && error.code === "PROJECT_LOCKED") {
+      onDone();
+      askAboutLock(error.data, { label: "Rename anyway", run: () => void renameAnyway(project.path, draft) });
+      return;
+    }
 
     if (error) {
       setError(projectErrorMessage(error));

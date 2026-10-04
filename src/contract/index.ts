@@ -502,6 +502,11 @@ const WORD_FIX_ERRORS = {
 
 const ProjectPathInput = z.object({ path: z.string() });
 
+const LockedPathInput = ProjectPathInput.extend({
+  /** Go ahead even though the lock says it is open elsewhere: "Open anyway" and the like. */
+  force: z.boolean().optional(),
+});
+
 export const coreContract = {
   system: {
     info: oc.output(CoreInfoSchema),
@@ -661,21 +666,13 @@ export const coreContract = {
      * an older schema forward after backing up its documents, and gives a copied folder its own id. A Project without
      * a saved Transcript starts transcribing; one with a Transcript, word fixes and all, is never transcribed again.
      */
-    open: oc
-      .errors(PROJECT_ERRORS)
-      .input(
-        ProjectPathInput.extend({
-          /** Open even though the lock says it is open elsewhere: "Open anyway". */
-          force: z.boolean().optional(),
-        }),
-      )
-      .output(OpenedProjectSchema),
-    /** Renames a closed Project, which renames its folder. */
-    rename: oc.errors(PROJECT_ERRORS).input(ProjectPathInput.extend({ name: z.string() })).output(ProjectSummarySchema),
+    open: oc.errors(PROJECT_ERRORS).input(LockedPathInput).output(OpenedProjectSchema),
+    /** Renames a closed Project, which renames its folder. A lock left by anyone else needs `force`, as open does. */
+    rename: oc.errors(PROJECT_ERRORS).input(LockedPathInput.extend({ name: z.string() })).output(ProjectSummarySchema),
     /** Copies a Project's folder beside it. The copy keeps the id until it is first opened, which gives it its own. */
     duplicate: oc.errors(PROJECT_ERRORS).input(ProjectPathInput).output(ProjectSummarySchema),
-    /** Moves a closed Project's folder to the Trash or Recycle Bin. */
-    delete: oc.errors(PROJECT_ERRORS).input(ProjectPathInput),
+    /** Moves a closed Project's folder to the Trash or Recycle Bin. A lock left by anyone else needs `force`. */
+    delete: oc.errors(PROJECT_ERRORS).input(LockedPathInput),
     defaults: oc.output(NewProjectDefaultsSchema),
     /**
      * Creates a Project folder from a Voiceover (any file FFmpeg can read) and starts transcribing it at once.

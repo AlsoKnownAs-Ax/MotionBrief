@@ -174,10 +174,10 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
     project: {
       list: api.project.list.handler(() => projects.list()),
       open: api.project.open.handler(async ({ input: { path, force }, context }) => dataOrThrow(await projects.open(path, { force }, context))),
-      rename: api.project.rename.handler(async ({ input }) => dataOrThrow(await projects.rename(input.path, input.name))),
+      rename: api.project.rename.handler(async ({ input: { path, name, force } }) => dataOrThrow(await projects.rename(path, name, { force }))),
       duplicate: api.project.duplicate.handler(async ({ input }) => dataOrThrow(await projects.duplicate(input.path))),
-      delete: api.project.delete.handler(async ({ input }) => {
-        dataOrThrow(await projects.remove(input.path));
+      delete: api.project.delete.handler(async ({ input: { path, force } }) => {
+        dataOrThrow(await projects.remove(path, { force }));
       }),
       defaults: api.project.defaults.handler(() => projects.defaults()),
       create: api.project.create.handler(async ({ input, context }) => dataOrThrow(await projects.create(input, context))),

@@ -10,12 +10,15 @@ import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { sinceLabel } from "./labels";
 
-type LockedProject = { path: string; name: string; host: string; isThisComputer: boolean; isStale: boolean; lockedAt: number };
+export type LockedProject = { path: string; name: string; host: string; isThisComputer: boolean; isStale: boolean; lockedAt: number };
 
 type TooNewProject = { path: string; name: string; appVersion?: string };
 
-/** What opening a Project has to ask the creator first. */
-type Prompt = { kind: "locked"; project: LockedProject } | { kind: "too-new"; project: TooNewProject };
+/** What a locked Project's prompt offers instead of Cancel: "Open anyway", "Rename anyway"... */
+type LockedAction = { label: string; run: () => void };
+
+/** What opening, renaming or deleting a Project has to ask the creator first. */
+type Prompt = { kind: "locked"; project: LockedProject; action: LockedAction } | { kind: "too-new"; project: TooNewProject };
 
 const useOpenPrompt = create<{ prompt?: Prompt; openingPath?: string }>(() => ({}));
 
@@ -33,7 +36,7 @@ export async function openProject(path: string, { force = false } = {}) {
   useOpenPrompt.setState({ openingPath: undefined });
 
   if (isDefinedError(error) && error.code === "PROJECT_LOCKED") {
-    useOpenPrompt.setState({ prompt: { kind: "locked", project: error.data } });
+    askAboutLock(error.data, { label: "Open anyway", run: () => void openProject(path, { force: true }) });
     return;
   }
 
@@ -57,6 +60,11 @@ export async function openProject(path: string, { force = false } = {}) {
   useNavigation.getState().openProject(project);
 }
 
+/** Asks before changing a Project whose lock says it is open elsewhere; `action` goes ahead anyway. */
+export function askAboutLock(project: LockedProject, action: LockedAction) {
+  useOpenPrompt.setState({ prompt: { kind: "locked", project, action } });
+}
+
 /** Open Project…: a folder from anywhere. */
 export async function chooseAndOpenProject() {
   const path = await window.motionbrief.chooseFolder("Open Project");
@@ -66,22 +74,22 @@ export async function chooseAndOpenProject() {
   }
 }
 
-/** The prompts opening a Project can show: a stale lock's "Open anyway", and the newer-Project refusal. */
+/** The prompts Home can show: a lock's "Open anyway" (or Rename, Delete), and the newer-Project refusal. */
 export function OpenProjectPrompts() {
   const prompt = useOpenPrompt((state) => state.prompt);
   const close = () => useOpenPrompt.setState({ prompt: undefined });
 
   return (
     <Dialog open={prompt !== undefined} onOpenChange={(isOpen) => !isOpen && close()}>
-      {prompt?.kind === "locked" ? <LockedPrompt project={prompt.project} /> : null}
+      {prompt?.kind === "locked" ? <LockedPrompt project={prompt.project} action={prompt.action} onClose={close} /> : null}
       {prompt?.kind === "too-new" ? <TooNewPrompt project={prompt.project} /> : null}
     </Dialog>
   );
 }
 
-function LockedPrompt({ project }: { project: LockedProject }) {
+function LockedPrompt({ project, action, onClose }: { project: LockedProject; action: LockedAction; onClose: () => void }) {
   return (
-    // Cancel comes first, so it has the focus: opening anyway is a deliberate choice.
+    // Cancel comes first, so it has the focus: going ahead anyway is a deliberate choice.
     <DialogContent>
       <DialogHeader>
         <DialogTitle className="flex items-center gap-2.5">
@@ -95,8 +103,14 @@ function LockedPrompt({ project }: { project: LockedProject }) {
         <DialogClose asChild>
           <Button variant="ghost">Cancel</Button>
         </DialogClose>
-        <Button variant="tertiary" onClick={() => void openProject(project.path, { force: true })}>
-          Open anyway
+        <Button
+          variant="tertiary"
+          onClick={() => {
+            onClose();
+            action.run();
+          }}
+        >
+          {action.label}
         </Button>
       </div>
     </DialogContent>
@@ -111,7 +125,7 @@ function lockedMessage({ name, host, isThisComputer, isStale, lockedAt }: Locked
   }
 
   if (isStale) {
-    return `"${name}" was left locked by MotionBrief on this computer, ${since}. That usually means the app closed unexpectedly, and opening it is safe.`;
+    return `"${name}" was left locked by MotionBrief on this computer, ${since}. That usually means the app closed unexpectedly, and it is safe to go ahead.`;
   }
 
   return `"${name}" is open in another MotionBrief on this computer, ${since}.`;
@@ -119,14 +133,14 @@ function lockedMessage({ name, host, isThisComputer, isStale, lockedAt }: Locked
 
 function lockedRisk({ isThisComputer, isStale }: LockedProject) {
   if (!isThisComputer) {
-    return "If the folder is synced and still open on that computer, opening it here can overwrite that computer's changes.";
+    return "If the folder is synced and still open on that computer, changing it here can overwrite that computer's changes.";
   }
 
   if (isStale) {
-    return "If the folder is synced and open on another computer, opening it here can overwrite that computer's changes.";
+    return "If the folder is synced and open on another computer, changing it here can overwrite that computer's changes.";
   }
 
-  return "Opening it here too can overwrite the changes made there. Close it there first if you can.";
+  return "Changing it here too can overwrite the changes made there. Close it there first if you can.";
 }
 
 function TooNewPrompt({ project }: { project: TooNewProject }) {

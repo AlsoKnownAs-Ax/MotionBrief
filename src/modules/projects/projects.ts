@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { cp, mkdir, readdir, rm, stat } from "node:fs/promises";
+import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import type { Format, NewProjectDefaults, OpenedProject, Project, ProjectSummary, TranscriptionStatus, TranscriptWord } from "../../contract";
 import type { Clock } from "../system";
@@ -11,7 +11,7 @@ import { copyHashed, fileStep, renameRetrying, type FileError, type Result } fro
 import { LOCK_FILE, readLock, removeLock, writeLock, type Lock } from "./locks";
 import { backUpDocuments, migrate } from "./migrations";
 import { candidateName, nameFromFile, validName } from "./names";
-import { samePath } from "./paths";
+import { folderKey, samePath } from "./paths";
 import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
@@ -73,10 +73,15 @@ const LONG_VOICEOVER_SECONDS = 20 * 60;
 /** Enough tries to step past any number of same-named Projects a creator plausibly has. */
 const MAX_NAME_ATTEMPTS = 1000;
 
+/** Marks a folder Duplicate made: its first open gives it its own id, even if the original was never opened here. */
+const DUPLICATE_FILE = ".duplicate";
+
 type TranscriptionStore = ReturnType<typeof createStatusStore<TranscriptionStatus>>;
 
 type OpenProject = {
   dir: string;
+  /** The real folder behind `dir` (see `folderKey`): how the store tells whether a folder is this open Project. */
+  key: string;
   document: ProjectDocument;
   transcription: TranscriptionStore;
   /** The window it is open in. */
@@ -94,6 +99,8 @@ type OpenProject = {
  */
 export function createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash }: ProjectsOptions) {
   const open = new Map<string, OpenProject>();
+  /** The last lifecycle step queued on each folder, by `folderKey`. */
+  const lifecycle = new Map<string, Promise<unknown>>();
   const lastUsed = createLastUsed(appDataDir);
   const recents = createRecents(appDataDir);
 
@@ -156,7 +163,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     }
 
     await lastUsed.remember(choices);
-    const project = await adopt(dir, document, connection);
+    const project = await adopt(dir, await folderKey(dir), document, connection);
     startTranscription(project);
 
     return { data: toProject(project), error: null };
@@ -185,9 +192,15 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
    * Opens a Project folder for a window. Refuses a newer schema without touching anything, asks before taking a lock
    * held elsewhere, migrates an older schema after backing up its documents, and gives a copied folder its own id.
    */
-  async function openFolder(path: string, { force = false } = {}, { connection }: Caller = {}): Promise<Result<OpenedProject, ProjectsError>> {
+  async function openFolder(path: string, { force = false } = {}, caller: Caller = {}): Promise<Result<OpenedProject, ProjectsError>> {
     const dir = resolve(path);
-    const current = openAt(dir);
+    const key = await folderKey(dir);
+
+    return exclusive(key, () => openExclusively(dir, key, force, caller));
+  }
+
+  async function openExclusively(dir: string, key: string, force: boolean, { connection }: Caller): Promise<Result<OpenedProject, ProjectsError>> {
+    const current = openAt(key);
 
     if (current && connection !== undefined && current.owner === connection) {
       return { data: { project: toProject(current) }, error: null };
@@ -219,7 +232,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       return { data: null, error: lockError };
     }
 
-    const { data: loaded, error: loadError } = await load(dir, found);
+    const { data: loaded, error: loadError } = await load(dir, key, found);
 
     if (loadError) {
       await removeLock(dir);
@@ -227,7 +240,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       return { data: null, error: loadError };
     }
 
-    const project = await adopt(dir, loaded.document, connection);
+    const project = await adopt(dir, key, loaded.document, connection);
 
     if (!project.document.transcript) {
       startTranscription(project);
@@ -237,19 +250,22 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   }
 
   /** The document brought up to this app's schema, under an id no other known Project folder owns. */
-  async function load(dir: string, found: AnyDocument): Promise<Result<{ document: ProjectDocument; backupPath?: string }, ProjectsError>> {
+  async function load(dir: string, key: string, found: AnyDocument): Promise<Result<{ document: ProjectDocument; backupPath?: string }, ProjectsError>> {
     const { data: current, error } = await upToDate(dir, found);
 
     if (error) {
       return { data: null, error };
     }
 
-    if (!(await isCopy(dir, current.document.id))) {
+    const marker = join(dir, DUPLICATE_FILE);
+    const { data: isDuplicate } = await fileStep(marker, () => stat(marker));
+
+    if (!isDuplicate && !(await isCopy(key, current.document.id))) {
       return { data: current, error: null };
     }
 
     const document = { ...current.document, id: randomUUID() };
-    const { error: saveError } = await saveDocument(dir, document);
+    const { error: saveError } = await firstError([() => saveDocument(dir, document), () => fileStep(marker, () => rm(marker, { force: true }))]);
 
     if (saveError) {
       return { data: null, error: saveError };
@@ -294,14 +310,14 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
    * A folder is a copy when another folder this app knows still holds a Project with its id: one open now, or the
    * folder that last owned the id. A moved Project keeps its id, since its old folder is gone.
    */
-  async function isCopy(dir: string, id: string) {
-    if ([...open.values()].some((project) => project.document.id === id && !samePath(project.dir, dir))) {
+  async function isCopy(key: string, id: string) {
+    if ([...open.values()].some((project) => project.document.id === id && project.key !== key)) {
       return true;
     }
 
-    const owner = (await recents.all()).find((recent) => recent.id === id && !samePath(recent.path, dir));
+    const owner = (await recents.all()).find((recent) => recent.id === id);
 
-    if (!owner) {
+    if (!owner || (await folderKey(owner.path)) === key) {
       return false;
     }
 
@@ -311,13 +327,14 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   }
 
   /** Makes the Project the window's one open Project, closing any other it had. */
-  async function adopt(dir: string, document: ProjectDocument, owner?: string) {
+  async function adopt(dir: string, key: string, document: ProjectDocument, owner?: string) {
     if (owner !== undefined) {
       await Promise.all([...open.values()].filter((project) => project.owner === owner).map((project) => close(project.document.id)));
     }
 
     const project: OpenProject = {
       dir,
+      key,
       document,
       owner,
       transcription: createStatusStore<TranscriptionStatus>(initialStatus(document)),
@@ -329,8 +346,25 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return project;
   }
 
-  function openAt(dir: string) {
-    return [...open.values()].find((project) => samePath(project.dir, dir));
+  function openAt(key: string) {
+    return [...open.values()].find((project) => project.key === key);
+  }
+
+  /**
+   * Runs one lifecycle step on a folder at a time, so two windows can't both find it closed and both open, rename or
+   * trash it. Keyed by the real folder, so another route to it waits too.
+   */
+  function exclusive<T>(key: string, step: () => Promise<T>): Promise<T> {
+    const done = (lifecycle.get(key) ?? Promise.resolve()).then(step);
+    const settled = done.catch(() => undefined);
+    lifecycle.set(key, settled);
+    void settled.then(() => {
+      if (lifecycle.get(key) === settled) {
+        lifecycle.delete(key);
+      }
+    });
+
+    return done;
   }
 
   async function update(projectId: string, changes: ProjectChanges): Promise<Result<Project, ProjectsError>> {
@@ -387,6 +421,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       }
 
       project.dir = target;
+      project.key = await folderKey(target);
       await recents.moved(from, target);
 
       return { data: null, error: null };
@@ -416,9 +451,15 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   }
 
   /** Renames a closed Project from Home. */
-  async function rename(path: string, requested: string): Promise<Result<ProjectSummary, ProjectsError>> {
+  async function rename(path: string, requested: string, { force = false } = {}): Promise<Result<ProjectSummary, ProjectsError>> {
     const dir = resolve(path);
-    const { error } = await closedProject(dir);
+    const key = await folderKey(dir);
+
+    return exclusive(key, () => renameExclusively(dir, key, requested, force));
+  }
+
+  async function renameExclusively(dir: string, key: string, requested: string, force: boolean): Promise<Result<ProjectSummary, ProjectsError>> {
+    const { error } = await closedProject(dir, key, force);
 
     if (error) {
       return { data: null, error };
@@ -445,9 +486,17 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return summaryOf(target);
   }
 
-  /** Copies the Project's folder beside it as "<name> copy". It keeps the id until opened, so it claims no id yet. */
+  /**
+   * Copies the Project's folder beside it as "<name> copy", marked as a duplicate: it keeps the id until it is first
+   * opened, which gives it its own.
+   */
   async function duplicate(path: string): Promise<Result<ProjectSummary, ProjectsError>> {
     const dir = resolve(path);
+
+    return exclusive(await folderKey(dir), () => duplicateExclusively(dir));
+  }
+
+  async function duplicateExclusively(dir: string): Promise<Result<ProjectSummary, ProjectsError>> {
     const { error } = await readAnyDocument(dir);
 
     if (error) {
@@ -460,7 +509,10 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       return { data: null, error: copyError };
     }
 
-    const { error: cpError } = await fileStep(copy, () => cp(dir, copy, { recursive: true, filter: (source) => isCopied(dir, source) }));
+    const { error: cpError } = await fileStep(copy, async () => {
+      await cp(dir, copy, { recursive: true, filter: (source) => isCopied(dir, source) });
+      await writeFile(join(copy, DUPLICATE_FILE), "");
+    });
 
     if (cpError) {
       await fileStep(copy, () => rm(copy, { recursive: true, force: true }));
@@ -474,9 +526,15 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   }
 
   /** Moves a closed Project's folder to the Trash. Undo lives in the UI, which waits before asking. */
-  async function remove(path: string): Promise<Result<null, ProjectsError>> {
+  async function remove(path: string, { force = false } = {}): Promise<Result<null, ProjectsError>> {
     const dir = resolve(path);
-    const { error } = await closedProject(dir);
+    const key = await folderKey(dir);
+
+    return exclusive(key, () => removeExclusively(dir, key, force));
+  }
+
+  async function removeExclusively(dir: string, key: string, force: boolean): Promise<Result<null, ProjectsError>> {
+    const { error } = await closedProject(dir, key, force);
 
     if (error) {
       return { data: null, error };
@@ -493,19 +551,28 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return { data: null, error: null };
   }
 
-  /** A Project no window here has open, and no running MotionBrief holds. */
-  async function closedProject(dir: string): Promise<Result<AnyDocument, ProjectsError>> {
-    if (openAt(dir)) {
+  /**
+   * A Project folder no window here has open. A lock left by anyone else, even a stale one, needs the creator's say-so
+   * (`force`): the Project may be open on another computer that syncs the folder.
+   */
+  async function closedProject(dir: string, key: string, force: boolean): Promise<Result<AnyDocument, ProjectsError>> {
+    if (openAt(key)) {
       return { data: null, error: { code: "ALREADY_OPEN", path: dir } };
+    }
+
+    const { data: document, error } = await readAnyDocument(dir);
+
+    if (error) {
+      return { data: null, error };
     }
 
     const lock = await readLock(dir);
 
-    if (lock && !lock.isStale && !lock.isOurs) {
+    if (lock && !lock.isOurs && !force) {
       return { data: null, error: lockedError(dir, lock) };
     }
 
-    return readAnyDocument(dir);
+    return { data: document, error: null };
   }
 
   /** The recent Projects, newest change first. Forgets those whose folders are gone. */
@@ -719,9 +786,16 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       return;
     }
 
-    open.delete(projectId);
-    project.job?.abort();
-    await enqueue(project, () => removeLock(project.dir));
+    // Exclusive, so an open of the same folder waiting meanwhile can't take the lock and then lose it to this close.
+    await exclusive(project.key, async () => {
+      if (open.get(projectId) !== project) {
+        return;
+      }
+
+      open.delete(projectId);
+      project.job?.abort();
+      await enqueue(project, () => removeLock(project.dir));
+    });
   }
 
   /** Closes the Projects a window had open, once the window is gone. */
