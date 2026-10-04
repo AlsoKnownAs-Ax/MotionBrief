@@ -138,11 +138,13 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
     project: {
       defaults: api.project.defaults.handler(() => projects.defaults()),
       create: api.project.create.handler(async ({ input }) => dataOrThrow(await projects.create(input))),
+      open: api.project.open.handler(async ({ input }) => dataOrThrow(await projects.open(input.path))),
       update: api.project.update.handler(async ({ input: { projectId, ...changes } }) => dataOrThrow(await projects.update(projectId, changes))),
       transcription: api.project.transcription.handler(({ input, signal }) => dataOrThrow(projects.watchTranscription(input.projectId, signal))),
       retryTranscription: api.project.retryTranscription.handler(({ input }) => {
         dataOrThrow(projects.retryTranscription(input.projectId));
       }),
+      fixWord: api.project.fixWord.handler(async ({ input }) => dataOrThrow(await projects.fixWord(input.projectId, input.index, input.text))),
       close: api.project.close.handler(({ input }) => projects.close(input.projectId)),
     },
     cache: {

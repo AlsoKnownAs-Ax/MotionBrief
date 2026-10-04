@@ -1,8 +1,10 @@
 import { CircleAlertIcon, LoaderCircleIcon, RotateCcwIcon } from "lucide-react";
-import type { ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Progress } from "@renderer/components/ui/progress";
+import { WordEditor } from "@renderer/components/word-editor";
+import { cn } from "@renderer/lib/utils";
 import { useTranscriptionModelStep } from "@renderer/setup/transcription-model-step";
 import type { TranscriptionError, TranscriptionStatus, TranscriptWord } from "../../../contract";
 import { clockLabel, languageName } from "./labels";
@@ -10,13 +12,19 @@ import { clockLabel, languageName } from "./labels";
 /** A pause this long starts a new paragraph, so the Transcript reads in breaths rather than one block. */
 const PARAGRAPH_PAUSE_SECONDS = 1.2;
 
+/** Saves a word fix; answers with the text saved, or why it wasn't. */
+export type FixWord = (index: number, text: string) => Promise<{ text?: string; error?: string }>;
+
 type TranscriptPaneProps = {
   transcription?: TranscriptionStatus;
   onRetry: () => void;
+  onFixWord: FixWord;
 };
 
-/** The Transcript filling in as the Voiceover is transcribed on this computer. */
-export function TranscriptPane({ transcription, onRetry }: TranscriptPaneProps) {
+/** The Transcript filling in as the Voiceover is transcribed on this computer; once it's done, words can be fixed. */
+export function TranscriptPane({ transcription, onRetry, onFixWord }: TranscriptPaneProps) {
+  const isDone = transcription?.state === "done";
+
   return (
     <section aria-labelledby="transcript-heading" className="flex min-h-0 flex-1 flex-col gap-4 rounded-lg bg-surface-1 p-5">
       <div className="flex min-h-badge items-center gap-2.5">
@@ -26,9 +34,15 @@ export function TranscriptPane({ transcription, onRetry }: TranscriptPaneProps) 
         <p aria-live="polite" className="flex items-center gap-2.5">
           {statusLine(transcription)}
         </p>
+        <span className="flex-1" />
+        {isDone ? (
+          <span id="transcript-hint" className="text-app-xs text-ink-muted">
+            Double-click a word, or press Enter on it, to fix it.
+          </span>
+        ) : null}
       </div>
       {body(transcription, onRetry)}
-      <Words words={transcription?.words ?? []} isBusy={transcription?.state !== "done"} />
+      <Words words={transcription?.words ?? []} isDone={isDone} onFixWord={onFixWord} />
     </section>
   );
 }
@@ -131,35 +145,162 @@ function errorMessage(error?: TranscriptionError) {
   return ERROR_MESSAGES[error.code];
 }
 
-function Words({ words, isBusy }: { words: TranscriptWord[]; isBusy: boolean }) {
+type WordsProps = { words: TranscriptWord[]; isDone: boolean; onFixWord: FixWord };
+
+function Words({ words, isDone, onFixWord }: WordsProps) {
   if (words.length === 0) {
     return null;
   }
 
   return (
-    <div aria-busy={isBusy} className="min-h-0 flex-1 overflow-y-auto pr-2">
+    <div aria-busy={!isDone} className="min-h-0 flex-1 overflow-y-auto pr-2">
       <div className="flex max-w-[68ch] flex-col gap-3 text-app-body leading-[1.65]">
-        {paragraphs(words).map((paragraph) => (
-          <p key={paragraph[0]?.start}>{paragraph.map(({ text }) => text).join(" ")}</p>
-        ))}
+        {isDone ? <FixableWords words={words} onFixWord={onFixWord} /> : <LiveWords words={words} />}
       </div>
     </div>
   );
 }
 
-/** Splits the words wherever the speaker paused for a breath. */
+function LiveWords({ words }: { words: TranscriptWord[] }) {
+  return paragraphs(words).map((paragraph) => <p key={paragraph[0]}>{paragraph.map((index) => words[index]!.text).join(" ")}</p>);
+}
+
+/**
+ * The saved Transcript, a word at a time: double-click a word, or press Enter or F2 on it, to fix it. Arrow keys,
+ * Home and End move between words.
+ */
+function FixableWords({ words, onFixWord }: { words: TranscriptWord[]; onFixWord: FixWord }) {
+  const [focused, setFocused] = useState(0);
+  const [editing, setEditing] = useState<number>();
+  /** Fixes shown while they save; each is what the core saved once it answers. */
+  const [saving, setSaving] = useState<Record<number, string>>({});
+  const [error, setError] = useState<string>();
+  const buttons = useRef(new Map<number, HTMLButtonElement>());
+  const returnFocusTo = useRef<number>(undefined);
+
+  // A finished edit hands the keyboard back to its word.
+  useEffect(() => {
+    if (editing === undefined && returnFocusTo.current !== undefined) {
+      buttons.current.get(returnFocusTo.current)?.focus();
+      returnFocusTo.current = undefined;
+    }
+  }, [editing]);
+
+  function moveFocus(index: number) {
+    const next = Math.max(0, Math.min(words.length - 1, index));
+
+    setFocused(next);
+    buttons.current.get(next)?.focus();
+  }
+
+  async function finishEditing(index: number, text: string | undefined) {
+    returnFocusTo.current = index;
+    setEditing(undefined);
+    const fixed = text?.trim();
+
+    if (!fixed || fixed === textOf(index)) {
+      return;
+    }
+
+    setSaving((shown) => ({ ...shown, [index]: fixed }));
+    setError(undefined);
+    const { text: saved, error: message } = await onFixWord(index, fixed);
+
+    if (saved === undefined) {
+      setSaving((shown) => Object.fromEntries(Object.entries(shown).filter(([fixed]) => Number(fixed) !== index)));
+      setError(message);
+
+      return;
+    }
+
+    setSaving((shown) => ({ ...shown, [index]: saved }));
+  }
+
+  function textOf(index: number) {
+    return saving[index] ?? words[index]!.text;
+  }
+
+  return (
+    <>
+      {error ? (
+        <p role="alert" className="flex items-start gap-2 text-app-sm text-status-fallback-ink">
+          <CircleAlertIcon aria-hidden="true" className="mt-1 size-4 shrink-0" />
+          {error}
+        </p>
+      ) : null}
+      <div role="group" aria-label="Transcript words" aria-describedby="transcript-hint" className="contents">
+        {paragraphs(words).map((paragraph) => (
+          <p key={paragraph[0]}>
+            {paragraph.map((index) => {
+              const word = words[index]!;
+              const text = textOf(index);
+              const heard = word.heard ?? word.text;
+
+              if (editing === index) {
+                return (
+                  <Fragment key={index}>
+                    <WordEditor text={text} className="h-[1.65em] text-app-body" onDone={(value) => void finishEditing(index, value)} />{" "}
+                  </Fragment>
+                );
+              }
+
+              return (
+                <Fragment key={index}>
+                  <button
+                    ref={(button) => {
+                      if (button) {
+                        buttons.current.set(index, button);
+                      } else {
+                        buttons.current.delete(index);
+                      }
+                    }}
+                    type="button"
+                    tabIndex={index === focused ? 0 : -1}
+                    aria-keyshortcuts="Enter F2"
+                    title={text === heard ? undefined : `Fixed from “${heard}”`}
+                    className={cn("cursor-text rounded-[4px] hover:bg-surface-2", text !== heard && "underline decoration-dotted underline-offset-[3px]")}
+                    onFocus={() => setFocused(index)}
+                    onDoubleClick={() => setEditing(index)}
+                    onKeyDown={(event) => {
+                      const moves: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 };
+
+                      if (event.key === "Enter" || event.key === "F2") {
+                        event.preventDefault();
+                        setEditing(index);
+                      } else if (moves[event.key] !== undefined) {
+                        event.preventDefault();
+                        moveFocus(index + moves[event.key]!);
+                      } else if (event.key === "Home" || event.key === "End") {
+                        event.preventDefault();
+                        moveFocus(event.key === "Home" ? 0 : words.length - 1);
+                      }
+                    }}
+                  >
+                    {text}
+                  </button>{" "}
+                </Fragment>
+              );
+            })}
+          </p>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/** Splits the words, by index, wherever the speaker paused for a breath. */
 function paragraphs(words: TranscriptWord[]) {
-  return words.reduce<TranscriptWord[][]>((split, word, index) => {
+  return words.reduce<number[][]>((split, word, index) => {
     const before = words[index - 1];
     const current = split.at(-1);
 
     if (!current || !before || word.start - before.end >= PARAGRAPH_PAUSE_SECONDS) {
-      split.push([word]);
+      split.push([index]);
 
       return split;
     }
 
-    current.push(word);
+    current.push(index);
 
     return split;
   }, []);

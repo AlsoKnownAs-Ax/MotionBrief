@@ -10,6 +10,10 @@ const MESSAGES = {
   NAME_TAKEN: ({ name }) => `There's already a Project called “${name ?? ""}” in this folder.`,
   UNKNOWN_PROJECT: () => "This Project was closed. Go back to Home and start again.",
   FILE_FAILED: fileFailedMessage,
+  INVALID_DOCUMENT: ({ path }) => `${path ?? "This folder"} isn't a MotionBrief Project, or it is damaged.`,
+  TRANSCRIPT_NOT_READY: () => "Words can be fixed once the Transcript is done.",
+  UNKNOWN_WORD: () => "That word isn't in the Transcript any more. Try again.",
+  INVALID_WORD: () => "A word can't be empty. To keep the word as it was, press Escape.",
 } satisfies Record<string, (data: ProjectErrorData) => string>;
 
 /** Windows says EPERM, EBUSY or EACCES when another app has the folder open or security software blocks the change. */
