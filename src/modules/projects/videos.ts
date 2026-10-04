@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { StylePresetSchema, UnitCodeSchema, type Format, type UnitCode } from "../../contract";
@@ -43,8 +43,11 @@ export const VersionSchema = VideoContentSchema.extend({
   /** Counted from 1, in the order Versions were made. */
   version: z.number().int().positive(),
   createdAt: z.iso.datetime(),
-  /** What made it: a first generation, for now. */
-  origin: z.literal("generation"),
+  /**
+   * What made it: a first generation; the re-check after a frame major update, which flagged units that no longer
+   * pass; or a Retry of flagged units.
+   */
+  origin: z.enum(["generation", "frame-update", "retry"]),
 });
 
 /** A first generation in progress: its units are added as they finish, so a crash loses none of them. */
@@ -122,6 +125,60 @@ export async function saveVersion(dir: string, format: Format, version: Omit<Ver
   }
 
   return { data: number, error: null };
+}
+
+export type VersionError = FileError | { code: "INVALID_DOCUMENT"; path: string; message: string };
+
+/** A saved Version with its units' Scene code, by unit id. */
+export async function readVersion(
+  dir: string,
+  format: Format,
+  number: number,
+): Promise<Result<{ version: Version; code: Record<string, UnitCode> }, VersionError>> {
+  const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
+  const { data: version, error } = await readDocument(path, VersionSchema);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const code: Record<string, UnitCode> = {};
+
+  for (const [unit, hash] of Object.entries(version.units)) {
+    const { data: unitCode, error: unitError } = await readDocument(join(dir, format, UNITS_DIR, `${hash}.json`), UnitCodeSchema);
+
+    if (unitError) {
+      return { data: null, error: unitError };
+    }
+
+    code[unit] = unitCode;
+  }
+
+  return { data: { version, code }, error: null };
+}
+
+async function readDocument<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, VersionError>> {
+  const { data: text, error } = await fileStep(path, () => readFile(path, "utf8"));
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const parsed = schema.safeParse(parseJson(text));
+
+  if (!parsed.success) {
+    return { data: null, error: { code: "INVALID_DOCUMENT", path, message: parsed.error.message } };
+  }
+
+  return { data: parsed.data, error: null };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
 }
 
 /** The number of the video's newest Version; none before its first generation is saved. */

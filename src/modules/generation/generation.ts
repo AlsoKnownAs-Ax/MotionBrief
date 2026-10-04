@@ -1,9 +1,12 @@
 import type {
   CheckFinding,
+  Format,
+  FrameUpdate,
   GenerationEstimate,
   GenerationPreviewError,
   GenerationStatus,
   GenerationUnit,
+  OpenedVideo,
   StylePreset,
   Transcript,
   UnitCode,
@@ -16,11 +19,21 @@ import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
 import type { PreviewError, Previews } from "../preview";
-import { createStatusStore, type Flag, type Projects, type ProjectsError, type VideoContent } from "../projects";
-import type { Storyboard } from "../storyboard";
+import {
+  createStatusStore,
+  type Flag,
+  type Projects,
+  type ProjectsError,
+  type StoredVideo,
+  type Version,
+  type VersionError,
+  type VideoContent,
+} from "../projects";
+import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
 import type { Clock } from "../system";
 import { writeStoryboard, writeUnitCode } from "./agents";
+import { failingUnits, needsRecheck } from "./frame-update";
 
 /** The model each agent role runs on until Settings choose others (Storyboard and Scene code: Opus). */
 export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5" };
@@ -267,7 +280,250 @@ export function createGeneration({ connector, checker, previews, projects, clock
     return { data: storeOf(ref).store.watch(signal), error: null };
   }
 
-  return { estimate, start, watch };
+  /**
+   * Opens a saved video at its newest Version. Units written against an older frame major are checked again first,
+   * with no agent: those that fail become flagged fallbacks in a new Version, and none is regenerated.
+   */
+  async function open(ref: VideoRef): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { transcript, voiceoverPath, stored } = saved;
+    const { data: checked, error: checkError } = await recheck(ref, transcript, stored);
+
+    if (checkError) {
+      return { data: null, error: checkError };
+    }
+
+    const { version, code, frameUpdate } = checked;
+    const rules = storyboardRules(version.preset, { format: ref.format, captions: version.captions });
+    const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, voiceover: voiceoverPath };
+    const { data: preview, error: previewError } = await previews.open(source);
+
+    if (previewError) {
+      return { data: null, error: previewError };
+    }
+
+    return { data: { version: version.version, preview, frameUpdate }, error: null };
+  }
+
+  /** The video's newest Version with what it plays from; one with no Version yet has no video. */
+  async function savedVideo({ projectId, format }: VideoRef): Promise<Result<SavedVideo, OpenVideoError>> {
+    const { data: video, error } = await projects.video(projectId, format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    if (!video.transcript) {
+      return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
+    }
+
+    const { data: stored, error: storedError } = await projects.storedVideo(projectId, format);
+
+    if (storedError) {
+      return { data: null, error: versionError(storedError) };
+    }
+
+    if (!stored) {
+      return { data: null, error: { code: "NO_VIDEO", format } };
+    }
+
+    return { data: { transcript: video.transcript, voiceoverPath: video.voiceoverPath, stored }, error: null };
+  }
+
+  /**
+   * Checks again units written against another frame major, unless they already passed this one. When the Checker
+   * can't run, the video opens as saved and is checked on a later open.
+   */
+  async function recheck(ref: VideoRef, transcript: Transcript, { version, code, frameChecked }: StoredVideo): Promise<Result<Rechecked, OpenVideoError>> {
+    const { projectId, format } = ref;
+    const isChecked = frameChecked?.version === version.version && !needsRecheck(frameChecked.frameContractVersion);
+
+    if (!needsRecheck(version.frameContractVersion) || isChecked || running.has(storeOf(ref).key)) {
+      return { data: { version, code }, error: null };
+    }
+
+    const rules = storyboardRules(version.preset, { format, captions: version.captions });
+    const { data: failing, error } = await failingUnits(checker, { storyboard: version.storyboard, transcript, rules, preset: version.preset, code });
+
+    if (error) {
+      return { data: { version, code }, error: null };
+    }
+
+    if (failing.size === 0) {
+      const { error: rememberError } = await projects.rememberFrameCheck(projectId, format, { version: version.version, frameContractVersion: FRAME_CONTRACT_VERSION });
+
+      return rememberError ? { data: null, error: versionError(rememberError) } : { data: { version, code }, error: null };
+    }
+
+    const kept = Object.fromEntries(Object.entries(version.units).filter(([unit]) => !failing.has(unit)));
+    const flags = [...version.flags, ...[...failing].map(([unit, reason]): Flag => ({ unit, kind: "fallback", reason }))];
+    const content: VideoContent = { ...contentOf(version), units: kept, flags, frameContractVersion: FRAME_CONTRACT_VERSION };
+    const createdAt = new Date(clock.now()).toISOString();
+    const { data: number, error: saveError } = await projects.saveVersion(projectId, format, { ...content, origin: "frame-update", createdAt });
+
+    if (saveError) {
+      return { data: null, error: projectError(saveError) };
+    }
+
+    return {
+      data: {
+        version: { ...content, version: number, origin: "frame-update", createdAt },
+        code: Object.fromEntries(Object.entries(code).filter(([unit]) => !failing.has(unit))),
+        frameUpdate: { previous: version.frameContractVersion, frameContractVersion: FRAME_CONTRACT_VERSION, units: [...failing.keys()] },
+      },
+      error: null,
+    };
+  }
+
+  /**
+   * Regenerates flagged units of the newest Version with the Scene-code model, each checked and retried as in a first
+   * generation, and saves the outcome as a new Version. Progress streams through `watch`.
+   */
+  async function retry(ref: VideoRef, units: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { key, store } = storeOf(ref);
+
+    if (running.has(key)) {
+      return { data: null, error: { code: "GENERATING", projectId: ref.projectId } };
+    }
+
+    const { version } = saved.stored;
+    const unflagged = units.find((unit) => !version.flags.some((flag) => flag.unit === unit));
+
+    if (unflagged !== undefined) {
+      return { data: null, error: { code: "NOT_FLAGGED", unit: unflagged } };
+    }
+
+    const { success, data: storyboard } = StoryboardSchema.safeParse(version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "INVALID_VERSION", path: ref.format, message: `Version ${version.version} has no valid Storyboard` } };
+    }
+
+    running.add(key);
+    store.set({ state: "writing", units: [] });
+    void retryUnits({ ref, saved, storyboard, units: new Set(units), store })
+      .catch((cause: unknown) => store.update({ state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
+      .finally(() => running.delete(key));
+
+    return { data: null, error: null };
+  }
+
+  type RetryRun = { ref: VideoRef; saved: SavedVideo; storyboard: Storyboard; units: Set<string>; store: ReturnType<typeof createStatusStore<GenerationStatus>> };
+
+  async function retryUnits({ ref, saved, storyboard, units: retrying, store }: RetryRun) {
+    const { projectId, format } = ref;
+    const { transcript, stored } = saved;
+    const { version } = stored;
+    const { preset, captions } = version;
+    const rules = storyboardRules(preset, { format, captions });
+    const brief = presetBrief(preset, format);
+    const units = planUnits(storyboard, transcript);
+    const content: VideoContent = {
+      ...contentOf(version),
+      units: { ...version.units },
+      flags: version.flags.filter((flag) => !retrying.has(flag.unit)),
+      models: { ...version.models, sceneCode: models.sceneCode },
+    };
+    const code = { ...stored.code };
+    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retrying.has(id) ? "queued" : code[id] ? "ready" : "fallback", attempts: 0 }]));
+    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, progress, store });
+    const failed = (fileError: FileFailure) => publish({ state: "failed", error: { code: "FILE_FAILED", path: fileError.path, message: fileError.message } });
+
+    await publish({ state: "writing" });
+    const baseline = await pageFindings(storyboard, transcript, rules, preset);
+    const results = await inParallel(
+      units.filter(({ id }) => retrying.has(id)),
+      PARALLEL_UNITS,
+      async (unit): Promise<FileFailure | undefined> => {
+        const outcome = await writeUnitCode({
+          connector,
+          workDir,
+          model: models.sceneCode,
+          checker,
+          storyboard,
+          transcript,
+          rules,
+          preset,
+          brief,
+          unit,
+          baseline,
+          onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
+        });
+
+        if (outcome.code) {
+          const { data: hash, error: unitError } = await projects.writeUnit(projectId, format, outcome.code);
+
+          if (unitError) {
+            return fileErrorOf(unitError);
+          }
+
+          code[unit.id] = outcome.code;
+          content.units[unit.id] = hash;
+        } else {
+          content.flags.push(flagOf(unit, outcome.reason));
+        }
+
+        await publish({}, { id: unit.id, status: outcome.code ? "ready" : "fallback", attempts: outcome.attempts });
+
+        return undefined;
+      },
+    );
+    const fileError = results.find((result) => result !== undefined);
+
+    if (fileError) {
+      return failed(fileError);
+    }
+
+    const { data: number, error: versionError } = await projects.saveVersion(projectId, format, {
+      ...inUnitOrder(content, units),
+      origin: "retry",
+      createdAt: new Date(clock.now()).toISOString(),
+    });
+
+    if (versionError) {
+      return failed(fileErrorOf(versionError));
+    }
+
+    await publish({ state: "done", version: number });
+  }
+
+  return { estimate, start, watch, open, retry };
+}
+
+type SavedVideo = { transcript: Transcript; voiceoverPath: string; stored: StoredVideo };
+
+type Rechecked = { version: Version; code: Record<string, UnitCode>; frameUpdate?: FrameUpdate };
+
+export type OpenVideoError =
+  | Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" | "TRANSCRIPT_NOT_READY" }>
+  | { code: "NO_VIDEO"; format: Format }
+  | { code: "INVALID_VERSION"; path: string; message: string }
+  | PreviewError;
+
+export type RetryError = { code: "GENERATING"; projectId: string } | { code: "NOT_FLAGGED"; unit: string };
+
+/** What a Version plays and how it was made, without what makes it a Version. */
+function contentOf({ storyboard, preset, captions, units, flags, models, frameContractVersion }: Version): VideoContent {
+  return { storyboard, preset, captions, units, flags, models, frameContractVersion };
+}
+
+function versionError(error: ProjectsError | VersionError): OpenVideoError {
+  if (error.code === "INVALID_DOCUMENT") {
+    return { code: "INVALID_VERSION", path: error.path, message: error.message };
+  }
+
+  return projectError(error);
 }
 
 type PublishContext = {
@@ -307,7 +563,7 @@ function fileErrorOf(error: ProjectsError): FileFailure {
   return { path: "", message: error.code };
 }
 
-function projectError(error: ProjectsError): GenerateError {
+function projectError(error: ProjectsError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
   if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
     return error;
   }

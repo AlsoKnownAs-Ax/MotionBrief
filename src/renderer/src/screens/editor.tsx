@@ -2,6 +2,7 @@ import { CircleAlertIcon, HouseIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
@@ -126,6 +127,7 @@ export function Editor() {
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
+      <FrameUpdateNotice />
       <div className="flex min-h-0 flex-1">
         <section aria-label="Player" className="flex min-w-0 flex-1 flex-col gap-3 px-5 pt-4 pb-3.5">
           <GenerationNotice />
