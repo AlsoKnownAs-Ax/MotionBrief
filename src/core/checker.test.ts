@@ -100,7 +100,7 @@ describe("Checker", () => {
 
     beforeAll(async () => {
       const code = { s01: await unitCode("rules", "s01"), s02: await unitCode("rules", "s02") };
-      ({ findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, code }));
+      ({ findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code }));
     }, BROWSER_TIMEOUT_MS);
 
     it("reports an icon laid over text that nothing marks as deliberate layering", () => {
