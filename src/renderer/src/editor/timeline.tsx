@@ -19,13 +19,18 @@ const ZOOM_STEP = 1.4;
 /** Rows inside the scrolling area, in pixels. */
 const HEADER = 44;
 const RULER = 22;
+/** Room above the Scene cards for Canvas brackets, when the video has a Canvas. */
+const BRACKETS = 14;
 const WORD_LANE = 26;
 const GAP = 8;
 const SCROLLBAR = 10;
 /** Room after the last second, so the end of the video isn't under the edge. */
 const TAIL = 24;
 
-/** The Scene timeline: a time ruler, a card per Scene sized to its length, Transition markers, and the Transcript's words. */
+/**
+ * The Scene timeline: a time ruler, Canvas brackets, a card per Scene sized to its length, Transition
+ * markers, and the Transcript's words.
+ */
 export function Timeline({ preview, height }: { preview: Preview; height: number }) {
   const { timeline } = preview;
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -35,8 +40,10 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const seek = usePlayback((state) => state.seek);
   const px = zoom ?? clampZoom((viewportWidth - TAIL) / Math.max(timeline.duration, 1));
   const area = height - HEADER - SCROLLBAR;
-  const cardTop = RULER + GAP;
-  const cardHeight = Math.max(40, area - RULER - WORD_LANE - 3 * GAP);
+  const canvases = useMemo(() => canvasesOf(timeline.scenes), [timeline.scenes]);
+  const brackets = bracketsHeight(canvases);
+  const cardTop = RULER + GAP + brackets;
+  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP);
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
   const fixError = useOpenVideo((state) => state.fixError);
@@ -61,6 +68,9 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
       <div ref={scrollRef} className="timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
         <div className="relative" style={{ width: timeline.duration * px + TAIL, height: area }}>
           <Ruler duration={timeline.duration} px={px} onSeek={seek} />
+          {canvases.map((scenes) => (
+            <CanvasBracket key={scenes[0]!.unit} scenes={scenes} px={px} top={RULER + GAP} />
+          ))}
           {timeline.scenes.map((scene) => (
             <SceneCard
               key={scene.id}
@@ -239,6 +249,53 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
         </span>
       )}
     </button>
+  );
+}
+
+/** The runs of Scenes that share a Canvas: consecutive Scenes written as one unit. */
+function canvasesOf(scenes: TimelineScene[]): TimelineScene[][] {
+  return scenes
+    .reduce<TimelineScene[][]>((runs, scene) => {
+      const run = runs.at(-1);
+
+      if (run && run[0]!.unit === scene.unit) {
+        run.push(scene);
+
+        return runs;
+      }
+
+      return [...runs, [scene]];
+    }, [])
+    .filter((run) => run.length > 1);
+}
+
+/** The row for Canvas brackets takes room only when the video has a Canvas. */
+function bracketsHeight(canvases: TimelineScene[][]): number {
+  if (canvases.length === 0) {
+    return 0;
+  }
+
+  return BRACKETS;
+}
+
+/** A bracket over the Scenes sharing a Canvas, spanning their cards. */
+function CanvasBracket({ scenes, px, top }: { scenes: TimelineScene[]; px: number; top: number }) {
+  const first = scenes[0]!;
+  const last = scenes.at(-1)!;
+  const description = `Canvas · camera moves across Scenes ${first.number}–${last.number}`;
+
+  return (
+    <div
+      role="img"
+      aria-label={description}
+      title={description}
+      className="absolute h-2.5 rounded-t-[3px] border border-b-0 border-[#4a4a4a]"
+      style={{ left: first.start * px, width: (last.end - first.start) * px - 3, top: top + BRACKETS - 10 }}
+    >
+      <span className="absolute -top-[6px] left-2 max-w-[calc(100%-16px)] truncate bg-[#0b0b0b] px-1.5 text-[11px] leading-[10px] text-ink-muted">
+        {description}
+      </span>
+    </div>
   );
 }
 

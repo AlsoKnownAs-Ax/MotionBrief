@@ -128,7 +128,9 @@ HELPERS (window.MB; prefer them, their defaults follow the Style Preset's Motion
 - MB.type(tl, target, time, {duration}): types an element's text on.
 - MB.emphasize(tl, target, time, {scale}): a brief bump in the accent color.
 
-A CANVAS UNIT (several Scenes): put everything in <div id="<unitId>-world"> at left 0, top 0 with an explicit px size, and give each Scene a region <div data-region="<sceneId>"> with explicit px left, top, width and height, laid out ${format === "vertical" ? "top to bottom" : "left to right"} as one continuous picture. MotionBrief moves the camera between regions; never animate the world or the camera.
+A CANVAS UNIT (several Scenes): put everything in <div id="<unitId>-world"> at left 0, top 0 with an explicit px size, and give each Scene a region <div data-region="<sceneId>"> with explicit px left, top, width and height (${width}x${height}, or larger to zoom out), laid out ${format === "vertical" ? "top to bottom" : "left to right"} as one continuous picture. Inside a region, keep content within the same safe area as the frame. MotionBrief fits each region in the frame and moves the camera between them around each Scene's start; never animate the world or the camera.
+
+A CARRY-OVER INTO YOUR UNIT (the Scene before names an element both Scenes have): that element is on screen from your unit's start (its at(id) is 0) and MotionBrief flies it from its place in the Scene before into yours. Give it no entrance; just lay it out where it belongs.
 
 MOTION AND LOOK:
 - Each element arrives on the word that names it; sequence reveals across the Scene, never everything at once.
@@ -159,7 +161,7 @@ The Style Preset (reach its colors and fonts only through the tokens):
 ${JSON.stringify(presetForCode(preset), null, 1)}
 
 YOUR UNIT: "${unit.id}", ${unit.scenes.length > 1 ? `a Canvas with Scenes ${scenes}` : "a lone Scene"}. It lasts ${seconds(unit.duration)} s (S.duration).
-Scene starts within the unit, in seconds: ${JSON.stringify(unit.sceneStarts)}
+Scene starts within the unit, in seconds: ${JSON.stringify(unit.sceneStarts)}${carriedLine(unit)}
 
 Its Storyboard entries:
 ${JSON.stringify(unit.scenes, null, 1)}
@@ -171,6 +173,14 @@ Spoken words, in seconds from the unit's start:
 ${spoken}
 
 Write the unit and hand it in with ${SCENE_CODE_TOOL}.`;
+}
+
+function carriedLine({ carryIn }: Unit): string {
+  if (!carryIn) {
+    return "";
+  }
+
+  return `\nCarried over from the Scene before: #${carryIn.target}, on screen from the start.`;
 }
 
 export function findingsMessage(findings: CheckFinding[]): string {

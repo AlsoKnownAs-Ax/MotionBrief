@@ -2,7 +2,7 @@ import type { StoryboardTranscript } from "../../contract";
 import type { Scene, Storyboard } from "./schema";
 
 /** A Scene starts this long before its first word is spoken. */
-const SCENE_LEAD_SECONDS = 0.25;
+export const SCENE_LEAD_SECONDS = 0.25;
 
 export type SceneTiming = { scene: Scene; start: number; end: number };
 
