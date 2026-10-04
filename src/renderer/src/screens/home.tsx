@@ -47,10 +47,8 @@ export function Home() {
   const heartbeat = useQuery(orpc.system.heartbeat.experimental_liveOptions());
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-8 p-10">
-      <div className="w-full max-w-3xl">
-        <SetupChecklist />
-      </div>
+    <main className="flex flex-1 flex-col items-center justify-center gap-8 overflow-y-auto p-10">
+      <SetupChecklist />
 
       <div className="flex max-w-md flex-col items-center gap-3 text-center">
         <h1 className="text-app-display">MotionBrief</h1>

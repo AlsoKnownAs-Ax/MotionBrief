@@ -29,6 +29,7 @@ const bridge: Bridge = {
   onCommand: (callback) => subscribe<[AppCommand]>(IPC.command, callback),
   showAppMenu: (position) => ipcRenderer.send(IPC.showAppMenu, position),
   showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
+  chooseFile: (options) => ipcRenderer.invoke(IPC.chooseFile, options),
 };
 
 contextBridge.exposeInMainWorld("motionbrief", bridge);

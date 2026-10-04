@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createRouterClient } from "@orpc/server";
 import { describe, expect, it } from "vitest";
 import type { Format, StoryboardRules, StoryboardTranscript } from "../contract";
@@ -15,7 +17,8 @@ const HORIZONTAL: StoryboardRules = {
 };
 
 function connect() {
-  const { router } = createCore({ appVersion: "1.2.3" });
+  // Validation never touches app data.
+  const { router } = createCore({ appVersion: "1.2.3", appDataDir: join(tmpdir(), "motionbrief-storyboard-test") });
 
   return createRouterClient(router);
 }

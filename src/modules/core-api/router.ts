@@ -5,17 +5,19 @@ import type { ConnectionStatus, Connector, Result, SetupError } from "../connect
 import { BLUEPRINT } from "../frame";
 import { validateStoryboard } from "../storyboard";
 import type { System } from "../system";
+import type { TranscriptionModel } from "../transcription-model";
 
 export type CoreRouterDeps = {
   system: System;
   checker: Checker;
   connector: Connector;
+  transcriptionModel: TranscriptionModel;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel }: CoreRouterDeps) {
   const api = implement(coreContract);
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -65,6 +67,14 @@ export function createCoreRouter({ system, checker, connector }: CoreRouterDeps)
       signIn: api.connection.signIn.handler(async ({ signal }) => setupResult(await connector.setup.signIn(signal))),
       setApiKey: api.connection.setApiKey.handler(async ({ input }) => setupResult(await connector.setup.setApiKey(input.apiKey))),
       removeApiKey: api.connection.removeApiKey.handler(async () => setupResult(await connector.setup.removeApiKey())),
+    },
+    transcriptionModel: {
+      status: api.transcriptionModel.status.handler(() => transcriptionModel.status()),
+      watch: api.transcriptionModel.watch.handler(({ signal }) => transcriptionModel.watch(signal)),
+      start: api.transcriptionModel.start.handler(() => transcriptionModel.start()),
+      pause: api.transcriptionModel.pause.handler(() => transcriptionModel.pause()),
+      resume: api.transcriptionModel.resume.handler(() => transcriptionModel.resume()),
+      import: api.transcriptionModel.import.handler(({ input }) => transcriptionModel.import(input.path)),
     },
   });
 }

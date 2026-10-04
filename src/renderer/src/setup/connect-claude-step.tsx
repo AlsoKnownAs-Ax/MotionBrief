@@ -8,9 +8,12 @@ function ConnectAction() {
   const openSetup = useNavigation((state) => state.openSetup);
 
   return (
-    <Button size="sm" onClick={() => openSetup("connect-claude")}>
-      Connect
-    </Button>
+    <div className="flex items-center gap-3">
+      <span className="flex-1 text-app-xs text-ink-muted">Not connected</span>
+      <Button size="sm" onClick={() => openSetup("connect-claude")}>
+        Connect
+      </Button>
+    </div>
   );
 }
 
@@ -20,9 +23,10 @@ export function useConnectClaudeStep(): SetupStep {
   return {
     id: "connect-claude",
     title: "Connect Claude",
+    label: "Connect Claude",
     description: "The agent runs on your own Claude account. MotionBrief has no servers in between.",
-    isDone: status?.isConnected ?? false,
-    Panel: ConnectClaude,
-    ChecklistAction: ConnectAction,
+    done: status?.isConnected,
+    panel: <ConnectClaude />,
+    summary: <ConnectAction />,
   };
 }
