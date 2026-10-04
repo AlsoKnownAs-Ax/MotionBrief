@@ -210,12 +210,12 @@ describe("the cost cap on an API key", () => {
       // $0.50 for the Storyboard and $0.30 for the first unit's turn stay under $1; the second unit's turn reaches it.
       expect(capped.run?.capUsd).toBe(1);
       expect(capped.run?.total.costUsd).toBeGreaterThanOrEqual(1);
-      // Finished work is kept and the rest becomes flagged fallbacks; no agent starts after the cap.
-      expect(done).toMatchObject({ state: "done", version: 1 });
+      // The cap is a Stop: finished work is kept and the rest becomes flagged fallbacks; no agent starts after it.
+      expect(done).toMatchObject({ state: "done", version: 1, stopped: { cause: "cost-cap" } });
       expect(done.units.map(({ status }) => status)).toEqual(UNITS.map(() => "fallback"));
       expect(replay.askedOf("scene-code s05")).toEqual([]);
       const saved = JSON.parse(await readFile(join(project.path, "horizontal", "versions", "1.json"), "utf8")) as { flags: { reason: string }[] };
-      expect(saved.flags.some(({ reason }) => reason.includes("$1.00 cap"))).toBe(true);
+      expect(saved.flags.map(({ reason }) => reason)).toEqual(UNITS.map(() => "The run reached your cost cap before this Scene was finished."));
       await core.project.close({ projectId: project.id });
     },
     RUN_TIMEOUT_MS,

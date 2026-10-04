@@ -641,9 +641,10 @@ export const RevisionStatusSchema = z.object({
    * `idle` until a request is sent; `revising` while the agent reads it; `rebuilding` while units are re-rendered and
    * regenerated; `saving` once its Version is being saved, when Stop is too late. It ends `answered` (a reply or one
    * clarifying question, no Version), `done` (a new Version), `failed` or `stopped`; neither of the last two leaves a
-   * Version.
+   * Version. On an API key with approval on, a Revision that regenerates Scenes waits in `approval` after planning
+   * until the creator approves `costUsd` (`video.approveRevision`) or stops it.
    */
-  state: z.enum(["idle", "revising", "rebuilding", "saving", "answered", "done", "failed", "stopped"]),
+  state: z.enum(["idle", "revising", "approval", "rebuilding", "saving", "answered", "done", "failed", "stopped"]),
   request: RevisionRequestSchema.optional(),
   /** Scenes of the current Version the Revision is working on: the scope while the agent reads it, then what it rebuilds. */
   affected: z.array(z.string()),
@@ -652,6 +653,8 @@ export const RevisionStatusSchema = z.object({
   reply: z.string().optional(),
   /** The agent's one-line summary of its change. */
   summary: z.string().optional(),
+  /** US dollars, while `approval`: what regenerating its Scenes is estimated to cost. */
+  costUsd: CostRangeSchema.optional(),
   /** Scenes whose instruction couldn't be applied, so they kept their previous code. */
   notApplied: z.array(z.string()).optional(),
   /** The Version the Revision saved, once `done`, and the video as it now is. */
@@ -1026,6 +1029,8 @@ export const coreContract = {
     /** Streams the video's Revision now and after every change, until the window stops listening. */
     revision: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(RevisionStatusSchema)),
     /** Stops the running Revision and discards it: the current Version stays as it is. */
+    /** Lets a Revision waiting in `approval` regenerate its Scenes; no-op otherwise. */
+    approveRevision: oc.input(VideoRefSchema),
     stopRevision: oc.input(VideoRefSchema),
     /**
      * Opens the video of a Format for the player: its newest Version with the Project's current Transcript, word

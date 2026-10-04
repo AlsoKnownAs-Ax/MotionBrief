@@ -1,10 +1,12 @@
 import type {
   CheckFinding,
+  ConnectorError,
   GenerationPreviewError,
   Preview,
   RevisionRequest,
   RevisionStatus,
   RevisionUnit,
+  RoleModels,
   SceneStatus,
   StylePreset,
   Transcript,
@@ -18,18 +20,15 @@ import type { PreviewError, Previews, Stills } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type RevisionRecord, type Version, type VersionError } from "../projects";
 import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { presetBrief, storyboardRules } from "../style";
+import { DEFAULT_MODELS } from "../settings";
 import type { Clock } from "../system";
+import type { Usage, UsageRun } from "../usage";
 import { runRevisionAgent } from "./agent";
 import { regenerateRequest } from "./prompts";
 import { planRebuild, type UnitRebuild } from "./rebuild";
 
-/**
- * The model each role of a Revision runs on until Settings choose others: the Revision agent and Scene code on Opus,
- * the visual review of regenerated units on Sonnet.
- */
-export const DEFAULT_REVISION_MODELS = { revision: "claude-opus-5-5", sceneCode: "claude-opus-5-5", review: "claude-sonnet-5-5" };
-
-export type RevisionModels = typeof DEFAULT_REVISION_MODELS;
+/** A Revision's roles: the Revision agent, Scene code for regenerated units, and their visual review. */
+export type RevisionModels = Pick<RoleModels, "revision" | "sceneCode" | "visualReview">;
 
 /** Scene-code subagents running at once, as in a first generation. */
 const PARALLEL_UNITS = 4;
@@ -47,7 +46,10 @@ export type RevisionsOptions = {
   clock: Clock;
   /** Where agent sessions get their workspace folders. */
   workDir: string;
-  models?: RevisionModels;
+  /** Counts what a Revision's agents use, asks for approval before regenerating Scenes, and stops one at the cap. */
+  usage: Usage;
+  /** The model per agent role Settings choose; read as a Revision starts, so a change applies to the next one. */
+  models?: () => Promise<RoleModels>;
 };
 
 export type ReviseError =
@@ -76,7 +78,7 @@ type Store = ReturnType<typeof createStatusStore<RevisionStatus>>;
  * A video's running Revision. Once it starts saving its Version it is committing: Stop is too late from then on,
  * and the Revision ends `done`.
  */
-type Job = { controller: AbortController; isCommitting: boolean };
+type Job = { controller: AbortController; isCommitting: boolean; approve?: () => void };
 
 /** What a regenerated unit ended with: new code, or none; and the flag it carries in the new Version, if any. */
 type Regenerated = { code?: UnitCode; flag?: Flag };
@@ -87,7 +89,7 @@ type Regenerated = { code?: UnitCode; flag?: Flag };
  * (the rebuild rule), re-renders and checks what only moved in time, regenerates what changed, and saves the result
  * as the next Version. The current Version plays on meanwhile; Stop, or any failure, leaves it as it was.
  */
-export function createRevisions({ connector, checker, previews, stills, projects, clock, workDir, models = DEFAULT_REVISION_MODELS }: RevisionsOptions) {
+export function createRevisions({ checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS }: RevisionsOptions) {
   const videos = new Map<string, Store>();
   const running = new Map<string, Job>();
 
@@ -127,6 +129,9 @@ export function createRevisions({ connector, checker, previews, stills, projects
         if (running.get(key) === job) {
           running.delete(key);
         }
+
+        // Only a first generation feeds the running cost per Voiceover minute.
+        void run.usage.finish({ completed: false });
       });
 
     return { data: null, error: null };
@@ -168,7 +173,21 @@ export function createRevisions({ connector, checker, previews, stills, projects
       return { data: null, error: { code: "UNKNOWN_SCENE", sceneId: unknown } };
     }
 
-    return { data: { ref, request, transcript: video.transcript, voiceover: video.voiceoverPath, current, store, job }, error: null };
+    const chosen = await models();
+    const run = usage.startRun(ref);
+
+    return {
+      data: { ref, request, transcript: video.transcript, voiceover: video.voiceoverPath, duration: video.project.voiceover.duration, current, store, job, usage: run, models: chosen },
+      error: null,
+    };
+  }
+
+  /**
+   * Lets a Revision waiting for approval regenerate its Scenes. A Revision that isn't waiting is left as it is, and Stop
+   * discards one that is.
+   */
+  function approve(ref: VideoRef) {
+    running.get(storeOf(ref).key)?.approve?.();
   }
 
   /** Stops the video's running Revision and discards it, unless it is already saving its Version. */
@@ -210,6 +229,11 @@ export function createRevisions({ connector, checker, previews, stills, projects
     current: Current;
     store: Store;
     job: Job;
+    /** The Voiceover's length in seconds, which prices regenerating Scenes. */
+    duration: number;
+    /** Its agents start their sessions through it, so what they use is counted and the cap can stop them. */
+    usage: UsageRun;
+    models: RevisionModels;
   };
 
   /** Updates the Revision's status, unless it was stopped: a stopped Revision says nothing more. */
@@ -226,10 +250,10 @@ export function createRevisions({ connector, checker, previews, stills, projects
     const brief = presetBrief(preset, ref.format);
     const rulesFor = (withCaptions: boolean) => storyboardRules(preset, { format: ref.format, captions: withCaptions });
     const { data: outcome, error } = await runRevisionAgent({
-      connector,
+      connector: run.usage.connector("revision"),
       workDir,
       signal: job.controller.signal,
-      model: models.revision,
+      model: run.models.revision,
       storyboard: current.storyboard,
       transcript,
       rulesFor,
@@ -241,6 +265,10 @@ export function createRevisions({ connector, checker, previews, stills, projects
       request: request.message,
       scope: request.scope,
     });
+
+    if (run.usage.isCapped()) {
+      return capped(run);
+    }
 
     if (error) {
       return publish(run, { state: "failed", affected: [], error });
@@ -306,6 +334,12 @@ export function createRevisions({ connector, checker, previews, stills, projects
     }
 
     const regenerating = working.filter(({ unit, rebuild: need }) => need === "regenerate" || failing.has(unit.id));
+    const isApproved = await approval(run, regenerating.length / plans.length);
+
+    if (!isApproved) {
+      return;
+    }
+
     working
       .filter((plan) => !regenerating.includes(plan))
       .forEach(({ unit }) => show({ ...progress.get(unit.id)!, status: statusOf(code[unit.id]) }));
@@ -317,10 +351,10 @@ export function createRevisions({ connector, checker, previews, stills, projects
     await inParallel(regenerating, PARALLEL_UNITS, async ({ unit, previous, instructions, isInstructionOnly }) => {
       const previousCode = previous && current.code[previous.id];
       const outcome = await writeUnitCode({
-        connector,
+        connector: run.usage.connector("sceneCode"),
         workDir,
         signal,
-        model: models.sceneCode,
+        model: run.models.sceneCode,
         checker,
         storyboard,
         transcript,
@@ -329,7 +363,8 @@ export function createRevisions({ connector, checker, previews, stills, projects
         brief,
         unit,
         baseline,
-        review: (passing) => reviewUnit({ connector, workDir, signal, model: models.review, stills, storyboard, transcript, rules, preset, brief, unit, code: passing }),
+        review: (passing) =>
+          reviewUnit({ connector: run.usage.connector("visualReview"), workDir, signal, model: run.models.visualReview, stills, storyboard, transcript, rules, preset, brief, unit, code: passing }),
         request: regenerateRequest(instructions, previousCode || undefined),
         onProgress: (status, attempts) => show({ id: unit.id, rebuild: "regenerate", status, attempts }),
       });
@@ -353,6 +388,11 @@ export function createRevisions({ connector, checker, previews, stills, projects
       return;
     }
 
+    // The cap is a Stop: the Revision is discarded and the video stays as it was.
+    if (run.usage.isCapped()) {
+      return capped(run);
+    }
+
     const { data: units, error: unitsError } = await storeUnits(run, plans, code);
 
     if (unitsError) {
@@ -365,12 +405,43 @@ export function createRevisions({ connector, checker, previews, stills, projects
       captions: writtenFor,
       units,
       flags: plans.flatMap(({ unit, previous }) => flagsOf(unit.id, previous?.id, code, regenerated, current.version.flags)),
-      models: { ...current.version.models, ...models },
+      models: { ...current.version.models, ...run.models },
       frameContractVersion: current.version.frameContractVersion,
       createdAt: new Date(clock.now()).toISOString(),
       origin: "revision",
       revision: { request: run.request.message, scope: run.request.scope, summary, notApplied },
     }, { storyboard, transcript, rules, preset, code, voiceover: run.voiceover, captions }, choice);
+  }
+
+  /**
+   * On an API key with "Approve cost before running" on, a Revision that regenerates Scenes waits after planning for
+   * the creator's approval of their estimated cost: `share` of a first generation. One that only re-renders never asks.
+   * Resolves to whether it goes on; Stop discards a waiting Revision.
+   */
+  async function approval(run: Run, share: number): Promise<boolean> {
+    const { job } = run;
+
+    if (share === 0 || !(await usage.needsApproval())) {
+      return !job.controller.signal.aborted;
+    }
+
+    const costUsd = await usage.estimateCost(run.duration * share);
+    const approved = new Promise<boolean>((resolve) => {
+      job.approve = () => resolve(true);
+      job.controller.signal.addEventListener("abort", () => resolve(false), { once: true });
+    });
+    publish(run, { state: "approval", costUsd });
+    const isApproved = await approved;
+    job.approve = undefined;
+    publish(run, { state: "rebuilding", costUsd: undefined });
+
+    return isApproved && !job.controller.signal.aborted;
+  }
+
+  /** A Revision whose run reached the cost cap ends as stopped, with no Version, the way Stop discards one. */
+  function capped(run: Run) {
+    const error: ConnectorError = { code: "COST_CAP", message: "Cost cap reached" };
+    publish(run, { state: "stopped", affected: [], error: { code: "AGENT_FAILED", error } });
   }
 
   /**
@@ -495,7 +566,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
     return { data: storeOf(ref).store.watch(signal), error: null };
   }
 
-  return { start, stop, watch };
+  return { start, approve, stop, watch };
 }
 
 function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {

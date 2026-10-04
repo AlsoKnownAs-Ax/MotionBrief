@@ -225,6 +225,7 @@ export function createCoreRouter({
         dataOrThrow(await revisions.start({ projectId, format }, request));
       }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
+      approveRevision: api.video.approveRevision.handler(({ input }) => revisions.approve(input)),
       stopRevision: api.video.stopRevision.handler(({ input }) => revisions.stop(input)),
       stop: api.video.stop.handler(async ({ input }) => {
         dataOrThrow(await generation.stop(input));
