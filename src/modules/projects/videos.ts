@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { StylePresetSchema, UnitCodeSchema, type Format, type UnitCode } from "../../contract";
@@ -39,12 +39,25 @@ const VideoContentSchema = z.object({
   frameContractVersion: z.string(),
 });
 
+/** What the creator asked of a Revision and what it did; the next Revision's agent reads these as the video's history. */
+export const RevisionRecordSchema = z.object({
+  request: z.string(),
+  /** The Scenes the request was scoped to; none for the whole video. */
+  scope: z.array(z.string()),
+  /** The agent's one-line summary of its change. */
+  summary: z.string(),
+  /** Scenes whose instruction couldn't be applied, so they kept their previous code. */
+  notApplied: z.array(z.string()),
+});
+
 export const VersionSchema = VideoContentSchema.extend({
   /** Counted from 1, in the order Versions were made. */
   version: z.number().int().positive(),
   createdAt: z.iso.datetime(),
-  /** What made it: a first generation, for now. */
-  origin: z.literal("generation"),
+  /** What made it: a first generation or a Revision. */
+  origin: z.enum(["generation", "revision"]),
+  /** Set on a Version a Revision made. */
+  revision: RevisionRecordSchema.optional(),
 });
 
 /** A first generation in progress: its units are added as they finish, so a crash loses none of them. */
@@ -53,6 +66,7 @@ export const GenerationRecordSchema = VideoContentSchema.extend({ startedAt: z.i
 export type Flag = z.infer<typeof FlagSchema>;
 export type VideoContent = z.infer<typeof VideoContentSchema>;
 export type Version = z.infer<typeof VersionSchema>;
+export type RevisionRecord = z.infer<typeof RevisionRecordSchema>;
 export type GenerationRecord = z.infer<typeof GenerationRecordSchema>;
 
 /** Stores a unit's Scene code under the hash of its file, once: Versions with the same code share it. */
@@ -134,6 +148,34 @@ export async function latestVersion(dir: string, format: Format): Promise<number
   }
 
   return Math.max(...numbers);
+}
+
+/** A saved Version of the video. */
+export async function readVersion(dir: string, format: Format, number: number): Promise<Result<Version, FileError>> {
+  const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
+
+  return readJson(path, VersionSchema);
+}
+
+/** A unit's Scene code by the hash a Version names it by. */
+export async function readUnit(dir: string, format: Format, hash: string): Promise<Result<UnitCode, FileError>> {
+  return readJson(join(dir, format, UNITS_DIR, `${hash}.json`), UnitCodeSchema);
+}
+
+async function readJson<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, FileError>> {
+  const { data: found, error } = await fileStep(path, async () => JSON.parse(await readFile(path, "utf8")) as unknown);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const parsed = schema.safeParse(found);
+
+  if (!parsed.success) {
+    return { data: null, error: { code: "FILE_FAILED", path, message: parsed.error.message } };
+  }
+
+  return { data: parsed.data, error: null };
 }
 
 function json(value: unknown): string {

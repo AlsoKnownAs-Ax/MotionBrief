@@ -10,6 +10,7 @@ import { createGeneration } from "../modules/generation";
 import { createMedia } from "../modules/media";
 import { createPreviews, createStills } from "../modules/preview";
 import { createProjects, type Trash } from "../modules/projects";
+import { createRevisions } from "../modules/revision";
 import { createPresetStore } from "../modules/style";
 import { createSystem, realClock, realDisk, type Clock, type Disk } from "../modules/system";
 import { createWhisperCli, createWhisperTranscriber, type WhisperEngine } from "../modules/transcriber";
@@ -102,10 +103,11 @@ export function createCore({
   const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
   const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
   const generation = createGeneration({ connector, checker, previews, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
+  const revisions = createRevisions({ connector, checker, previews, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return {
-    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation }),
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions }),
     /** A window's connection closed: its Project is closed and unlocked. */
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */

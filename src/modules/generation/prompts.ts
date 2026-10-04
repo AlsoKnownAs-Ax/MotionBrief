@@ -82,7 +82,7 @@ export function storyboardIssuesMessage(issues: StoryboardIssue[]): string {
 ${issues.map(issueLine).join("\n")}`;
 }
 
-function issueLine({ code, sceneId, field, message }: StoryboardIssue): string {
+export function issueLine({ code, sceneId, field, message }: StoryboardIssue): string {
   const where = [sceneId, field].filter(Boolean).join(" ");
 
   return `- [${code}]${where ? ` ${where}:` : ""} ${message}`;

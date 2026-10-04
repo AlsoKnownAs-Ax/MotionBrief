@@ -27,11 +27,13 @@ export const RETRIES = 2;
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
-type AgentRun = {
+export type AgentRun = {
   connector: Connector;
   model: string;
   /** A folder of its own sessions can be given as their workspace. */
   workDir: string;
+  /** Aborting interrupts the agent's turn. */
+  signal?: AbortSignal;
 };
 
 export type StoryboardError = { code: "STORYBOARD_INVALID"; issues: StoryboardIssue[] } | { code: "AGENT_FAILED"; error: ConnectorError };
@@ -101,6 +103,8 @@ type UnitRun = AgentRun & {
   baseline: CheckFinding[];
   /** The unit is being written (`attempts` handed in so far) or checked. */
   onProgress: (status: "writing" | "checking", attempts: number) => void;
+  /** Said after the unit's brief in the first message, such as what a Revision asks of it. */
+  request?: string;
 };
 
 /**
@@ -108,7 +112,7 @@ type UnitRun = AgentRun & {
  * as its fallback Scene), and rewrites it with the findings at most twice. A finding that names no unit
  * counts against it unless the page has it without the unit's code too.
  */
-export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, onProgress, ...run }: UnitRun): Promise<UnitOutcome> {
+export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, onProgress, request, ...run }: UnitRun): Promise<UnitOutcome> {
   let submitted: UnitCode | undefined;
   const submit = defineHostTool({
     name: SCENE_CODE_TOOL,
@@ -128,7 +132,7 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
   let attempts = 0;
 
   const outcome = await withSession(run, options, async (session): Promise<Result<UnitOutcome, never>> => {
-    let message = unitMessage({ storyboard, preset, unit, transcript });
+    let message = request ? `${unitMessage({ storyboard, preset, unit, transcript })}\n\n${request}` : unitMessage({ storyboard, preset, unit, transcript });
     let reason = "";
 
     for (let attempt = 0; attempt <= RETRIES; attempt++) {
@@ -185,11 +189,11 @@ function summary(findings: CheckFinding[]): string {
   return findings.map(findingLine).join("\n");
 }
 
-type SessionSetup = { label: string; systemPrompt: string; hostTools: HostTool[] };
+export type SessionSetup = { label: string; systemPrompt: string; hostTools: HostTool[] };
 
 /** Runs `work` in a fresh session with a workspace folder of its own, closing both afterwards. */
-async function withSession<T, E>(
-  { connector, model, workDir }: AgentRun,
+export async function withSession<T, E>(
+  { connector, model, workDir, signal }: AgentRun,
   setup: SessionSetup,
   work: (session: Session) => Promise<Result<T, E>>,
 ): Promise<Result<T, E | { code: "AGENT_FAILED"; error: ConnectorError }>> {
@@ -203,9 +207,13 @@ async function withSession<T, E>(
       return { data: null, error: { code: "AGENT_FAILED", error } };
     }
 
+    const interrupt = () => void session.interrupt();
+    signal?.addEventListener("abort", interrupt);
+
     try {
       return await work(session);
     } finally {
+      signal?.removeEventListener("abort", interrupt);
       session.close();
     }
   } finally {
@@ -215,17 +223,24 @@ async function withSession<T, E>(
 
 /** Sends one message and waits for the agent's turn to end; a turn that doesn't complete answers with its error. */
 async function runTurn(session: Session, message: string): Promise<ConnectorError | undefined> {
+  const { error } = await sendTurn(session, message);
+
+  return error ?? undefined;
+}
+
+/** Sends one message and resolves with the text the agent's turn ended on, or the error it ended with. */
+export async function sendTurn(session: Session, message: string): Promise<Result<string, ConnectorError>> {
   for await (const event of session.sendTurn(message)) {
     if (event.type !== "turn-completed") {
       continue;
     }
 
     if (event.status === "completed") {
-      return undefined;
+      return { data: event.text ?? "", error: null };
     }
 
-    return event.error ?? { code: "SERVICE_ERROR", message: `The agent's turn ended ${event.status}` };
+    return { data: null, error: event.error ?? { code: "SERVICE_ERROR", message: `The agent's turn ended ${event.status}` } };
   }
 
-  return { code: "AGENT_UNAVAILABLE", message: "The agent's turn ended without completing" };
+  return { data: null, error: { code: "AGENT_UNAVAILABLE", message: "The agent's turn ended without completing" } };
 }

@@ -26,7 +26,7 @@ import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocumentError } from "./video";
-import { latestVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version } from "./videos";
+import { latestVersion, readUnit, readVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version } from "./videos";
 
 /** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
 export type Trash = (path: string) => Promise<void>;
@@ -878,6 +878,10 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveGeneration: (projectId: string, format: Format, record: GenerationRecord) => write(projectId, (dir) => saveGeneration(dir, format, record)),
     /** Saves the video's next Version; resolves to its number. */
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
+    /** A saved Version of the video, by number. */
+    readVersion: (projectId: string, format: Format, number: number) => write(projectId, (dir) => readVersion(dir, format, number)),
+    /** A unit's Scene code by its hash in a Version. */
+    readUnit: (projectId: string, format: Format, hash: string) => write(projectId, (dir) => readUnit(dir, format, hash)),
     lastExportPath,
     rememberExportPath,
     close,
