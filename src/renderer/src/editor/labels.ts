@@ -42,13 +42,23 @@ export const TRANSITIONS = {
  */
 export const SCENE_STATUS = {
   ready: { label: "Ready", badge: undefined, badgeLabel: undefined },
+  flagged: { label: "Review note", badge: "flagged", badgeLabel: "Review note" },
   fallback: { label: "Fallback Scene", badge: "fallback", badgeLabel: "Fallback" },
   queued: { label: "Storyboard animatic, waiting to be written", badge: "working", badgeLabel: "Queued" },
   writing: { label: "Storyboard animatic, being written", badge: "working", badgeLabel: "Writing" },
   checking: { label: "Storyboard animatic, being checked", badge: "working", badgeLabel: "Checking" },
-} satisfies Record<SceneStatus, { label: string; badge?: "fallback" | "working"; badgeLabel?: string }>;
+} satisfies Record<SceneStatus, { label: string; badge?: "flagged" | "fallback" | "working"; badgeLabel?: string }>;
 
 export const FORMAT_LABELS = { horizontal: "16:9", vertical: "9:16" } satisfies Record<Format, string>;
+
+/** A Scene's description, followed by its review note when it has one. */
+export function withNote(text: string, scene: TimelineScene, separator = ": "): string {
+  if (!scene.note) {
+    return text;
+  }
+
+  return `${text}${separator}${scene.note}`;
+}
 
 export function sceneName(scene: TimelineScene): string {
   return `Scene ${scene.number}`;

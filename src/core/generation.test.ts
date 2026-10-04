@@ -221,7 +221,8 @@ describe("first generation", () => {
   it("writes each unit's Scene code with its own subagent, 4 at a time", () => {
     expect(unitStatuses(fourAtATime.status)).toEqual({ s01: "writing", s02: "writing", s03: "writing", s04: "writing", s05: "queued" });
     expect(fourAtATime.open).toBe(4);
-    expect(replay.sessions().mostOpen).toBe(4);
+    // A unit's visual review runs beside its Scene-code session, which waits to repair it.
+    expect(replay.sessions("scene-code").mostOpen).toBe(4);
     expect(UNITS.map((unit) => replay.askedOf(`scene-code ${unit}`)[0]?.options.model)).toEqual(UNITS.map(() => "claude-opus-5-5"));
   });
 

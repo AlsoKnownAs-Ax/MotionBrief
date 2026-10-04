@@ -74,8 +74,8 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
       return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source };
     });
     const { origin } = await (server ??= startPreviewServer(rootDir));
-    // Units still being generated don't change the page, only how the timeline shows them.
-    const timeline = timelineOf(storyboard, source.transcript, page.page, source.code, source.pending);
+    // Units still being generated and review notes don't change the page, only how the timeline shows them.
+    const timeline = timelineOf(storyboard, source.transcript, page.page, source.code, source.pending, source.notes);
 
     return { data: { id, url: `${origin}/${id}/index.html`, timeline }, error: null };
   }

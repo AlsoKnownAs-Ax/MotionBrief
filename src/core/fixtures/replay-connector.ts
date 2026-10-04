@@ -27,8 +27,9 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
   const shared = Array.isArray(script) ? [...script] : undefined;
   const asked: ReplayedTurn[] = [];
   const held = new Map<string, PromiseWithResolvers<void>>();
-  let openSessions = 0;
-  let mostOpenSessions = 0;
+  // The labels of the sessions open now, and what was open each time one started.
+  const open: (string | undefined)[] = [];
+  const openings: (string | undefined)[][] = [];
   const unsupported = async () => ({ data: null, error: { code: "SIGN_IN_FAILED" as const, message: "Replays don't sign in" } });
 
   function turnsFor(label: string | undefined): AgentEvent[][] {
@@ -48,8 +49,8 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
     startSession: async (options) => {
       const turns = turnsFor(options.label);
       let isOpen = true;
-      openSessions += 1;
-      mostOpenSessions = Math.max(mostOpenSessions, openSessions);
+      open.push(options.label);
+      openings.push([...open]);
 
       return {
         data: {
@@ -71,7 +72,7 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
           close: () => {
             if (isOpen) {
               isOpen = false;
-              openSessions -= 1;
+              open.splice(open.indexOf(options.label), 1);
             }
           },
         },
@@ -85,8 +86,12 @@ export function createReplayConnector(script: ReplayScript, status: ConnectionSt
     asked,
     /** The turns sessions with this label were asked, in order. */
     askedOf: (label: string) => asked.filter(({ options }) => options.label === label),
-    /** Sessions open now, and the most that were ever open at once. */
-    sessions: () => ({ open: openSessions, mostOpen: mostOpenSessions }),
+    /** Sessions open now, and the most that were ever open at once; only those whose label starts with `prefix`, if given. */
+    sessions: (prefix = "") => {
+      const count = (labels: (string | undefined)[]) => labels.filter((label) => (label ?? "").startsWith(prefix)).length;
+
+      return { open: count(open), mostOpen: Math.max(0, ...openings.map(count)) };
+    },
     /** Holds every turn of sessions with this label until `release`. */
     hold: (label: string) => void held.set(label, Promise.withResolvers()),
     release: (label: string) => {

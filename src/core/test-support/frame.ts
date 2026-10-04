@@ -10,6 +10,9 @@ import { chromeHeadlessShellPath } from "../native";
 /** Opening a page launches the pinned chrome-headless-shell. */
 export const FRAME_TIMEOUT_MS = 60_000;
 
+/** Closing a page waits for the browser to exit, which can take seconds while other test files load the machine. */
+export const CLOSE_TIMEOUT_MS = 30_000;
+
 export type OpenFrame = { page: FramePage; dir: string };
 
 /** Assembles a Storyboard's units in the frame, in a Style Preset, and opens the page; units without code are fallback Scenes. */

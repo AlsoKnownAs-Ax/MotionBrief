@@ -51,7 +51,7 @@ function GenerationBadge() {
   }
 
   if (status?.state === "writing") {
-    const finished = status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length;
+    const finished = status.units.filter((unit) => unit.status === "ready" || unit.status === "flagged" || unit.status === "fallback").length;
 
     return (
       <Badge role="status" status="working" pulse>
