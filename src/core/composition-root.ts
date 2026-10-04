@@ -5,7 +5,7 @@ import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
 import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
-import { createExporter, memoryExportLocations } from "../modules/exporter";
+import { createExporter, projectExportLocations } from "../modules/exporter";
 import { createMedia } from "../modules/media";
 import { createPreviews } from "../modules/preview";
 import { createProjects } from "../modules/projects";
@@ -90,7 +90,7 @@ export function createCore({
   const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
-  const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: memoryExportLocations() });
+  const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }) };

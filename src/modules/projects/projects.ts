@@ -10,6 +10,7 @@ import { LOCK_FILE, saveDocument, SCHEMA_VERSION, writeLock, type ProjectDocumen
 import { copyHashed, fileStep, renameRetrying, type FileError, type Result } from "./files";
 import { candidateName, nameFromFile, validName } from "./names";
 import { createStatusStore } from "./status";
+import { readVideo, saveVideo, type VideoDocumentError } from "./video";
 
 export type ProjectsOptions = {
   /** Where new Projects go by default: Documents/MotionBrief. */
@@ -317,6 +318,47 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     return { data: null, error: null };
   }
 
+  /** Where the video was last exported to, kept in the video's folder; absent before its first export. */
+  async function lastExportPath(projectId: string, format: Format): Promise<Result<string | undefined, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { data: video, error } = await enqueue(project, () => readVideo(project.dir, format));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: video.lastExportPath, error: null };
+  }
+
+  function rememberExportPath(projectId: string, format: Format, path: string): Promise<Result<null, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
+    }
+
+    return enqueue(project, async () => {
+      const { data: video, error } = await readVideo(project.dir, format);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      const { error: saveError } = await saveVideo(project.dir, format, { ...video, lastExportPath: path });
+
+      if (saveError) {
+        return { data: null, error: saveError };
+      }
+
+      return { data: null, error: null };
+    });
+  }
+
   /** Stops the Project's work, waits for its last write, and releases the lock. */
   async function close(projectId: string) {
     const project = open.get(projectId);
@@ -330,7 +372,7 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     await enqueue(project, () => fileStep(project.dir, () => rm(join(project.dir, LOCK_FILE), { force: true })));
   }
 
-  return { defaults, create, update, watchTranscription, retryTranscription, close };
+  return { defaults, create, update, watchTranscription, retryTranscription, lastExportPath, rememberExportPath, close };
 }
 
 function keptTranscript(document: ProjectDocument, isNewLanguage: boolean) {

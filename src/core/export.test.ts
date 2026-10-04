@@ -14,7 +14,8 @@ import { silentWav } from "./test-support/voiceover";
 /** An export renders every frame in the pinned browser and encodes with the pinned FFmpeg. */
 const EXPORT_TIMEOUT_MS = 180_000;
 
-const VIDEO: VideoRef = { projectId: "0f8c2a51-export-test", format: "horizontal" };
+/** A video of a Project no core has open. */
+const UNOPENED: VideoRef = { projectId: "0f8c2a51-export-test", format: "horizontal" };
 
 /** The Checker's passing Scene code for both units of its 8.2 s fixture. */
 async function goodCode(): Promise<Record<string, UnitCode>> {
@@ -29,6 +30,8 @@ async function goodCode(): Promise<Record<string, UnitCode>> {
 
 let workDir = "";
 let voiceover = "";
+/** Closes the Projects the tests opened, releasing their locks. */
+const closers: (() => Promise<unknown>)[] = [];
 
 beforeAll(async () => {
   workDir = await mkdtemp(join(tmpdir(), "motionbrief-export-"));
@@ -36,20 +39,33 @@ beforeAll(async () => {
   await writeFile(voiceover, silentWav());
 });
 
-afterAll(() => rm(workDir, { recursive: true, force: true }));
+afterAll(async () => {
+  await Promise.all(closers.map((close) => close()));
+  await rm(workDir, { recursive: true, force: true, maxRetries: 5 });
+});
 
 async function source(): Promise<VideoSource> {
   return { storyboard, transcript, rules: RULES, preset: BLUEPRINT, code: await goodCode(), voiceover };
 }
 
 /** A core with its own app data folder, and the video open in its player. */
-async function openVideo(options: Parameters<typeof connect>[0] = {}) {
+async function openPreview(options: Parameters<typeof connect>[0] = {}) {
   const appDataDir = await mkdtemp(join(workDir, "app-data-"));
   const cacheDir = join(appDataDir, "cache");
   const client = connect({ appDataDir, cacheDir, ...options });
   const preview = await client.preview.open(await source());
 
   return { client, cacheDir, previewId: preview.id };
+}
+
+/** The same, as the horizontal video of a Project the core has open. */
+async function openVideo() {
+  const opened = await openPreview();
+  const project = await opened.client.project.create({ voiceoverPath: voiceover, format: "horizontal" });
+  closers.push(() => opened.client.project.close({ projectId: project.id }));
+  const video: VideoRef = { projectId: project.id, format: "horizontal" };
+
+  return { ...opened, projectDir: project.path, video };
 }
 
 async function collect(statuses: AsyncIterable<ExportStatus>): Promise<ExportStatus[]> {
@@ -79,15 +95,14 @@ async function exists(path: string): Promise<boolean> {
 
 describe("Export MP4", () => {
   describe("exports the open video", () => {
-    let client: Awaited<ReturnType<typeof openVideo>>["client"];
+    let opened: Awaited<ReturnType<typeof openVideo>>;
     let target = "";
     let statuses: ExportStatus[] = [];
 
     beforeAll(async () => {
-      const opened = await openVideo();
-      client = opened.client;
+      opened = await openVideo();
       target = join(workDir, "Exported video.mp4");
-      statuses = await collect(await client.export.mp4({ previewId: opened.previewId, path: target, video: VIDEO }));
+      statuses = await collect(await opened.client.export.mp4({ previewId: opened.previewId, path: target, video: opened.video }));
     }, EXPORT_TIMEOUT_MS);
 
     it("as an MP4 at the chosen path, as long as the video, with the Voiceover as its audio track", async () => {
@@ -116,22 +131,30 @@ describe("Export MP4", () => {
     });
 
     it("and remembers where it was saved, for that video only", async () => {
-      expect(await client.export.lastPath(VIDEO)).toEqual({ path: target });
-      expect(await client.export.lastPath({ ...VIDEO, format: "vertical" })).toEqual({});
-      expect(await client.export.lastPath({ ...VIDEO, projectId: "another-project" })).toEqual({});
+      const { client, video } = opened;
+
+      expect(await client.export.lastPath(video)).toEqual({ path: target });
+      expect(await client.export.lastPath({ ...video, format: "vertical" })).toEqual({});
+      expect(await client.export.lastPath(UNOPENED)).toEqual({});
+    });
+
+    it("in the video's folder inside the Project, so the Project keeps it", async () => {
+      const saved: unknown = JSON.parse(await readFile(join(opened.projectDir, "horizontal", "video.json"), "utf8"));
+
+      expect(saved).toEqual({ lastExportPath: target });
     });
   });
 
   it(
     "stops when the creator cancels, leaving no file behind and the last path as it was",
     async () => {
-      const { client, cacheDir, previewId } = await openVideo();
+      const { client, cacheDir, previewId, video } = await openVideo();
       const target = join(workDir, "Cancelled.mp4");
       const controller = new AbortController();
       const statuses: ExportStatus[] = [];
 
       const exporting = (async () => {
-        for await (const status of await client.export.mp4({ previewId, path: target, video: VIDEO }, { signal: controller.signal })) {
+        for await (const status of await client.export.mp4({ previewId, path: target, video }, { signal: controller.signal })) {
           statuses.push(status);
 
           if (status.state === "rendering" && status.stage === "capturing") {
@@ -145,33 +168,33 @@ describe("Export MP4", () => {
       expect(statuses.at(-1)).toMatchObject({ state: "rendering", stage: "capturing" });
       await vi.waitFor(async () => expect(await readdir(join(cacheDir, "export")).catch(() => [])).toEqual([]), { timeout: 30_000, interval: 250 });
       expect(await exists(target)).toBe(false);
-      expect(await client.export.lastPath(VIDEO)).toEqual({});
+      expect(await client.export.lastPath(video)).toEqual({});
     },
     EXPORT_TIMEOUT_MS,
   );
 
   it("refuses a video that isn't open", async () => {
-    const statuses = async () => collect(await connect().export.mp4({ previewId: "0123456789abcdef", path: join(workDir, "Nope.mp4"), video: VIDEO }));
+    const statuses = async () => collect(await connect().export.mp4({ previewId: "0123456789abcdef", path: join(workDir, "Nope.mp4"), video: UNOPENED }));
 
     await expect(statuses()).rejects.toMatchObject({ code: "PREVIEW_NOT_FOUND", data: { id: "0123456789abcdef" } });
   });
 
   describe("fails, with nothing saved", () => {
     it("into a folder that isn't there", async () => {
-      const { client, previewId } = await openVideo();
+      const { client, previewId } = await openPreview();
       const target = join(workDir, "missing folder", "Video.mp4");
 
-      const statuses = await collect(await client.export.mp4({ previewId, path: target, video: VIDEO }));
+      const statuses = await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }));
 
       expect(statuses).toEqual([{ state: "failed", error: { code: "SAVE_FAILED", path: target, message: expect.any(String) } }]);
     });
 
     it("without the pinned FFmpeg", async () => {
       const missing = join(workDir, "no-ffmpeg", "ffmpeg.exe");
-      const { client, previewId } = await openVideo({ ffmpegPath: missing });
+      const { client, previewId } = await openPreview({ ffmpegPath: missing });
       const target = join(workDir, "No FFmpeg.mp4");
 
-      const statuses = await collect(await client.export.mp4({ previewId, path: target, video: VIDEO }));
+      const statuses = await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }));
 
       expect(statuses).toEqual([{ state: "failed", error: { code: "FFMPEG_MISSING", path: missing } }]);
       expect(await exists(target)).toBe(false);
@@ -179,9 +202,9 @@ describe("Export MP4", () => {
 
     it("without the pinned browser", async () => {
       const missing = join(workDir, "no-chrome", "chrome-headless-shell.exe");
-      const { client, previewId } = await openVideo({ chromePath: missing });
+      const { client, previewId } = await openPreview({ chromePath: missing });
 
-      const statuses = await collect(await client.export.mp4({ previewId, path: join(workDir, "No Chrome.mp4"), video: VIDEO }));
+      const statuses = await collect(await client.export.mp4({ previewId, path: join(workDir, "No Chrome.mp4"), video: UNOPENED }));
 
       expect(statuses).toEqual([{ state: "failed", error: { code: "CHROME_MISSING", path: missing } }]);
     });
