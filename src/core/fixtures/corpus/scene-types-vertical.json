@@ -1,0 +1,23 @@
+{
+  "description": "Hand-written, token-only Scene code for every Scene Type in 9:16 with Captions: a stacked Canvas (c1) and a carry-over (s06 into s07)",
+  "frameContractVersion": "1.0.0",
+  "preset": "blueprint",
+  "rules": {
+    "format": "vertical",
+    "captions": true,
+    "transitions": ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
+    "canvas": "where-it-helps"
+  },
+  "storyboard": "storyboard/vertical-captions.json",
+  "transcript": "storyboard/transcript.json",
+  "units": {
+    "s01": "corpus/scene-types/vertical/s01",
+    "s02": "corpus/scene-types/vertical/s02",
+    "c1": "corpus/scene-types/vertical/c1",
+    "s05": "corpus/scene-types/vertical/s05",
+    "s06": "corpus/scene-types/vertical/s06",
+    "s07": "corpus/scene-types/vertical/s07",
+    "s08": "corpus/scene-types/vertical/s08",
+    "s09": "corpus/scene-types/vertical/s09"
+  }
+}

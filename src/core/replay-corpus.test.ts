@@ -1,70 +1,59 @@
-import { readdir, readFile } from "node:fs/promises";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
-import { z } from "zod";
-import { StoryboardRulesSchema, StoryboardTranscriptSchema, type UnitCode } from "../contract";
+import { beforeAll, describe, expect, it } from "vitest";
 import { FRAME_CONTRACT_VERSION } from "../modules/frame";
 import { bundledPreset } from "../modules/style";
 import { BROWSER_TIMEOUT_MS, connect } from "./test-support/checker";
+import { corpusEntries, frameMajor, PRESETS, replay, type Replayed } from "./test-support/corpus";
 
-const FIXTURES = join(import.meta.dirname, "fixtures");
+const entries = await corpusEntries();
+const current = entries.filter(({ entry }) => frameMajor(entry.frameContractVersion) === frameMajor(FRAME_CONTRACT_VERSION));
 
-/**
- * The tier-2 replay corpus: committed agent outputs and hand-written fixtures, each recording the frame contract its
- * units were written against. Paths are relative to `fixtures/`; a unit's path names its `.css`, `.html` and `.js`.
- */
-const CorpusEntrySchema = z.object({
-  description: z.string(),
-  frameContractVersion: z.string(),
-  preset: z.enum(["blueprint", "whiteboard", "sketchbook", "terminal"]),
-  rules: StoryboardRulesSchema,
-  storyboard: z.string(),
-  transcript: z.string(),
-  units: z.record(z.string(), z.string()),
-});
+/** Runs a replayed video through the core API's Checker: the current frame, `hyperframes lint`/`check` and the anchor contract. */
+async function findingsOf({ storyboard, transcript, rules, code }: Replayed, preset: (typeof PRESETS)[number]) {
+  const report = await connect().checker.check({ storyboard, transcript, rules, preset: bundledPreset(preset), code });
 
-const names = (await readdir(join(FIXTURES, "corpus"))).filter((name) => name.endsWith(".json"));
-const entries = await Promise.all(
-  names.map(async (name) => ({ name, entry: CorpusEntrySchema.parse(JSON.parse(await readFile(join(FIXTURES, "corpus", name), "utf8"))) })),
-);
-
-function major(version: string) {
-  return version.split(".")[0];
-}
-
-async function json(path: string): Promise<unknown> {
-  return JSON.parse(await readFile(join(FIXTURES, path), "utf8"));
-}
-
-async function unitCode(path: string): Promise<UnitCode> {
-  const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(FIXTURES, `${path}.${part}`), "utf8")));
-
-  return { css: css ?? "", html: html ?? "", js: js ?? "" };
+  return report.findings;
 }
 
 /**
- * Frame minor and patch releases must keep old units passing lint, check and the contract (ADR 0004): every unit
- * written against this frame major still passes. Units from older majors are re-checked when their Project opens.
+ * The tier-2 replay: committed agent outputs and hand-written fixtures re-run at zero cost. Frame minor and patch
+ * releases must keep old units passing lint, check and the contract (ADR 0004): every run written against this frame
+ * major still passes, as first generated and after each of its Revisions. Runs from older majors are re-checked when
+ * their Project opens instead.
  */
 describe("the replay corpus", () => {
   it("has entries written against this frame major", () => {
-    expect(entries.filter(({ entry }) => major(entry.frameContractVersion) === major(FRAME_CONTRACT_VERSION))).not.toEqual([]);
+    expect(current).not.toEqual([]);
   });
 
-  describe.each(entries.filter(({ entry }) => major(entry.frameContractVersion) === major(FRAME_CONTRACT_VERSION)))("$name", ({ entry }) => {
-    it(
-      "still passes every check in this frame",
-      async () => {
-        const code = Object.fromEntries(await Promise.all(Object.entries(entry.units).map(async ([unit, path]) => [unit, await unitCode(path)] as const)));
-        const report = await connect().checker.check({
-          storyboard: await json(entry.storyboard),
-          transcript: StoryboardTranscriptSchema.parse(await json(entry.transcript)),
-          rules: entry.rules,
-          preset: bundledPreset(entry.preset),
-          code,
-        });
+  describe.each(current)("$name", ({ entry }) => {
+    let steps: Replayed[] = [];
 
-        expect(report.findings).toEqual([]);
+    beforeAll(async () => {
+      const { data, error } = await replay(entry);
+
+      expect(error).toBeNull();
+      steps = data ?? [];
+    });
+
+    it.each(["generation", ...entry.revisions.map((_, index) => `revision ${index + 1}`)])(
+      "still passes every check after its %s",
+      async (step) => {
+        const replayed = steps.find((candidate) => candidate.step === step);
+
+        expect(replayed).toBeDefined();
+        expect(await findingsOf(replayed!, entry.preset)).toEqual([]);
+      },
+      BROWSER_TIMEOUT_MS,
+    );
+
+    // Scene code uses the frame's tokens only, so swapping the Palette and typography is a re-render that still passes.
+    it.each(PRESETS.filter((preset) => preset !== entry.preset))(
+      "still passes every check swapped into %s",
+      async (preset) => {
+        const last = steps[steps.length - 1];
+
+        expect(last).toBeDefined();
+        expect(await findingsOf(last!, preset)).toEqual([]);
       },
       BROWSER_TIMEOUT_MS,
     );

@@ -1,0 +1,17 @@
+{
+  "scenes": [
+    {
+      "id": "s09",
+      "type": "outro",
+      "from": 103,
+      "to": 111,
+      "content": {
+        "headline": { "id": "headline", "text": "Subscribe", "at": 103 },
+        "cta": { "id": "cta", "text": "Next: how DNS works", "at": 108 }
+      }
+    }
+  ],
+  "remove": [],
+  "instructions": [{ "scene": "s09", "text": "Put a bell icon beside Subscribe" }],
+  "summary": "Points the outro at the DNS video, with a bell beside Subscribe"
+}

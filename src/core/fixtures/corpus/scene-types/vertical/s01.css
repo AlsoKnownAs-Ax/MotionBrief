@@ -1,0 +1,2 @@
+.hook { display: flex; flex-direction: column; justify-content: center; gap: 40px; }
+.rule { width: 120px; height: 8px; border-radius: 4px; background: var(--accent); }

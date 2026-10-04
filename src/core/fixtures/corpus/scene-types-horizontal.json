@@ -1,0 +1,29 @@
+{
+  "description": "Hand-written, token-only Scene code for every Scene Type in 16:9: a Canvas (c1), a carry-over (s06 into s07) and a scripted Revision of the outro",
+  "frameContractVersion": "1.0.0",
+  "preset": "blueprint",
+  "rules": {
+    "format": "horizontal",
+    "captions": false,
+    "transitions": ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
+    "canvas": "where-it-helps"
+  },
+  "storyboard": "storyboard/horizontal.json",
+  "transcript": "storyboard/transcript.json",
+  "units": {
+    "s01": "corpus/scene-types/horizontal/s01",
+    "s02": "corpus/scene-types/horizontal/s02",
+    "c1": "transitions/c1",
+    "s05": "corpus/scene-types/horizontal/s05",
+    "s06": "transitions/s06",
+    "s07": "transitions/s07",
+    "s08": "corpus/scene-types/horizontal/s08",
+    "s09": "corpus/scene-types/horizontal/s09"
+  },
+  "revisions": [
+    {
+      "patch": "corpus/scene-types/horizontal/revision-1/patch.json",
+      "units": { "s09": "corpus/scene-types/horizontal/revision-1/s09" }
+    }
+  ]
+}

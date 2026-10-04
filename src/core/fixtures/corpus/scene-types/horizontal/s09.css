@@ -1,0 +1,3 @@
+.outro { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 48px; text-align: center; }
+.cta { display: flex; align-items: center; gap: 20px; padding: 22px 40px; }
+.cta-icon { font-size: 56px; color: var(--accent); }

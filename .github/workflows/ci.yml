@@ -39,4 +39,6 @@ jobs:
 
       - run: pnpm typecheck
 
+      # Tier 1 (seams 1 and 2 on hand-written inputs) and tier 2 (the replay corpus, replay-corpus.test.ts), at zero
+      # cost, with the binaries the install above fetched.
       - run: pnpm test
