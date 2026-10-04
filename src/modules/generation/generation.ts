@@ -146,8 +146,9 @@ export function createGeneration({ connector, checker, previews, stills, project
     return { key, store };
   }
 
-  /** Starts `work` as the video's run; a run that throws fails with the error. */
-  function begin(key: string, store: StatusStore, started: Pick<Run, "usage" | "models">, work: (run: Run) => Promise<void>) {
+  /** Starts `work` as the video's run, holding its reservation until it ends; a run that throws fails with the error. */
+  function begin(ref: VideoRef, store: StatusStore, release: () => void, started: Pick<Run, "usage" | "models">, work: (run: Run) => Promise<void>) {
+    const { key } = storeOf(ref);
     const run: Run = { id: randomUUID(), controller: new AbortController(), done: Promise.resolve(), ...started };
     runs.set(key, run);
     run.done = work(run)
@@ -157,7 +158,24 @@ export function createGeneration({ connector, checker, previews, stills, project
           runs.delete(key);
         }
       })
-      .then(() => run.usage.finish({ completed: store.get().state === "done" && !run.stopped }));
+      .then(() => run.usage.finish({ completed: store.get().state === "done" && !run.stopped }))
+      .finally(() => {
+        release();
+        ended.forEach((listener) => listener(ref));
+      });
+  }
+
+  /** Told whenever a video's run ends, however it ended. */
+  const ended: ((ref: VideoRef) => void)[] = [];
+
+  /** Calls `listener` whenever a video's first generation or Retry ends, such as to run what queued behind it. */
+  function whenEnded(listener: (ref: VideoRef) => void) {
+    ended.push(listener);
+  }
+
+  /** Whether a first generation or Retry of the video is running. */
+  function isRunning(ref: VideoRef) {
+    return runs.has(storeOf(ref).key);
   }
 
   /** Ends a run early: the turns running now are interrupted, and nothing else starts. The first stop wins. */
@@ -243,11 +261,17 @@ export function createGeneration({ connector, checker, previews, stills, project
       return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
     }
 
+    const release = projects.reserve(projectId, format);
+
+    if (!release) {
+      return { data: null, error: { code: "GENERATING", projectId } };
+    }
+
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
     const captions = choice ?? CAPTIONS_BY_DEFAULT[format];
     const started = { usage: usage.startRun(ref, { voiceoverSeconds: duration }), models: chosen };
-    begin(key, store, started, (run) => generate({ run, ref, transcript, preset, captions, store }));
+    begin(ref, store, release, started, (run) => generate({ run, ref, transcript, preset, captions, store }));
 
     return { data: null, error: null };
   }
@@ -360,7 +384,24 @@ export function createGeneration({ connector, checker, previews, stills, project
     return exclusive(storeOf(ref).key, () => startRetry(ref, units));
   }
 
+  /** Reserves the video before reading the Version a Retry starts from, so no other job saves one meanwhile. */
   async function startRetry(ref: VideoRef, requested?: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "GENERATING", projectId: ref.projectId } };
+    }
+
+    const started = await startReserved(ref, release, requested);
+
+    if (started.error) {
+      release();
+    }
+
+    return started;
+  }
+
+  async function startReserved(ref: VideoRef, release: () => void, requested?: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
     const { projectId } = ref;
     const { data: saved, error } = await savedVideo(ref);
 
@@ -368,11 +409,7 @@ export function createGeneration({ connector, checker, previews, stills, project
       return { data: null, error };
     }
 
-    const { key, store } = storeOf(ref);
-
-    if (runs.has(key)) {
-      return { data: null, error: { code: "GENERATING", projectId } };
-    }
+    const { store } = storeOf(ref);
 
     const { version } = saved.stored;
     const flagged = version.flags.map(({ unit }) => unit);
@@ -392,17 +429,13 @@ export function createGeneration({ connector, checker, previews, stills, project
 
     const chosen = await models();
 
-    if (runs.has(key)) {
-      return { data: null, error: { code: "GENERATING", projectId } };
-    }
-
     // Synchronous from here on, so a close of the Project either stops this run or refuses it.
     if (!projects.admits(projectId)) {
       return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
     }
 
     store.set({ state: "writing", units: [] });
-    begin(key, store, { usage: usage.startRun(ref), models: chosen }, (run) => retryUnits({ run, ref, saved, storyboard, wanted, store }));
+    begin(ref, store, release, { usage: usage.startRun(ref), models: chosen }, (run) => retryUnits({ run, ref, saved, storyboard, wanted, store }));
 
     return { data: null, error: null };
   }
@@ -832,7 +865,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     };
   }
 
-  return { estimate, start, stop, retry, watch, open, setCaptions };
+  return { estimate, start, stop, retry, watch, open, setCaptions, isRunning, whenEnded };
 }
 
 type Publish = (change: Partial<GenerationStatus>, unit?: GenerationUnit) => Promise<void>;

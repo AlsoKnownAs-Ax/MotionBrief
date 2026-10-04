@@ -28,10 +28,13 @@ import { createStatusStore } from "./status";
 import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocument, type VideoDocumentError } from "./video";
 import { FormatSchema } from "../../contract";
+import { appendChat, readChat, type ChatLine } from "./chat";
 import {
   latestVersion,
+  listVersions,
   readVersion,
   recoverGeneration,
+  restoreVersion,
   saveGeneration,
   saveVersion,
   writeUnit,
@@ -986,6 +989,31 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return enqueue(project, () => step(project.dir));
   }
 
+  /** The job holding each video, by `projectId format`. */
+  const reservations = new Map<string, object>();
+
+  /**
+   * Reserves the video for one job that saves a Version: a first generation, a Retry, a Revision or a Restore. Take it
+   * synchronously before reading the Version the job starts from, and release it once the job can save no more.
+   * Resolves to the release; none while another job holds the video.
+   */
+  function reserve(projectId: string, format: Format): (() => void) | undefined {
+    const key = `${projectId} ${format}`;
+
+    if (reservations.has(key)) {
+      return undefined;
+    }
+
+    const holder = {};
+    reservations.set(key, holder);
+
+    return () => {
+      if (reservations.get(key) === holder) {
+        reservations.delete(key);
+      }
+    };
+  }
+
   /** Work on open Projects that must end, and save, before one closes. */
   const closing: ((projectId: string) => Promise<void>)[] = [];
 
@@ -1057,8 +1085,18 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
     /** A saved Version of the video by number, with its units' Scene code. */
     readVersion: (projectId: string, format: Format, number: number) => read(projectId, (dir) => readVersion(dir, format, number)),
+    /** The video's Versions, newest first. */
+    versions: (projectId: string, format: Format) => read(projectId, (dir) => listVersions(dir, format)),
+    /** Saves a copy of an earlier Version as the newest; resolves to its number. */
+    restoreVersion: (projectId: string, format: Format, number: number) =>
+      read(projectId, (dir) => restoreVersion(dir, format, number, new Date(clock.now()).toISOString())),
+    /** Adds a line to the video's append-only chat log. */
+    appendChat: (projectId: string, format: Format, line: ChatLine) => write(projectId, (dir) => appendChat(dir, format, line)),
+    /** The video's chat entries, as its log adds up. */
+    readChat: (projectId: string, format: Format) => read(projectId, (dir) => readChat(dir, format)),
     whenClosing,
     admits,
+    reserve,
     lastExportPath,
     rememberExportPath,
     storedVideo,

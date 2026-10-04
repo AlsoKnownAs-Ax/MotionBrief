@@ -1,8 +1,9 @@
-import { HistoryIcon, PaletteIcon, type LucideIcon } from "lucide-react";
+import { PaletteIcon, type LucideIcon } from "lucide-react";
 import { Tabs } from "radix-ui";
 import { useState, type ReactNode } from "react";
 import { Chat } from "./chat";
 import { useRevision } from "./revision";
+import { Versions } from "./versions";
 
 const TABS = [
   { id: "chat", label: "Chat" },
@@ -44,9 +45,7 @@ export function SidePanel({ width }: { width: number }) {
         </EmptyState>
       </Tabs.Content>
       <Tabs.Content value="versions" className="flex min-h-0 flex-1 outline-none">
-        <EmptyState icon={HistoryIcon} title="No Versions yet">
-          Each generation, Revision and style change saves a Version you can restore.
-        </EmptyState>
+        <Versions />
       </Tabs.Content>
     </Tabs.Root>
   );

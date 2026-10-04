@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { StylePresetSchema, UnitCodeSchema, type Format, type UnitCode } from "../../contract";
+import { StylePresetSchema, UnitCodeSchema, VersionOriginSchema, type Format, type UnitCode, type VersionSummary } from "../../contract";
 import { fileStep, writeAtomically, type FileError, type Result } from "./files";
 
 /**
@@ -57,13 +57,11 @@ export const VersionSchema = VideoContentSchema.extend({
   /** Counted from 1, in the order Versions were made. */
   version: z.number().int().positive(),
   createdAt: z.iso.datetime(),
-  /**
-   * What made it: a first generation; the re-check after a frame major update, which flagged units that no longer
-   * pass; a Retry of flagged units; or a Revision.
-   */
-  origin: z.enum(["generation", "frame-update", "retry", "revision"]),
+  origin: VersionOriginSchema,
   /** Set on a Version a Revision made. */
   revision: RevisionRecordSchema.optional(),
+  /** Set on a Version a Restore made: the Version it is a copy of. */
+  restoredFrom: z.number().int().positive().optional(),
   /** The run that saved it, so its record, left behind by a crash just after, is never saved again. */
   runId: z.string().optional(),
 });
@@ -243,6 +241,51 @@ export async function readVersion(dir: string, format: Format, number: number): 
   return { data: { version, code }, error: null };
 }
 
+/** The video's Versions, newest first. */
+export async function listVersions(dir: string, format: Format): Promise<Result<VersionSummary[], VersionError>> {
+  const summaries: VersionSummary[] = [];
+
+  for (const number of await versionNumbers(dir, format)) {
+    const { data: version, error } = await readDocument(join(dir, format, VERSIONS_DIR, `${number}.json`), VersionSchema);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    summaries.push(summaryOf(version));
+  }
+
+  return { data: summaries.reverse(), error: null };
+}
+
+function summaryOf({ version, origin, createdAt, revision, restoredFrom, flags }: Version): VersionSummary {
+  return {
+    version,
+    origin,
+    createdAt,
+    request: revision?.request,
+    summary: revision?.summary,
+    restoredFrom,
+    fallbacks: flags.filter(({ kind }) => kind === "fallback").length,
+  };
+}
+
+/**
+ * Saves a copy of an earlier Version as the newest, so restoring loses nothing. Its units are the same files, shared
+ * by hash; only the manifest is new. Resolves to the new Version's number.
+ */
+export async function restoreVersion(dir: string, format: Format, number: number, createdAt: string): Promise<Result<number, VersionError>> {
+  const { data: version, error } = await readDocument(join(dir, format, VERSIONS_DIR, `${number}.json`), VersionSchema);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const content = VideoContentSchema.parse(version);
+
+  return saveVersion(dir, format, { ...content, origin: "restore", restoredFrom: number, createdAt });
+}
+
 async function readDocument<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, VersionError>> {
   const { data: text, error } = await fileStep(path, () => readFile(path, "utf8"));
 
@@ -269,14 +312,18 @@ function parseJson(text: string): unknown {
 
 /** The number of the video's newest Version; none before its first generation is saved. */
 export async function latestVersion(dir: string, format: Format): Promise<number | undefined> {
+  return (await versionNumbers(dir, format)).at(-1);
+}
+
+/** The numbers of the video's saved Versions, oldest first. */
+async function versionNumbers(dir: string, format: Format): Promise<number[]> {
   const names = await readdir(join(dir, format, VERSIONS_DIR)).catch(() => []);
-  const numbers = names.map((name) => /^(\d+)\.json$/.exec(name)?.[1]).filter((number) => number !== undefined).map(Number);
 
-  if (numbers.length === 0) {
-    return undefined;
-  }
-
-  return Math.max(...numbers);
+  return names
+    .map((name) => /^(\d+)\.json$/.exec(name)?.[1])
+    .filter((number) => number !== undefined)
+    .map(Number)
+    .sort((a, b) => a - b);
 }
 
 function json(value: unknown): string {

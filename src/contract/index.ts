@@ -700,6 +700,74 @@ export const OpenedVideoSchema = z.object({
   frameUpdate: FrameUpdateSchema.optional(),
 });
 
+/**
+ * What made a Version: a first generation; the re-check after a frame major update, which flagged units that no
+ * longer pass; a Retry of flagged units; a Revision; or a Restore of an earlier Version.
+ */
+export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore"]);
+
+/** A saved Version as the Versions tab lists it. */
+export const VersionSummarySchema = z.object({
+  version: z.number().int().positive(),
+  origin: VersionOriginSchema,
+  createdAt: z.iso.datetime(),
+  /** What a Revision was asked, and its one-line summary. */
+  request: z.string().optional(),
+  summary: z.string().optional(),
+  /** The Version a Restore copied. */
+  restoredFrom: z.number().int().positive().optional(),
+  /** Units playing as their fallback Scene. */
+  fallbacks: z.number().int().nonnegative(),
+});
+
+/**
+ * Where a request sent in chat stands: `queued` behind the running job or a paused queue; `running` as a Revision;
+ * then how its Revision ended. `refused` when the Revision couldn't start, such as a scope naming a Scene the video no
+ * longer has; `closed` when MotionBrief quit or crashed while it ran, which discards a Revision.
+ */
+export const ChatRequestStateSchema = z.enum(["queued", "running", "answered", "done", "failed", "stopped", "closed", "refused"]);
+
+/**
+ * A line of the video's chat, as its append-only log adds up: a request the creator sent, with what came of it, or a
+ * Restore. Kept with the video, so the chat outlives the window and the app.
+ */
+export const ChatEntrySchema = z.object({
+  id: z.string(),
+  kind: z.enum(["request", "restore"]),
+  /** When it was sent, or restored. */
+  at: z.iso.datetime(),
+  message: z.string().optional(),
+  /** The Scenes a request was scoped to; none for the whole video. */
+  scope: z.array(z.string()).optional(),
+  state: ChatRequestStateSchema.optional(),
+  /** The agent's answer or clarifying question. */
+  reply: z.string().optional(),
+  summary: z.string().optional(),
+  notApplied: z.array(z.string()).optional(),
+  /** The Version it saved: a Revision's, or the Restore's. */
+  version: z.number().int().positive().optional(),
+  restoredFrom: z.number().int().positive().optional(),
+  error: RevisionErrorSchema.optional(),
+  /** The estimated cost the creator approved for the Scenes its Revision regenerates, on an API key with approval on. */
+  approvedUsd: CostRangeSchema.optional(),
+  /** The code the Revision was refused with. */
+  refused: z.string().optional(),
+});
+
+export const ChatStatusSchema = z.object({
+  entries: z.array(ChatEntrySchema),
+  /**
+   * Queued requests wait for Resume queue: after MotionBrief quit or crashed with requests queued, and after a
+   * Revision was stopped. Nothing is ever spent on its own.
+   */
+  isPaused: z.boolean(),
+  /**
+   * Set while how a request ended couldn't be saved to the Project folder: the queue pauses, the chat shows it as it
+   * ended, and Resume queue saves it again before running anything.
+   */
+  saveError: z.object({ path: z.string(), message: z.string() }).optional(),
+});
+
 /** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */
 export const CacheStatusSchema = z.object({
   usedBytes: z.number().int().nonnegative(),
@@ -1041,10 +1109,8 @@ export const coreContract = {
       .input(VideoRefSchema.extend(RevisionRequestSchema.shape)),
     /** Streams the video's Revision now and after every change, until the window stops listening. */
     revision: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(RevisionStatusSchema)),
-    /** Stops the running Revision and discards it: the current Version stays as it is. */
     /** Lets a Revision waiting in `approval` regenerate its Scenes; no-op otherwise. */
     approveRevision: oc.input(VideoRefSchema),
-    stopRevision: oc.input(VideoRefSchema),
     /**
      * After the word at `index` was fixed from `previous`, searches the current Version's Storyboard copy for the word
      * as it was. Answers with a Revision to offer, scoped to the Scenes that still say it, or nothing when none do or
@@ -1054,6 +1120,40 @@ export const coreContract = {
       .errors({ UNKNOWN_PROJECT, UNKNOWN_WORD: WORD_FIX_ERRORS.UNKNOWN_WORD, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
       .input(VideoRefSchema.extend({ index: z.number().int().nonnegative(), previous: z.string() }))
       .output(WordFixOfferSchema.optional()),
+    /** Stops the running Revision and discards it: the current Version stays as it is. Queued requests pause. */
+    stopRevision: oc.input(VideoRefSchema),
+    /**
+     * Sends a request in chat. It runs as a Revision at once when the video is idle; while a generation, Retry or
+     * Revision runs, or the queue is paused, it queues and runs after, one at a time. Answers with its chat entry.
+     */
+    send: oc
+      .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(VideoRefSchema.extend(RevisionRequestSchema.shape))
+      .output(ChatEntrySchema),
+    /** Streams the video's chat, from its saved log, now and after every change. */
+    chat: oc.errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED }).input(VideoRefSchema).output(eventIterator(ChatStatusSchema)),
+    /** Runs the paused queue: its first request starts once the video is idle. */
+    resumeQueue: oc.errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED }).input(VideoRefSchema),
+    /** The video's Versions, newest first. */
+    versions: oc
+      .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED, INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) } })
+      .input(VideoRefSchema)
+      .output(z.array(VersionSummarySchema)),
+    /**
+     * Restores an earlier Version by saving a copy of it as the newest Version, so nothing is lost; its units are
+     * shared, not copied. The Transcript, word fixes and all, stays as it is. Answers with the new Version's number.
+     */
+    restore: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        UNKNOWN_VERSION: { data: z.object({ version: z.number() }) },
+        /** A generation, Retry or Revision is running; restore once it ends. */
+        BUSY: { data: z.object({ projectId: z.string() }) },
+      })
+      .input(VideoRefSchema.extend({ version: z.number().int().positive() }))
+      .output(z.object({ version: z.number().int().positive() })),
     /**
      * Opens the video of a Format for the player: its newest Version with the Project's current Transcript, word
      * fixes and all, and the video's Captions choice. A Format without a video yet answers with no Version, for its
@@ -1198,3 +1298,8 @@ export type RevisionUnit = z.infer<typeof RevisionUnitSchema>;
 export type RevisionStatus = z.infer<typeof RevisionStatusSchema>;
 export type FrameUpdate = z.infer<typeof FrameUpdateSchema>;
 export type OpenedVideo = z.infer<typeof OpenedVideoSchema>;
+export type VersionOrigin = z.infer<typeof VersionOriginSchema>;
+export type VersionSummary = z.infer<typeof VersionSummarySchema>;
+export type ChatRequestState = z.infer<typeof ChatRequestStateSchema>;
+export type ChatEntry = z.infer<typeof ChatEntrySchema>;
+export type ChatStatus = z.infer<typeof ChatStatusSchema>;

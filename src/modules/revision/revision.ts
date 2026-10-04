@@ -82,7 +82,7 @@ type Store = ReturnType<typeof createStatusStore<RevisionStatus>>;
  * A video's running Revision. Once it starts saving its Version it is committing: Stop is too late from then on,
  * and the Revision ends `done`.
  */
-type Job = { controller: AbortController; isCommitting: boolean; approve?: () => void };
+type Job = { controller: AbortController; isCommitting: boolean; release: () => void; approve?: () => void };
 
 /** What a regenerated unit ended with: new code, or none; and the flag it carries in the new Version, if any. */
 type Regenerated = { code?: UnitCode; flag?: Flag };
@@ -112,33 +112,62 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
   async function start(ref: VideoRef, request: RevisionRequest): Promise<Result<null, ReviseError>> {
     const { key, store } = storeOf(ref);
 
-    if (running.has(key)) {
+    // Reserved before the current Version is read, so no other job saves one under this Revision.
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
       return { data: null, error: { code: "REVISING", projectId: ref.projectId } };
     }
 
-    const job: Job = { controller: new AbortController(), isCommitting: false };
+    const job: Job = { controller: new AbortController(), isCommitting: false, release };
     running.set(key, job);
     const { data: run, error } = await prepare(ref, request, store, job);
 
     if (error) {
       running.delete(key);
+      release();
 
       return { data: null, error };
+    }
+
+    // Stopped while it was being prepared: nothing runs, and Stop already said it ended.
+    if (job.controller.signal.aborted) {
+      void run.usage.finish({ completed: false });
+
+      return { data: null, error: null };
     }
 
     store.set({ state: "revising", request, affected: request.scope, units: [] });
     void revise(run)
       .catch((cause: unknown) => publish(run, { state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
       .finally(() => {
-        if (running.get(key) === job) {
-          running.delete(key);
-        }
-
         // Only a first generation feeds the running cost per Voiceover minute.
         void run.usage.finish({ completed: false });
+
+        // A stopped Revision already said it ended.
+        if (running.get(key) !== job) {
+          return;
+        }
+
+        running.delete(key);
+        release();
+        ended.forEach((listener) => listener(ref, store.get()));
       });
 
     return { data: null, error: null };
+  }
+
+  /** Told whenever a video's Revision ends, with its last status. */
+  const ended: ((ref: VideoRef, status: RevisionStatus) => void)[] = [];
+
+  /** Calls `listener` whenever a video's Revision ends: answered, done, failed or stopped. */
+  function whenEnded(listener: (ref: VideoRef, status: RevisionStatus) => void) {
+    ended.push(listener);
+  }
+
+  /** Whether a Revision of the video is running. */
+  function isRunning(ref: VideoRef) {
+    return running.has(storeOf(ref).key);
   }
 
   /** Everything a Revision starts from: the video's Transcript, Voiceover and current Version, and a scope it has. */
@@ -187,11 +216,21 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
   }
 
   /**
-   * Lets a Revision waiting for approval regenerate its Scenes. A Revision that isn't waiting is left as it is, and Stop
-   * discards one that is.
+   * Lets a Revision waiting for approval regenerate its Scenes, answering with the cost approved. A Revision that isn't
+   * waiting is left as it is, and Stop discards one that is.
    */
-  function approve(ref: VideoRef) {
-    running.get(storeOf(ref).key)?.approve?.();
+  function approve(ref: VideoRef): RevisionStatus["costUsd"] {
+    const { key, store } = storeOf(ref);
+    const waiting = running.get(key)?.approve;
+
+    if (!waiting) {
+      return undefined;
+    }
+
+    const { costUsd } = store.get();
+    waiting();
+
+    return costUsd;
   }
 
   /** Stops the video's running Revision and discards it, unless it is already saving its Version. */
@@ -203,9 +242,12 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
       return;
     }
 
+    // A stopped Revision never saves, so the video is free at once.
     running.delete(key);
     job.controller.abort();
+    job.release();
     store.update({ state: "stopped", affected: [] });
+    ended.forEach((listener) => listener(ref, store.get()));
   }
 
   /** The video's earlier Revisions, oldest first: what each asked for and what it did. */
@@ -609,7 +651,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     return { data: wordFixOffer(storyboard, spellings, word.text), error: null };
   }
 
-  return { start, approve, stop, watch, offerWordFix };
+  return { start, approve, stop, watch, offerWordFix, isRunning, whenEnded };
 }
 
 function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {

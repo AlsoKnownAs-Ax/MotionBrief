@@ -3,6 +3,7 @@ import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSour
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
 import type { GenerateError, Generation, OpenVideoError, RetryError } from "../generation";
+import type { History, HistoryError } from "../history";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
@@ -34,6 +35,7 @@ export type CoreRouterDeps = {
   revisions: Revisions;
   usage: Usage;
   settings: SettingsStore;
+  history: History;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -58,6 +60,7 @@ export function createCoreRouter({
   revisions,
   usage,
   settings,
+  history,
 }: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
@@ -225,11 +228,20 @@ export function createCoreRouter({
         dataOrThrow(await revisions.start({ projectId, format }, request));
       }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
-      approveRevision: api.video.approveRevision.handler(({ input }) => revisions.approve(input)),
+      approveRevision: api.video.approveRevision.handler(async ({ input }) => {
+        await history.approve(input);
+      }),
       stopRevision: api.video.stopRevision.handler(({ input }) => revisions.stop(input)),
       wordFixOffer: api.video.wordFixOffer.handler(async ({ input: { projectId, format, index, previous } }) =>
         dataOrThrow(await revisions.offerWordFix({ projectId, format }, index, previous)),
       ),
+      send: api.video.send.handler(async ({ input: { projectId, format, ...request } }) => dataOrThrow(await history.send({ projectId, format }, request))),
+      chat: api.video.chat.handler(async ({ input, signal }) => dataOrThrow(await history.watch(input, signal))),
+      resumeQueue: api.video.resumeQueue.handler(async ({ input }) => {
+        dataOrThrow(await history.resume(input));
+      }),
+      versions: api.video.versions.handler(async ({ input }) => dataOrThrow(await history.versions(input))),
+      restore: api.video.restore.handler(async ({ input: { version, ...video } }) => dataOrThrow(await history.restore(video, version))),
       stop: api.video.stop.handler(async ({ input }) => {
         dataOrThrow(await generation.stop(input));
       }),
@@ -263,7 +275,7 @@ function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null
 
 type CodedResult =
   | { data: unknown; error: null }
-  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError | UsageError | SettingsError };
+  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError | UsageError | SettingsError | HistoryError };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
 function stillUnavailable(error: StillError): CheckerUnavailable {
