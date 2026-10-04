@@ -3,6 +3,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Progress } from "@renderer/components/ui/progress";
 import type { ExportStatus } from "../../../contract";
 import { useExport, type ExportJob } from "./export";
+import { isGenerating, useGeneration } from "./generation";
 import { useOpenVideo } from "./open-video";
 
 const STAGE_LABELS = {
@@ -29,6 +30,8 @@ export function ExportControl() {
   const job = useExport((state) => state.job);
   const { start, cancel, dismiss } = useExport();
   const hasVideo = useOpenVideo((state) => state.preview !== undefined);
+  // A video still being generated isn't complete yet.
+  const isWriting = useGeneration((state) => isGenerating(state.status));
 
   if (job.state === "rendering") {
     const percent = Math.round(job.progress * 100);
@@ -54,7 +57,7 @@ export function ExportControl() {
   return (
     <div className="no-drag-region flex items-center gap-2">
       <ExportOutcome job={job} onDismiss={dismiss} />
-      <Button variant="primary" size="sm" disabled={!hasVideo} onClick={() => void start()}>
+      <Button variant="primary" size="sm" disabled={!hasVideo || isWriting} onClick={() => void start()}>
         <DownloadIcon />
         Export MP4
       </Button>

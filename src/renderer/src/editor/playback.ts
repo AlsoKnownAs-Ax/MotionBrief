@@ -7,6 +7,8 @@ type Playback = {
   duration: number;
   isPlaying: boolean;
   isReady: boolean;
+  /** The player was playing when its page was swapped for a newer one, so the new one plays on. */
+  resumes: boolean;
   player?: HyperframesPlayer;
   attach: (player: HyperframesPlayer) => () => void;
   seek: (time: number) => void;
@@ -22,6 +24,7 @@ export const usePlayback = create<Playback>((set, get) => ({
   duration: 0,
   isPlaying: false,
   isReady: false,
+  resumes: false,
   attach: (player) => {
     let frame = 0;
 
@@ -31,8 +34,13 @@ export const usePlayback = create<Playback>((set, get) => ({
     };
     const onReady = () => {
       set({ isReady: true, duration: player.duration });
-      // A reloaded page starts where the playhead was.
+      // A reloaded page starts where the playhead was, and plays on if the old one was playing.
       player.seek(Math.min(get().time, player.duration));
+
+      if (get().resumes) {
+        set({ resumes: false });
+        player.play();
+      }
     };
     const onDuration = () => set({ duration: player.duration });
     const onPlay = () => {
@@ -41,6 +49,11 @@ export const usePlayback = create<Playback>((set, get) => ({
       frame = requestAnimationFrame(follow);
     };
     const onPause = () => {
+      // A page swapped out pauses as it leaves; that isn't the creator pausing.
+      if (!player.isConnected) {
+        return;
+      }
+
       cancelAnimationFrame(frame);
       set({ isPlaying: false, time: player.currentTime });
     };
@@ -56,7 +69,7 @@ export const usePlayback = create<Playback>((set, get) => ({
     return () => {
       cancelAnimationFrame(frame);
       Object.entries(events).forEach(([name, listener]) => player.removeEventListener(name, listener));
-      set({ player: undefined, isReady: false, isPlaying: false });
+      set({ player: undefined, isReady: false, isPlaying: false, resumes: get().isPlaying });
     };
   },
   seek: (time) => {

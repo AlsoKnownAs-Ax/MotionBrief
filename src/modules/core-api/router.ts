@@ -2,6 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
+import type { GenerateError, Generation } from "../generation";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
@@ -26,6 +27,7 @@ export type CoreRouterDeps = {
   cache: Cache;
   presets: PresetStore;
   stills: Stills;
+  generation: Generation;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -34,7 +36,20 @@ export type CoreRouter = ReturnType<typeof createCoreRouter>;
 export type CoreContext = { connection?: string };
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }: CoreRouterDeps) {
+export function createCoreRouter({
+  system,
+  checker,
+  connector,
+  transcriptionModel,
+  previews,
+  exporter,
+  sample,
+  projects,
+  cache,
+  presets,
+  stills,
+  generation,
+}: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -83,10 +98,10 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
       typography: api.style.typography.handler(() => structuredClone([...FONT_PAIRINGS])),
       fonts: api.style.fonts.handler(() => bundledFonts()),
       contrast: api.style.contrast.handler(({ input }) => ({ findings: checkContrast(input.palette) })),
-      duplicate: api.style.duplicate.handler(async ({ input }) => presetOrThrow(await presets.duplicate(input.id))),
-      save: api.style.save.handler(async ({ input }) => presetOrThrow(await presets.save(input.preset))),
+      duplicate: api.style.duplicate.handler(async ({ input }) => dataOrThrow(await presets.duplicate(input.id))),
+      save: api.style.save.handler(async ({ input }) => dataOrThrow(await presets.save(input.preset))),
       remove: api.style.remove.handler(async ({ input }) => {
-        presetOrThrow(await presets.remove(input.id));
+        dataOrThrow(await presets.remove(input.id));
       }),
       sample: api.style.sample.handler(async ({ input, errors }) => {
         const { source, time } = presetSample(input.preset);
@@ -189,6 +204,13 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
       fixWord: api.project.fixWord.handler(async ({ input }) => dataOrThrow(await projects.fixWord(input.projectId, input.index, input.text))),
       close: api.project.close.handler(({ input }) => projects.close(input.projectId)),
     },
+    video: {
+      estimate: api.video.estimate.handler(async ({ input }) => dataOrThrow(await generation.estimate(input))),
+      generate: api.video.generate.handler(async ({ input }) => {
+        dataOrThrow(await generation.start(input));
+      }),
+      generation: api.video.generation.handler(async ({ input, signal }) => dataOrThrow(await generation.watch(input, signal))),
+    },
     cache: {
       status: api.cache.status.handler(() => cache.status()),
       clear: api.cache.clear.handler(() => cache.clear()),
@@ -196,31 +218,17 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
   });
 }
 
-/** A Project store result as the core API answers it: the data, or the error as the contract defines it. */
-function dataOrThrow<T>({ data, error }: ProjectsResult<T>): T {
-  if (error) {
-    throwDeclared(error);
+/** A module's result as the core API answers it: the data, or the error as the contract defines it. */
+function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null }>["data"] {
+  if (result.error) {
+    const { code, ...details } = result.error;
+    throw new ORPCError(code, { data: details });
   }
 
-  return data;
+  return result.data;
 }
 
-/** The same for the Preset store. */
-function presetOrThrow<T>({ data, error }: PresetResult<T>): T {
-  if (error) {
-    throwDeclared(error);
-  }
-
-  return data;
-}
-
-function throwDeclared({ code, ...details }: ProjectsError | PresetStoreError): never {
-  throw new ORPCError(code, { data: details });
-}
-
-type ProjectsResult<T> = { data: T; error: null } | { data: null; error: ProjectsError };
-
-type PresetResult<T> = { data: T; error: null } | { data: null; error: PresetStoreError };
+type CodedResult = { data: unknown; error: null } | { data: null; error: ProjectsError | PresetStoreError | GenerateError };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
 function stillUnavailable(error: StillError): CheckerUnavailable {

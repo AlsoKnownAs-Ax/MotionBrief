@@ -1,9 +1,18 @@
-import type { StoryboardTranscript, UnitCode, VideoTimeline } from "../../contract";
+import type { SceneStatus, StoryboardTranscript, UnitCode, UnitWork, VideoTimeline } from "../../contract";
 import type { AssembledPage } from "../assembler";
 import { sceneTimings, type Storyboard } from "../storyboard";
 
-/** The assembled video as the editor shows it: each Scene's timing, unit, status and Transition in, and the words. */
-export function timelineOf(storyboard: Storyboard, transcript: StoryboardTranscript, page: AssembledPage, code: Record<string, UnitCode>): VideoTimeline {
+/**
+ * The assembled video as the editor shows it: each Scene's timing, unit, status and Transition in, and the words.
+ * A unit plays its code, or is still being generated (`pending`), or plays as its fallback Scene.
+ */
+export function timelineOf(
+  storyboard: Storyboard,
+  transcript: StoryboardTranscript,
+  page: AssembledPage,
+  code: Record<string, UnitCode>,
+  pending: Record<string, UnitWork> = {},
+): VideoTimeline {
   const { format, width, height, duration, units } = page;
   const timings = sceneTimings(storyboard, transcript);
 
@@ -22,7 +31,7 @@ export function timelineOf(storyboard: Storyboard, transcript: StoryboardTranscr
         unit,
         start: seconds(start),
         end: seconds(end),
-        status: code[unit] ? "ready" : "fallback",
+        status: statusOf(unit, code, pending),
         transitionIn: timings[index - 1]?.scene.transition?.type,
       };
     }),
@@ -32,6 +41,14 @@ export function timelineOf(storyboard: Storyboard, transcript: StoryboardTranscr
       end: transcript.words[index + 1]?.start ?? duration,
     })),
   };
+}
+
+function statusOf(unit: string, code: Record<string, UnitCode>, pending: Record<string, UnitWork>): SceneStatus {
+  if (code[unit]) {
+    return "ready";
+  }
+
+  return pending[unit] ?? "fallback";
 }
 
 function seconds(value: number): number {

@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { core } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
+import { usePlayback } from "./playback";
 import type { Preview } from "../../../contract";
 
 type OpenVideo = {
@@ -20,7 +21,10 @@ type OpenVideo = {
   wordFixes: Record<number, string>;
   /** Why the last word fix couldn't be saved. */
   fixError?: string;
-  open: (project: { id: string; name: string; isStored?: boolean }, preview: Preview) => void;
+  /** Opens a video; one still being generated has no preview until its Storyboard is valid. */
+  open: (project: { id: string; name: string; isStored?: boolean }, preview?: Preview) => void;
+  /** Shows a newer preview of the same video, such as one with more of its units written, keeping the word fixes. */
+  showPreview: (preview: Preview) => void;
   fixWord: (index: number, text: string) => Promise<void>;
 };
 
@@ -44,7 +48,9 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
     projectName: "",
     isStored: false,
     wordFixes: {},
-    open: (project, preview) =>
+    open: (project, preview) => {
+      // Only a page swapped for a newer one of the same video plays on.
+      usePlayback.setState({ resumes: false });
       set({
         projectId: project.id,
         projectName: project.name,
@@ -52,7 +58,9 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
         preview,
         wordFixes: {},
         fixError: undefined,
-      }),
+      });
+    },
+    showPreview: (preview) => set({ preview }),
     fixWord: async (index, text) => {
       const { projectId, isStored, wordFixes } = get();
       const before = wordFixes[index];

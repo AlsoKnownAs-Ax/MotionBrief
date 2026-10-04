@@ -209,6 +209,9 @@ export const CheckerUnavailableSchema = z.object({
   detail: z.string(),
 });
 
+/** A unit a generation is still working on: waiting for a free subagent, being written, or being checked. */
+export const UnitWorkSchema = z.enum(["queued", "writing", "checking"]);
+
 /** What a video is assembled from: its Storyboard, Transcript, Style Preset snapshot and units' Scene code, and its Voiceover. */
 export const VideoSourceSchema = z.object({
   storyboard: z.unknown(),
@@ -218,12 +221,17 @@ export const VideoSourceSchema = z.object({
   preset: StylePresetSchema,
   /** Scene code per unit id; a unit without code plays as its fallback Scene. */
   code: z.record(z.string(), UnitCodeSchema),
+  /** Units still being generated, which play as the Storyboard animatic until their code is written. */
+  pending: z.record(z.string(), UnitWorkSchema).optional(),
   /** The Voiceover file, played as the video's audio track. Absent, the video plays silent. */
   voiceover: z.string().optional(),
 });
 
-/** How a Scene plays: from its Scene code, or as its fallback Scene. */
-export const SceneStatusSchema = z.enum(["ready", "fallback"]);
+/**
+ * How a Scene plays: from its Scene code, or as its fallback Scene; or, while a generation is still
+ * working on it, as the Storyboard animatic (its planned elements appearing on their words).
+ */
+export const SceneStatusSchema = z.enum(["ready", "fallback", ...UnitWorkSchema.options]);
 
 /** A video laid out in time, as the editor's player and Scene timeline show it. Times are seconds. */
 export const VideoTimelineSchema = z.object({
@@ -442,6 +450,49 @@ export const TranscriptionStatusSchema = z.object({
   /** The words transcribed so far; the whole Transcript once `done`. */
   words: z.array(TranscriptWordSchema),
   error: TranscriptionErrorSchema.optional(),
+});
+
+/** What a first generation will take with the default models, before the creator presses Generate. */
+export const GenerationEstimateSchema = z.object({
+  /** Wall-clock minutes. */
+  minutes: z.object({ low: z.number().nonnegative(), high: z.number().nonnegative() }),
+  /** US dollars; only on an API key, since a subscription isn't billed per run. */
+  costUsd: z.object({ low: z.number().nonnegative(), high: z.number().nonnegative() }).optional(),
+});
+
+/** Why a generation ended without a video. */
+export const GenerationErrorSchema = z.discriminatedUnion("code", [
+  /** The Storyboard agent's last Storyboard still had these issues after its retries. */
+  z.object({ code: z.literal("STORYBOARD_INVALID"), issues: z.array(StoryboardIssueSchema) }),
+  /** The Storyboard agent couldn't run or stopped, such as when Claude isn't connected. */
+  z.object({ code: z.literal("AGENT_FAILED"), error: ConnectorErrorSchema }),
+  z.object({ code: z.literal("FILE_FAILED"), path: z.string(), message: z.string() }),
+]);
+
+/** A unit of the video being generated: its Scene code is written, checked and retried on its own. */
+export const GenerationUnitSchema = z.object({
+  /** Named after its Scene, or its Canvas. */
+  id: z.string(),
+  status: SceneStatusSchema,
+  /** Scene code the agent has submitted so far; more than one means it was retried. */
+  attempts: z.number().int().nonnegative(),
+});
+
+/** Why the video so far couldn't be shown, such as its Voiceover having moved. */
+export const GenerationPreviewErrorSchema = z.object({ code: z.string(), message: z.string() });
+
+export const GenerationStatusSchema = z.object({
+  /** `idle` until Generate is pressed; `planning` while the Storyboard is written; `writing` while its units are. */
+  state: z.enum(["idle", "planning", "writing", "done", "failed"]),
+  /** Every unit, once the Storyboard is valid. */
+  units: z.array(GenerationUnitSchema),
+  /** The video so far, once the Storyboard is valid: it plays as units finish, the rest as the Storyboard animatic. */
+  preview: PreviewSchema.optional(),
+  /** Set while the newest preview couldn't be built; `preview`, if any, is then an older one. The generation carries on. */
+  previewError: GenerationPreviewErrorSchema.optional(),
+  /** The Version the generation saved, once `done`. */
+  version: z.number().int().positive().optional(),
+  error: GenerationErrorSchema.optional(),
 });
 
 /** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */
@@ -719,6 +770,28 @@ export const coreContract = {
     /** Stops working on the Project and releases its lock. */
     close: oc.input(ProjectIdInput),
   },
+  video: {
+    /** How long, and on an API key what, generating the video will take with the default models. */
+    estimate: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(GenerationEstimateSchema),
+    /**
+     * Generates the video from the Project's Transcript in its Style Preset: a Storyboard, then each unit's
+     * Scene code, checked and retried, saved as Version 1. Only ever starts when the creator presses Generate.
+     */
+    generate: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        /** The Voiceover is still being transcribed. */
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        GENERATING: { data: z.object({ projectId: z.string() }) },
+        /** The video exists; it changes through Revisions and the Style tab. */
+        ALREADY_GENERATED: { data: z.object({ version: z.number().int().positive() }) },
+        UNKNOWN_STYLE_PRESET: { data: z.object({ stylePreset: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(VideoRefSchema),
+    /** Streams the video's generation now and after every change, until the window stops listening. */
+    generation: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(GenerationStatusSchema)),
+  },
   cache: {
     status: oc.output(CacheStatusSchema),
     /** Deletes everything in the cache that isn't in use right now. */
@@ -781,3 +854,9 @@ export type OpenedProject = z.infer<typeof OpenedProjectSchema>;
 export type TranscriptionError = z.infer<typeof TranscriptionErrorSchema>;
 export type TranscriptionStatus = z.infer<typeof TranscriptionStatusSchema>;
 export type CacheStatus = z.infer<typeof CacheStatusSchema>;
+export type UnitWork = z.infer<typeof UnitWorkSchema>;
+export type GenerationEstimate = z.infer<typeof GenerationEstimateSchema>;
+export type GenerationError = z.infer<typeof GenerationErrorSchema>;
+export type GenerationUnit = z.infer<typeof GenerationUnitSchema>;
+export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
+export type GenerationPreviewError = z.infer<typeof GenerationPreviewErrorSchema>;

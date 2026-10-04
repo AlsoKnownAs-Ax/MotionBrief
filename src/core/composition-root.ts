@@ -6,6 +6,7 @@ import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } fr
 import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
 import { createExporter, projectExportLocations } from "../modules/exporter";
+import { createGeneration } from "../modules/generation";
 import { createMedia } from "../modules/media";
 import { createPreviews, createStills } from "../modules/preview";
 import { createProjects, type Trash } from "../modules/projects";
@@ -63,6 +64,9 @@ const PREVIEW_DIR = "preview";
 /** The cache folder's subfolder of renders on their way to an exported MP4. */
 const EXPORT_DIR = "export";
 
+/** The app data subfolder agent sessions get their workspaces in; each is deleted when its session ends. */
+const AGENT_DIR = "agent";
+
 /** The one place that picks implementations and wires the modules into the core API. */
 export function createCore({
   appVersion,
@@ -97,10 +101,11 @@ export function createCore({
   const projects = createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash });
   const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
   const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
+  const generation = createGeneration({ connector, checker, previews, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return {
-    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }),
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation }),
     /** A window's connection closed: its Project is closed and unlocked. */
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */

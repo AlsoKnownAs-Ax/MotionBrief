@@ -1,0 +1,54 @@
+{
+  "format": "horizontal",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "hook",
+      "from": 0,
+      "to": 15,
+      "transition": { "type": "crossfade" },
+      "content": {
+        "headline": { "id": "headline", "text": "Load balancer", "at": 5 },
+        "kicker": { "id": "kicker", "text": "Picks a healthy server", "at": 10 }
+      }
+    },
+    {
+      "id": "s02",
+      "type": "list",
+      "from": 16,
+      "to": 35,
+      "transition": { "type": "cut" },
+      "content": {
+        "title": { "id": "title", "text": "Cache first", "at": 18 },
+        "items": [
+          { "id": "server", "text": "Server checks", "icon": "lucide:server", "at": 17 },
+          { "id": "cache", "text": "Cache answers", "icon": "lucide:database", "at": 20 },
+          { "id": "fast", "text": "Back in 5 ms", "icon": "lucide:zap", "at": 34 }
+        ]
+      }
+    },
+    {
+      "id": "s03",
+      "type": "stat-chart",
+      "from": 36,
+      "to": 50,
+      "transition": { "type": "crossfade" },
+      "content": {
+        "kind": "number",
+        "number": { "id": "trips", "value": 0, "label": "database trips", "at": 48 },
+        "caption": { "id": "instant", "text": "Feels instant", "at": 41 }
+      }
+    },
+    {
+      "id": "s04",
+      "type": "key-term",
+      "from": 51,
+      "to": 71,
+      "content": {
+        "term": { "id": "term", "text": "Cache", "at": 52 },
+        "definition": { "id": "definition", "text": "Holds the answers asked for most", "at": 55 },
+        "related": [{ "id": "expiry", "text": "Expires in a minute", "at": 62 }]
+      }
+    }
+  ]
+}
