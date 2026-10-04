@@ -15,6 +15,7 @@ import { SidePanel } from "@renderer/editor/side-panel";
 import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
 import { useNavigation } from "@renderer/navigation";
+import type { GenerationStatus, GenerationStop } from "../../../contract";
 
 /** The editor's part of the title bar: back to Home, the Project's name, the video's Format and its generation. */
 export function EditorToolbar() {
@@ -48,20 +49,14 @@ function GenerationBadge() {
   const stop = useGeneration((state) => state.stop);
 
   if (status?.state === "planning" || status?.state === "writing") {
-    const working = status.units.filter((unit) => unit.status === "queued" || unit.status === "writing" || unit.status === "checking").length;
-    const finished = status.units.length - working;
-    const label = status.state === "planning" ? "Planning the Storyboard" : `Writing Scenes · ${finished} of ${status.units.length}`;
-    // A Storyboard counts as the first tenth of the run.
-    const percent = status.state === "planning" ? 4 : Math.round(10 + (90 * finished) / Math.max(status.units.length, 1));
-
     return (
       <div className="no-drag-region flex min-w-0 items-center gap-2.5 pl-1">
         <div role="status" className="flex w-[200px] min-w-[120px] flex-col gap-[5px]">
           <span className="flex items-center gap-1.5 text-app-xs">
             <span aria-hidden="true" className="size-1.5 shrink-0 animate-pulse rounded-full bg-status-working" />
-            <span className="truncate">{isStopping ? "Stopping, saving finished Scenes" : label}</span>
+            <span className="truncate">{jobLabel(status, isStopping)}</span>
           </span>
-          <Progress value={percent} aria-label="Generation progress" />
+          <Progress value={jobPercent(status)} aria-label="Generation progress" />
         </div>
         <Button size="sm" disabled={isStopping} onClick={() => void stop()} title="Stop: finished Scenes are kept, the rest play as fallbacks">
           <SquareIcon />
@@ -80,6 +75,31 @@ function GenerationBadge() {
   }
 
   return null;
+}
+
+function finishedUnits({ units }: GenerationStatus) {
+  return units.filter(({ status }) => status === "ready" || status === "fallback").length;
+}
+
+function jobLabel(status: GenerationStatus, isStopping: boolean) {
+  if (isStopping) {
+    return "Stopping, saving finished Scenes";
+  }
+
+  if (status.state === "planning") {
+    return "Planning the Storyboard";
+  }
+
+  return `Writing Scenes · ${finishedUnits(status)} of ${status.units.length}`;
+}
+
+/** A Storyboard counts as the first tenth of the run. */
+function jobPercent(status: GenerationStatus) {
+  if (status.state === "planning") {
+    return 4;
+  }
+
+  return Math.round(10 + (90 * finishedUnits(status)) / Math.max(status.units.length, 1));
 }
 
 /** The window's size, for the panes' limits. */
@@ -277,21 +297,27 @@ function GenerationNotice() {
   return <StopNotice />;
 }
 
+/** A stop the creator didn't ask for is announced at once. */
+const STOP_ROLES = {
+  stopped: "status",
+  closed: "status",
+  "plan-limit": "alert",
+  authentication: "alert",
+} satisfies Record<GenerationStop["cause"], "status" | "alert">;
+
 /** Why the run ended early, once its Version is saved: finished Scenes are kept and the rest are flagged fallbacks. */
 function StopNotice() {
   const status = useGeneration((state) => state.status);
   const setReconnectOpen = useGeneration((state) => state.setReconnectOpen);
-  const stopped = status?.state === "done" ? status.stopped : undefined;
+  const stopped = status?.stopped;
 
-  if (!stopped) {
+  if (status?.state !== "done" || !stopped) {
     return null;
   }
 
-  const isLimit = stopped.cause === "plan-limit" || stopped.cause === "authentication";
-
   return (
     <div
-      role={isLimit ? "alert" : "status"}
+      role={STOP_ROLES[stopped.cause]}
       className="flex items-center gap-2.5 rounded-md bg-status-flagged-tint px-3 py-2 text-app-sm text-status-flagged"
     >
       <CirclePauseIcon aria-hidden="true" className="size-4 shrink-0" />

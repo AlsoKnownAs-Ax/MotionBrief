@@ -120,6 +120,8 @@ type OpenProject = {
   job?: AbortController;
   /** Every change to the folder runs after the one before, so writes and renames never interleave. */
   queue: Promise<unknown>;
+  /** Closing: work already going finishes and saves, but none may start. */
+  isClosing: boolean;
 };
 
 /**
@@ -396,6 +398,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
       owner,
       transcription: createStatusStore<TranscriptionStatus>(initialStatus(document)),
       queue: Promise.resolve(),
+      isClosing: false,
     };
     open.set(document.id, project);
     await recents.remember(dir, document.id);
@@ -874,6 +877,16 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     closing.push(stop);
   }
 
+  /**
+   * Whether work may start on the Project now: it is open and not closing. Check it synchronously right before
+   * registering the work, so a close either sees the work or the work sees the close.
+   */
+  function admits(projectId: string) {
+    const project = open.get(projectId);
+
+    return project !== undefined && !project.isClosing;
+  }
+
   /** Stops the Project's work, waits for its last write, and releases the lock. */
   async function close(projectId: string) {
     const project = open.get(projectId);
@@ -888,6 +901,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
         return;
       }
 
+      project.isClosing = true;
       await Promise.all(closing.map((stop) => stop(projectId)));
       open.delete(projectId);
       project.job?.abort();
@@ -927,6 +941,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     /** The video's newest Version with its units' Scene code; none before its first generation is saved. */
     latestVersion: (projectId: string, format: Format) => write(projectId, (dir) => readLatestVersion(dir, format)),
     whenClosing,
+    admits,
     lastExportPath,
     rememberExportPath,
     close,

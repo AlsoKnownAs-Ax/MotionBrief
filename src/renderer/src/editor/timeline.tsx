@@ -89,12 +89,13 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
               onSeek={seek}
             />
           ))}
-          {retry &&
-            timeline.scenes
-              .filter(({ status }) => status === "fallback")
-              .map((scene) => (
-                <RetryScene key={scene.id} scene={scene} px={px} top={cardTop} disabled={!retry.canRetry} onRetry={() => retry.run([scene.unit])} />
-              ))}
+          {retry
+            ? timeline.scenes
+                .filter(({ status }) => status === "fallback")
+                .map((scene) => (
+                  <RetryScene key={scene.id} scene={scene} px={px} top={cardTop} disabled={!retry.canRetry} onRetry={() => retry.run([scene.unit])} />
+                ))
+            : null}
           {timeline.scenes.map((scene) => (
             <TransitionMarker key={scene.id} scene={scene} px={px} top={cardTop + cardHeight / 2} />
           ))}

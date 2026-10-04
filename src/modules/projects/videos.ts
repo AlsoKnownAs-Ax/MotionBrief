@@ -45,16 +45,23 @@ export const VersionSchema = VideoContentSchema.extend({
   createdAt: z.iso.datetime(),
   /** What made it: a first generation, or a Retry of flagged units. */
   origin: z.enum(["generation", "retry"]),
+  /** The run that saved it, so its record, left behind by a crash just after, is never saved again. */
+  runId: z.string().optional(),
 });
 
-/** A first generation in progress: its units are added as they finish, so a crash loses none of them. */
+/**
+ * A first generation or Retry in progress: its finished units are added as they pass, so a crash loses none of
+ * them. A Retry only records one once a unit passes.
+ */
 export const GenerationRecordSchema = VideoContentSchema.extend({
+  runId: z.string(),
+  origin: VersionSchema.shape.origin,
   startedAt: z.iso.datetime(),
   /** Every unit the Storyboard plans, in its order: those neither stored nor flagged weren't finished. */
   planned: z.array(z.string()),
 });
 
-/** Why a unit of a first generation the app quit or crashed during plays as its fallback Scene. */
+/** Why a unit of a run the app quit or crashed during plays as its fallback Scene. */
 const RECOVERED_REASON = "MotionBrief closed before this Scene was finished.";
 
 export type Flag = z.infer<typeof FlagSchema>;
@@ -132,26 +139,60 @@ export async function saveVersion(dir: string, format: Format, version: Omit<Ver
 }
 
 /**
- * Ends a first generation the app quit or crashed during by Stop's rules: its finished units are kept, the rest
- * become flagged fallbacks, and the whole is saved as the next Version. Resolves to its number; none without one.
+ * Ends a run the app quit or crashed during by Stop's rules: its finished units are kept, the rest become flagged
+ * fallbacks, and the whole is saved as the next Version. A run whose Version was saved before the crash is only
+ * cleaned up. Resolves to the new Version's number; none without one.
  */
 export async function recoverGeneration(dir: string, format: Format, createdAt: string): Promise<Result<number | undefined, FileError>> {
   const path = join(dir, format, GENERATION_FILE);
   const { data: text } = await fileStep(path, () => readFile(path, "utf8"));
-  const parsed = text === null ? undefined : GenerationRecordSchema.safeParse(parseJson(text));
 
-  // Without a readable record there is nothing to keep; the next Generate overwrites it.
-  if (!parsed?.success) {
+  // Without a readable record there is nothing to keep; the next run overwrites it.
+  if (text === null) {
     return { data: undefined, error: null };
   }
 
-  const { planned } = parsed.data;
-  const content = VideoContentSchema.parse(parsed.data);
-  const unfinished = planned.filter((unit) => !content.units[unit] && !content.flags.some((flag) => flag.unit === unit));
-  const flags = [...content.flags, ...unfinished.map((unit) => ({ unit, kind: "fallback" as const, reason: RECOVERED_REASON }))];
-  const order = (unit: string) => planned.indexOf(unit);
+  const { success, data: record } = GenerationRecordSchema.safeParse(parseJson(text));
 
-  return saveVersion(dir, format, { ...content, flags: flags.sort((a, b) => order(a.unit) - order(b.unit)), origin: "generation", createdAt });
+  if (!success) {
+    return { data: undefined, error: null };
+  }
+
+  if ((await latestRunId(dir, format)) === record.runId) {
+    const { error } = await fileStep(path, () => rm(path, { force: true }));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: undefined, error: null };
+  }
+
+  const { planned, runId, origin } = record;
+  const content = VideoContentSchema.parse(record);
+  const order = (unit: string) => planned.indexOf(unit);
+  const flags = [
+    ...content.flags,
+    ...planned
+      .filter((unit) => !content.units[unit])
+      .filter((unit) => !content.flags.some((flag) => flag.unit === unit))
+      .map((unit) => ({ unit, kind: "fallback" as const, reason: RECOVERED_REASON })),
+  ].sort((a, b) => order(a.unit) - order(b.unit));
+
+  return saveVersion(dir, format, { ...content, flags, origin, runId, createdAt });
+}
+
+/** The run that saved the video's newest Version, if it says. */
+async function latestRunId(dir: string, format: Format): Promise<string | undefined> {
+  const number = await latestVersion(dir, format);
+
+  if (number === undefined) {
+    return undefined;
+  }
+
+  const { data: version } = await readJson(join(dir, format, VERSIONS_DIR, `${number}.json`), VersionSchema);
+
+  return version?.runId;
 }
 
 /** The video's newest Version and the Scene code of its units; none before its first generation is saved. */

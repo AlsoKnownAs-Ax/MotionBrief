@@ -166,19 +166,27 @@ function retryErrorMessage(error: unknown) {
   return projectErrorMessage(error);
 }
 
+const STOP_HEADLINES = {
+  stopped: () => "Stopped",
+  "plan-limit": planLimitHeadline,
+  authentication: () => "Claude was disconnected",
+  closed: () => "Stopped when the Project closed",
+} satisfies Record<GenerationStop["cause"], (stop: GenerationStop, now: Date) => string>;
+
 /** What ended a run early, such as "Plan limit reached, resets at 15:00". */
-export function stopHeadline({ cause, resetsAt }: GenerationStop, now = new Date()) {
-  switch (cause) {
-    case "stopped":
-      return "Stopped";
-    case "plan-limit":
-      return resetsAt === undefined ? "Plan limit reached" : `Plan limit reached, resets at ${resetTime(new Date(resetsAt), now)}`;
-    case "authentication":
-      return "Claude was disconnected";
-    case "closed":
-      return "Stopped when the Project closed";
-  }
+export function stopHeadline(stop: GenerationStop, now = new Date()) {
+  return STOP_HEADLINES[stop.cause](stop, now);
 }
+
+function planLimitHeadline({ resetsAt }: GenerationStop, now: Date) {
+  if (resetsAt === undefined) {
+    return "Plan limit reached";
+  }
+
+  return `Plan limit reached, resets at ${resetTime(new Date(resetsAt), now)}`;
+}
+
+const WEEK_MS = 7 * 86_400_000;
 
 /** "15:00" today, "Tue 15:00" within the week, otherwise the date too. */
 function resetTime(at: Date, now: Date) {
@@ -188,8 +196,9 @@ function resetTime(at: Date, now: Date) {
     return time;
   }
 
-  const days = (at.getTime() - now.getTime()) / 86_400_000;
-  const day = days < 7 ? at.toLocaleDateString([], { weekday: "short" }) : at.toLocaleDateString([], { month: "short", day: "numeric" });
+  if (at.getTime() - now.getTime() < WEEK_MS) {
+    return `${at.toLocaleDateString([], { weekday: "short" })} ${time}`;
+  }
 
-  return `${day} ${time}`;
+  return `${at.toLocaleDateString([], { month: "short", day: "numeric" })} ${time}`;
 }

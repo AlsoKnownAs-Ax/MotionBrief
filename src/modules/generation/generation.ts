@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   CheckFinding,
   ConnectorError,
@@ -22,7 +23,7 @@ import { createStatusStore, type Projects, type ProjectsError, type StoredVersio
 import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules, type PresetBrief } from "../style";
 import type { Clock } from "../system";
-import { writeStoryboard, writeUnitCode } from "./agents";
+import { writeStoryboard, writeUnitCode, type StoryboardError, type UnitOutcome } from "./agents";
 
 /** The model each agent role runs on until Settings choose others (Storyboard and Scene code: Opus). */
 export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5" };
@@ -74,6 +75,8 @@ type StatusStore = ReturnType<typeof createStatusStore<GenerationStatus>>;
 
 /** A first generation or a Retry in progress: one per video at a time. */
 type Run = {
+  /** Recorded with its progress and Version, so a crash recovery never saves the same run twice. */
+  id: string;
   controller: AbortController;
   /** What stopped it, once something has. */
   stopped?: GenerationStop;
@@ -113,7 +116,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
 
   /** Starts `work` as the video's run; a run that throws fails with the error. */
   function begin(key: string, store: StatusStore, work: (run: Run) => Promise<void>) {
-    const run: Run = { controller: new AbortController(), done: Promise.resolve() };
+    const run: Run = { id: randomUUID(), controller: new AbortController(), done: Promise.resolve() };
     runs.set(key, run);
     run.done = work(run)
       .catch((cause: unknown) => store.update({ state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
@@ -181,6 +184,11 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
     }
 
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
     begin(key, store, (run) => generate({ run, ref, transcript, preset: StylePresetSchema.parse(listed), store }));
@@ -206,10 +214,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
     });
 
     if (error) {
-      const stopped = run.stopped ?? (error.code === "AGENT_FAILED" ? stopOf(error.error) : undefined);
-
-      // Before the Storyboard is valid there is nothing to keep: the Project stays as it was, ready to Generate again.
-      store.set(stopped ? { state: "idle", units: [], stopped } : { state: "failed", units: [], error });
+      store.set(endedBeforeStoryboard(run, error));
       return;
     }
 
@@ -217,7 +222,8 @@ export function createGeneration({ connector, checker, previews, projects, clock
     const planned = units.map(({ id }) => id);
     const startedAt = new Date(clock.now()).toISOString();
     const content: VideoContent = { storyboard, preset, captions, units: {}, flags: [], models, frameContractVersion: FRAME_CONTRACT_VERSION };
-    const saveRecord = () => projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), startedAt, planned });
+    const record = { runId: run.id, origin: "generation" as const, startedAt, planned };
+    const saveRecord = () => projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), ...record });
     const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: "queued", attempts: 0 }]));
     const code: Record<string, UnitCode> = {};
     const publish = publisher({ ref, storyboard, transcript, rules, preset, code, progress, store });
@@ -238,6 +244,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
     const { data: version, error: versionError } = await projects.saveVersion(projectId, format, {
       ...inUnitOrder(content, units),
       origin: "generation",
+      runId: run.id,
       createdAt: new Date(clock.now()).toISOString(),
     });
 
@@ -294,9 +301,13 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: { code: "FILE_FAILED", path: `${format}/versions/${stored.version.version}.json`, message: parsed.error.message } };
     }
 
-    // Checked again: another call may have started a run while this one read the Version.
+    // Checked again, synchronously with `begin`: another run may have started, or a close begun, while this read the Version.
     if (runs.has(key)) {
       return { data: null, error: { code: "GENERATING", projectId } };
+    }
+
+    if (!projects.admits(projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
     }
 
     const transcript = video.transcript;
@@ -325,26 +336,37 @@ export function createGeneration({ connector, checker, previews, projects, clock
       models: { ...current.models, sceneCode: models.sceneCode },
       frameContractVersion: current.frameContractVersion,
     };
-    const progress = new Map<string, GenerationUnit>(
-      units.map(({ id }) => [id, { id, status: wanted.includes(id) ? "queued" : code[id] ? "ready" : "fallback", attempts: 0 }]),
-    );
+    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retryStatus(id, wanted, code), attempts: 0 }]));
     const publish = publisher({ ref, storyboard, transcript, rules, preset, code, progress, store });
+    const hasPassed = () => targets.some(({ id }) => code[id]);
+    const record = { runId: run.id, origin: "retry" as const, startedAt: new Date(clock.now()).toISOString(), planned: units.map(({ id }) => id) };
+
+    // Recorded once a unit passes, so a crash keeps it; until then there is nothing to keep.
+    async function saveRecord(): Promise<Result<null, ProjectsError>> {
+      if (!hasPassed()) {
+        return { data: null, error: null };
+      }
+
+      return projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), ...record });
+    }
 
     await publish({ state: "writing", version: undefined, stopped: undefined, error: undefined });
-    const fileError = await writeUnits({ run, ref, storyboard, transcript, rules, preset, brief, units: targets, content, code, publish });
+    const fileError = await writeUnits({ run, ref, storyboard, transcript, rules, preset, brief, units: targets, content, code, publish, save: saveRecord });
 
     if (fileError) {
       return failed(publish, fileError);
     }
 
     // Only units that now pass change the video; otherwise it stays at its Version.
-    if (!targets.some(({ id }) => code[id])) {
-      return void (await publish({ state: "done", version: current.version, stopped: run.stopped }));
+    if (!hasPassed()) {
+      await publish({ state: "done", version: current.version, stopped: run.stopped });
+      return;
     }
 
     const { data: version, error: versionError } = await projects.saveVersion(projectId, format, {
       ...inUnitOrder(content, units),
       origin: "retry",
+      runId: run.id,
       createdAt: new Date(clock.now()).toISOString(),
     });
 
@@ -378,53 +400,75 @@ export function createGeneration({ connector, checker, previews, projects, clock
    */
   async function writeUnits({ run, ref, storyboard, transcript, rules, preset, brief, units, content, code, publish, save }: UnitsJob) {
     const { signal } = run.controller;
-    const baseline = signal.aborted ? [] : await pageFindings(storyboard, transcript, rules, preset);
+    const baseline = await baselineOf(signal, storyboard, transcript, rules, preset);
 
-    const results = await inParallel(units, PARALLEL_UNITS, async (unit): Promise<FileFailure | undefined> => {
-      const outcome = signal.aborted
-        ? { code: null, attempts: 0, reason: "" }
-        : await writeUnitCode({
-            connector,
-            workDir,
-            signal,
-            model: models.sceneCode,
-            checker,
-            storyboard,
-            transcript,
-            rules,
-            preset,
-            brief,
-            unit,
-            baseline,
-            onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
-          });
-      const others = content.flags.filter((flag) => flag.unit !== unit.id);
+    /** The unit's code by its subagent; a unit not started before the run stopped is never asked of one. */
+    async function write(unit: Unit): Promise<UnitOutcome> {
+      if (signal.aborted) {
+        return { code: null, attempts: 0, reason: "" };
+      }
 
-      if (outcome.code) {
-        const { data: hash, error: unitError } = await projects.writeUnit(ref.projectId, ref.format, outcome.code);
+      return writeUnitCode({
+        connector,
+        workDir,
+        signal,
+        model: models.sceneCode,
+        checker,
+        storyboard,
+        transcript,
+        rules,
+        preset,
+        brief,
+        unit,
+        baseline,
+        onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
+      });
+    }
 
-        if (unitError) {
-          return fileErrorOf(unitError);
-        }
-
-        code[unit.id] = outcome.code;
-        content.units[unit.id] = hash;
-        content.flags = others;
-      } else {
-        const stop = "error" in outcome && outcome.error ? stopOf(outcome.error) : undefined;
+    /** Stores passing code, or flags the unit. Flags are read after any wait, since other units change them meanwhile. */
+    async function keep(unit: Unit, outcome: UnitOutcome): Promise<FileFailure | undefined> {
+      if (!outcome.code) {
+        const stop = stopAfter(outcome);
 
         if (stop) {
           halt(run, stop);
         }
 
-        const reason = run.stopped ? STOP_REASONS[run.stopped.cause] : outcome.reason;
-        content.flags = [...others, { unit: unit.id, kind: "fallback", reason }];
+        const reason = stopReason(run, outcome.reason);
+        content.flags = [...content.flags.filter((flag) => flag.unit !== unit.id), { unit: unit.id, kind: "fallback", reason }];
+
+        return undefined;
+      }
+
+      const { data: hash, error } = await projects.writeUnit(ref.projectId, ref.format, outcome.code);
+
+      if (error) {
+        return fileErrorOf(error);
+      }
+
+      code[unit.id] = outcome.code;
+      content.units[unit.id] = hash;
+      content.flags = content.flags.filter((flag) => flag.unit !== unit.id);
+
+      return undefined;
+    }
+
+    const results = await inParallel(units, PARALLEL_UNITS, async (unit): Promise<FileFailure | undefined> => {
+      const outcome = await write(unit);
+      const keepError = await keep(unit, outcome);
+
+      if (keepError) {
+        return keepError;
       }
 
       const saved = await save?.();
-      await publish({}, { id: unit.id, status: outcome.code ? "ready" : "fallback", attempts: outcome.attempts });
+      await publish({}, { id: unit.id, status: finishedStatus(outcome), attempts: outcome.attempts });
 
-      return saved?.error ? fileErrorOf(saved.error) : undefined;
+      if (saved?.error) {
+        return fileErrorOf(saved.error);
+      }
+
+      return undefined;
     });
 
     return results.find((result) => result !== undefined);
@@ -457,6 +501,15 @@ export function createGeneration({ connector, checker, previews, projects, clock
 
       return last;
     };
+  }
+
+  /** The page's findings without unit code, unless the run has stopped and no unit will be checked. */
+  async function baselineOf(signal: AbortSignal, ...page: Parameters<typeof pageFindings>): Promise<CheckFinding[]> {
+    if (signal.aborted) {
+      return [];
+    }
+
+    return pageFindings(...page);
   }
 
   /** The Checker's findings on the page with every unit as its fallback Scene; none when it can't run, so every page-wide finding counts. */
@@ -524,6 +577,67 @@ function stopOf(error: ConnectorError): GenerationStop | undefined {
   }
 
   return undefined;
+}
+
+/** A failed unit that ends the whole run says why; any other failure stops only the unit. */
+function stopAfter(outcome: UnitOutcome): GenerationStop | undefined {
+  if (outcome.code || !outcome.error) {
+    return undefined;
+  }
+
+  return stopOf(outcome.error);
+}
+
+/** A unit the run didn't finish is flagged with why the run stopped, rather than its own last failure. */
+function stopReason(run: Run, reason: string): string {
+  if (!run.stopped) {
+    return reason;
+  }
+
+  return STOP_REASONS[run.stopped.cause];
+}
+
+/**
+ * How a run that never got a valid Storyboard ends: a stop leaves the Project as it was, ready to Generate again;
+ * anything else fails with its error.
+ */
+function endedBeforeStoryboard(run: Run, error: StoryboardError): GenerationStatus {
+  const stopped = run.stopped ?? connectorStop(error);
+
+  if (stopped) {
+    return { state: "idle", units: [], stopped };
+  }
+
+  return { state: "failed", units: [], error };
+}
+
+function connectorStop(error: StoryboardError): GenerationStop | undefined {
+  if (error.code !== "AGENT_FAILED") {
+    return undefined;
+  }
+
+  return stopOf(error.error);
+}
+
+function finishedStatus(outcome: UnitOutcome): GenerationUnit["status"] {
+  if (outcome.code) {
+    return "ready";
+  }
+
+  return "fallback";
+}
+
+/** A unit a Retry works on is queued; the others play as the Version has them. */
+function retryStatus(unit: string, wanted: string[], code: Record<string, UnitCode>): GenerationUnit["status"] {
+  if (wanted.includes(unit)) {
+    return "queued";
+  }
+
+  if (code[unit]) {
+    return "ready";
+  }
+
+  return "fallback";
 }
 
 function failed(publish: Publish, { path, message }: FileFailure) {
