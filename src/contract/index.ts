@@ -616,6 +616,19 @@ export const RevisionRequestSchema = z.object({
   scope: z.array(z.string()),
 });
 
+/**
+ * A Revision offered after a word fix, when the old word is still on screen: the request to send, scoped to the
+ * Scenes whose copy says it. Declined, nothing changes.
+ */
+export const WordFixOfferSchema = RevisionRequestSchema.extend({
+  /**
+   * Every spelling of the word the on-screen copy still says (its text before the fix, what whisper-cli heard), and
+   * the fixed word, without the punctuation around them.
+   */
+  from: z.array(z.string()).min(1),
+  to: z.string(),
+});
+
 /** Why a Revision ended without a Version. */
 export const RevisionErrorSchema = z.discriminatedUnion("code", [
   /** The agent's Storyboard patch still had these issues after its retries. */
@@ -1033,6 +1046,15 @@ export const coreContract = {
     approveRevision: oc.input(VideoRefSchema),
     stopRevision: oc.input(VideoRefSchema),
     /**
+     * After the word at `index` was fixed from `previous`, searches the current Version's Storyboard copy for the word
+     * as it was. Answers with a Revision to offer, scoped to the Scenes that still say it, or nothing when none do or
+     * the video has no Version. Captions follow the Transcript on their own; only Scene copy needs a Revision.
+     */
+    wordFixOffer: oc
+      .errors({ UNKNOWN_PROJECT, UNKNOWN_WORD: WORD_FIX_ERRORS.UNKNOWN_WORD, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(VideoRefSchema.extend({ index: z.number().int().nonnegative(), previous: z.string() }))
+      .output(WordFixOfferSchema.optional()),
+    /**
      * Opens the video of a Format for the player: its newest Version with the Project's current Transcript, word
      * fixes and all, and the video's Captions choice. A Format without a video yet answers with no Version, for its
      * Generate empty state. After an app update that changed the frame's major version, its units are first checked
@@ -1170,6 +1192,7 @@ export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
 export type GenerationStop = z.infer<typeof GenerationStopSchema>;
 export type GenerationPreviewError = z.infer<typeof GenerationPreviewErrorSchema>;
 export type RevisionRequest = z.infer<typeof RevisionRequestSchema>;
+export type WordFixOffer = z.infer<typeof WordFixOfferSchema>;
 export type RevisionError = z.infer<typeof RevisionErrorSchema>;
 export type RevisionUnit = z.infer<typeof RevisionUnitSchema>;
 export type RevisionStatus = z.infer<typeof RevisionStatusSchema>;
