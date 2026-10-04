@@ -3,6 +3,7 @@ import { dirname, extname, join } from "node:path";
 import type { Format, StoryboardTranscript, StylePreset } from "../../contract";
 import { fallbackCode, FRAME_SIZES, framePage, inlineIcons, wrapUnit, type PageAsset, type UnitCode } from "../frame";
 import type { Storyboard } from "../storyboard";
+import { captionsLayer } from "./captions";
 import { planUnits, TRANSITION_SECONDS, type Unit } from "./units";
 
 export type AssembleOptions = {
@@ -16,6 +17,8 @@ export type AssembleOptions = {
   code: Record<string, UnitCode>;
   /** The Voiceover file, the video's audio track. Absent, the video is silent. */
   voiceover?: string;
+  /** Draws Captions from the Transcript over the Scenes, in the Preset's caption style. Off by default. */
+  captions?: boolean;
 };
 
 export type AssembledPage = {
@@ -29,9 +32,9 @@ export type AssembledPage = {
 /**
  * Builds the root composition from a Storyboard, its Transcript and the units' code: one
  * sub-composition per unit, in Storyboard order and timed from the word anchors, the Transitions
- * between them, and the Voiceover. The agent writes none of this.
+ * between them, the Captions and the Voiceover. The agent writes none of this.
  */
-export async function assemble({ dir, storyboard, transcript, preset, code, voiceover }: AssembleOptions): Promise<AssembledPage> {
+export async function assemble({ dir, storyboard, transcript, preset, code, voiceover, captions = false }: AssembleOptions): Promise<AssembledPage> {
   const format = storyboard.format;
   const { width, height } = FRAME_SIZES[format];
   const units = planUnits(storyboard, transcript);
@@ -54,7 +57,9 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
     await placeVoiceover(voiceover, join(dir, audio));
   }
 
-  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, page, background: preset.palette.colors.bg }));
+  const layer = captions ? captionsLayer({ transcript, format, preset }) : undefined;
+
+  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, page, captions: layer, background: preset.palette.colors.bg }));
 
   return { format, width, height, duration, units };
 }
@@ -90,10 +95,12 @@ type RootOptions = {
   audio?: string;
   /** What the frame puts in the head, before the root composition and at its end. */
   page: { head: string; defs: string; overlay: string };
+  /** The Captions layer, when Captions are on. */
+  captions?: { css: string; html: string; js: string };
   background: string;
 };
 
-function rootHtml({ width, height, duration, units, audio, page, background }: RootOptions): string {
+function rootHtml({ width, height, duration, units, audio, page, captions, background }: RootOptions): string {
   const clips = units.map(
     (unit, index) =>
       `<div id="el-${unit.id}" class="scene" data-composition-id="${unit.id}" data-composition-src="compositions/${unit.id}.html" data-start="${unit.start}" data-duration="${unit.duration}" data-track-index="${1 + (index % 2)}"></div>`,
@@ -113,17 +120,18 @@ ${page.head}
 html, body { width: ${width}px; height: ${height}px; overflow: hidden; background: ${background}; }
 #root { position: relative; width: ${width}px; height: ${height}px; overflow: hidden; background: ${background}; }
 .scene { position: absolute; inset: 0; width: 100%; height: 100%; }
+${captions?.css ?? ""}
 </style>
 </head>
 <body>
 ${page.defs}
 <div id="root" data-composition-id="main" data-start="0" data-duration="${duration}" data-width="${width}" data-height="${height}">
-${[...clips, ...voiceover, page.overlay].filter(Boolean).join("\n")}
+${[...clips, ...voiceover, captions?.html, page.overlay].filter(Boolean).join("\n")}
 </div>
 <script>
 (function () {
   var tl = gsap.timeline({ paused: true });
-${units.flatMap((unit, index) => transitionJs(units[index - 1], unit)).join("\n")}
+${[...units.flatMap((unit, index) => transitionJs(units[index - 1], unit)), captions?.js].filter(Boolean).join("\n")}
   tl.to({}, { duration: ${duration} }, 0);
   // The HyperFrames runtime makes the registry; the page still builds without it.
   window.__timelines = window.__timelines || {};

@@ -73,7 +73,8 @@ export function createChecker({ chromePath }: CheckerOptions) {
     const dir = await mkdtemp(join(tmpdir(), "motionbrief-check-"));
 
     try {
-      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, preset, code });
+      // With Captions on, they are checked as the viewer sees them: over the Scenes.
+      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, preset, code, captions: rules.captions });
 
       if (assembleError) {
         return { data: null, error: assembleError };

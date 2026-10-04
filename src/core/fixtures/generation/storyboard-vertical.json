@@ -1,0 +1,91 @@
+{
+  "format": "vertical",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "hook",
+      "from": 0,
+      "to": 6,
+      "transition": { "type": "cut" },
+      "content": {
+        "headline": { "id": "headline", "text": "Load balancer", "at": 5 }
+      }
+    },
+    {
+      "id": "s02",
+      "type": "key-term",
+      "from": 7,
+      "to": 15,
+      "transition": { "type": "crossfade" },
+      "content": {
+        "term": { "id": "term", "text": "Healthy server", "at": 10 }
+      }
+    },
+    {
+      "id": "s03",
+      "type": "list",
+      "from": 16,
+      "to": 23,
+      "transition": { "type": "cut" },
+      "content": {
+        "title": { "id": "title", "text": "Cache first", "at": 20 },
+        "items": [
+          { "id": "server", "text": "Server", "icon": "lucide:server", "at": 17 },
+          { "id": "cache", "text": "Cache", "icon": "lucide:database", "at": 20 }
+        ]
+      }
+    },
+    {
+      "id": "s04",
+      "type": "stat-chart",
+      "from": 24,
+      "to": 35,
+      "transition": { "type": "cut" },
+      "content": {
+        "kind": "number",
+        "number": { "id": "ms", "value": 5, "unit": "ms", "label": "under", "at": 34 }
+      }
+    },
+    {
+      "id": "s05",
+      "type": "hook",
+      "from": 36,
+      "to": 42,
+      "transition": { "type": "cut" },
+      "content": {
+        "headline": { "id": "headline", "text": "Instant", "at": 42 }
+      }
+    },
+    {
+      "id": "s06",
+      "type": "key-term",
+      "from": 43,
+      "to": 50,
+      "transition": { "type": "crossfade" },
+      "content": {
+        "term": { "id": "term", "text": "No database trip", "at": 48 }
+      }
+    },
+    {
+      "id": "s07",
+      "type": "key-term",
+      "from": 51,
+      "to": 59,
+      "transition": { "type": "cut" },
+      "content": {
+        "term": { "id": "term", "text": "Cache", "at": 52 },
+        "definition": { "id": "definition", "text": "Most-asked answers", "at": 55 }
+      }
+    },
+    {
+      "id": "s08",
+      "type": "outro",
+      "from": 60,
+      "to": 71,
+      "content": {
+        "headline": { "id": "headline", "text": "1 minute", "at": 65 },
+        "cta": { "id": "cta", "text": "Never stale", "at": 69 }
+      }
+    }
+  ]
+}

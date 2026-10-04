@@ -55,7 +55,8 @@ export function GenerateBar({ project, transcription, onGenerating }: GenerateBa
   );
 }
 
-function estimateLine({ minutes, costUsd }: GenerationEstimate) {
+/** What generating will take, in one line: time, and on an API key cost. */
+export function estimateLine({ minutes, costUsd }: GenerationEstimate) {
   const time = `About ${minutes.low}–${minutes.high} minutes`;
 
   if (costUsd) {
@@ -72,7 +73,7 @@ const GENERATE_MESSAGES: Record<string, string> = {
   TRANSCRIPT_NOT_READY: "Generate unlocks when the Transcript is done.",
 };
 
-function generateErrorMessage(error: unknown) {
+export function generateErrorMessage(error: unknown) {
   if (error instanceof ORPCError && error.defined && error.code in GENERATE_MESSAGES) {
     return GENERATE_MESSAGES[error.code];
   }

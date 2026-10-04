@@ -1,22 +1,24 @@
 import type {
   CheckFinding,
+  Format,
   GenerationEstimate,
   GenerationPreviewError,
   GenerationStatus,
   GenerationUnit,
+  OpenedVideo,
   StylePreset,
   Transcript,
   UnitCode,
   UnitWork,
   VideoRef,
 } from "../../contract";
-import { StylePresetSchema } from "../../contract";
+import { FormatSchema, StylePresetSchema } from "../../contract";
 import { planUnits, type Unit } from "../assembler";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
 import type { PreviewError, Previews } from "../preview";
-import { createStatusStore, type Flag, type Projects, type ProjectsError, type VideoContent } from "../projects";
+import { createStatusStore, type Flag, type Projects, type ProjectsError, type ProjectVideo, type VideoContent } from "../projects";
 import type { Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
 import type { Clock } from "../system";
@@ -51,6 +53,9 @@ export type GenerateError =
   | { code: "GENERATING"; projectId: string }
   | { code: "ALREADY_GENERATED"; version: number }
   | { code: "UNKNOWN_STYLE_PRESET"; stylePreset: string };
+
+/** Why a stored video couldn't be opened: its Project, its files, or its preview. */
+export type OpenVideoError = Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> | PreviewError;
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
@@ -105,6 +110,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
     }
 
     const { key, store } = storeOf(ref);
+    const { data: preset, error: presetError } = await presetFor(video, format);
 
     if (running.has(key)) {
       return { data: null, error: { code: "GENERATING", projectId } };
@@ -118,26 +124,83 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
     }
 
-    const listed = listPresets().find(({ id }) => id === video.project.stylePreset);
-
-    if (!listed) {
-      return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
+    if (presetError) {
+      return { data: null, error: presetError };
     }
 
     running.add(key);
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
-    void generate({ ref, transcript, preset: StylePresetSchema.parse(listed), store })
+    void generate({ ref, transcript, preset, store })
       .catch((cause: unknown) => store.update({ state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
       .finally(() => running.delete(key));
 
     return { data: null, error: null };
   }
 
+  /**
+   * The Style Preset a video is generated in. The Project's other Format, once it has a video, passes on
+   * its current Preset snapshot, so both videos look alike; a Project's first video uses its Style Preset.
+   */
+  async function presetFor(video: ProjectVideo, format: Format): Promise<Result<StylePreset, GenerateError>> {
+    const sibling = FormatSchema.options.find((other) => other !== format) ?? format;
+    const { data: stored, error } = await projects.newestVersion(video.project.id, sibling);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    if (stored) {
+      return { data: stored.version.preset, error: null };
+    }
+
+    const listed = listPresets().find(({ id }) => id === video.project.stylePreset);
+
+    if (!listed) {
+      return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
+    }
+
+    return { data: StylePresetSchema.parse(listed), error: null };
+  }
+
+  /**
+   * The video's newest Version as it plays now, with the Project's current Transcript, so word fixes made
+   * since show in it. A Format without a video answers with no Version.
+   */
+  async function open({ projectId, format }: VideoRef): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { data: video, error } = await projects.video(projectId, format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const { data: stored, error: versionError } = await projects.newestVersion(projectId, format);
+
+    if (versionError) {
+      return { data: null, error: projectError(versionError) };
+    }
+
+    if (!stored || !video.transcript) {
+      return { data: {}, error: null };
+    }
+
+    const { version, code } = stored;
+    const rules = storyboardRules(version.preset, { format, captions: version.captions });
+    const source = { storyboard: version.storyboard, transcript: video.transcript, rules, preset: version.preset, code, voiceover: video.voiceoverPath };
+    const { data: preview, error: previewError } = await previews.open(source);
+
+    if (previewError) {
+      return { data: null, error: previewError };
+    }
+
+    return { data: { version: version.version, captions: version.captions, preview }, error: null };
+  }
+
   type Run = { ref: VideoRef; transcript: Transcript; preset: StylePreset; store: ReturnType<typeof createStatusStore<GenerationStatus>> };
 
   async function generate({ ref, transcript, preset, store }: Run) {
     const { projectId, format } = ref;
+    // Captions are on by default in vertical and off in horizontal.
     const captions = format === "vertical";
     const rules = storyboardRules(preset, { format, captions });
     const brief = presetBrief(preset, format);
@@ -267,7 +330,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
     return { data: storeOf(ref).store.watch(signal), error: null };
   }
 
-  return { estimate, start, watch };
+  return { estimate, start, watch, open };
 }
 
 type PublishContext = {
@@ -307,7 +370,7 @@ function fileErrorOf(error: ProjectsError): FileFailure {
   return { path: "", message: error.code };
 }
 
-function projectError(error: ProjectsError): GenerateError {
+function projectError(error: ProjectsError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
   if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
     return error;
   }

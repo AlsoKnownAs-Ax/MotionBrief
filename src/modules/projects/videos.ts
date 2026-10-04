@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
 import { StylePresetSchema, UnitCodeSchema, type Format, type UnitCode } from "../../contract";
@@ -122,6 +122,34 @@ export async function saveVersion(dir: string, format: Format, version: Omit<Ver
   }
 
   return { data: number, error: null };
+}
+
+/** A Version of the video with its units' Scene code, as it plays. */
+export type StoredVersion = { version: Version; code: Record<string, UnitCode> };
+
+/** Reads a Version and the Scene code of its units. */
+export async function readVersion(dir: string, format: Format, number: number): Promise<Result<StoredVersion, FileError>> {
+  const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
+  const { data: version, error } = await fileStep(path, async () => VersionSchema.parse(JSON.parse(await readFile(path, "utf8"))));
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const code: Record<string, UnitCode> = {};
+
+  for (const [unit, hash] of Object.entries(version.units)) {
+    const unitPath = join(dir, format, UNITS_DIR, `${hash}.json`);
+    const { data: unitCode, error: unitError } = await fileStep(unitPath, async () => UnitCodeSchema.parse(JSON.parse(await readFile(unitPath, "utf8"))));
+
+    if (unitError) {
+      return { data: null, error: unitError };
+    }
+
+    code[unit] = unitCode;
+  }
+
+  return { data: { version, code }, error: null };
 }
 
 /** The number of the video's newest Version; none before its first generation is saved. */

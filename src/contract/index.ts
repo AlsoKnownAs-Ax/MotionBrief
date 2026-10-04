@@ -495,6 +495,14 @@ export const GenerationStatusSchema = z.object({
   error: GenerationErrorSchema.optional(),
 });
 
+/** A video of a Project as it plays now: its newest Version, or nothing in a Format without a video. */
+export const OpenedVideoSchema = z.object({
+  version: z.number().int().positive().optional(),
+  /** Whether the video shows Captions. */
+  captions: z.boolean().optional(),
+  preview: PreviewSchema.optional(),
+});
+
 /** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */
 export const CacheStatusSchema = z.object({
   usedBytes: z.number().int().nonnegative(),
@@ -774,8 +782,24 @@ export const coreContract = {
     /** How long, and on an API key what, generating the video will take with the default models. */
     estimate: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(GenerationEstimateSchema),
     /**
-     * Generates the video from the Project's Transcript in its Style Preset: a Storyboard, then each unit's
-     * Scene code, checked and retried, saved as Version 1. Only ever starts when the creator presses Generate.
+     * Opens the video of a Format for the player: its newest Version with the Project's current Transcript, word
+     * fixes and all. A Format without a video yet answers with no Version, for its Generate empty state.
+     */
+    open: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+      })
+      .input(VideoRefSchema)
+      .output(OpenedVideoSchema),
+    /**
+     * Generates the video from the Project's Transcript: a Storyboard, then each unit's Scene code, checked and
+     * retried, saved as Version 1. The Project's first video is drawn in its Style Preset; the other Format's
+     * copies the first video's current Preset snapshot and shares its Transcript. A Format is always a generation
+     * of its own, never a Revision of the other. Only ever starts when the creator presses Generate.
      */
     generate: oc
       .errors({
@@ -860,3 +884,4 @@ export type GenerationError = z.infer<typeof GenerationErrorSchema>;
 export type GenerationUnit = z.infer<typeof GenerationUnitSchema>;
 export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
 export type GenerationPreviewError = z.infer<typeof GenerationPreviewErrorSchema>;
+export type OpenedVideo = z.infer<typeof OpenedVideoSchema>;

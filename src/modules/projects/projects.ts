@@ -26,7 +26,7 @@ import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocumentError } from "./video";
-import { latestVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version } from "./videos";
+import { latestVersion, readVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type StoredVersion, type Version } from "./videos";
 
 /** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
 export type Trash = (path: string) => Promise<void>;
@@ -731,6 +731,21 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     }));
   }
 
+  /** The video's newest Version with its units' Scene code; none before its first generation is saved. */
+  async function newestVersion(projectId: string, format: Format): Promise<Result<StoredVersion | undefined, ProjectsError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    return enqueue(project, async (): Promise<Result<StoredVersion | undefined, ProjectsError>> => {
+      const number = await latestVersion(project.dir, format);
+
+      return number === undefined ? { data: undefined, error: null } : readVersion(project.dir, format, number);
+    });
+  }
+
   /**
    * Fixes a misheard word in the saved Transcript: its text changes and its timing stays. The Transcript is
    * Project-level, so this never touches a video or its Versions.
@@ -872,6 +887,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     retryTranscription,
     fixWord,
     video,
+    newestVersion,
     /** Stores a unit's Scene code in the video's content-addressed store; resolves to its hash. */
     writeUnit: (projectId: string, format: Format, code: UnitCode) => write(projectId, (dir) => writeUnit(dir, format, code)),
     /** Saves the first generation in progress, so its finished units outlive a crash. */
