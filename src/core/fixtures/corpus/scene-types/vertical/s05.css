@@ -1,0 +1,5 @@
+.terminal { display: flex; flex-direction: column; justify-content: center; }
+.window { position: relative; padding: 40px 44px; }
+.line { margin: 0; white-space: pre; }
+.keyword { color: var(--accent); }
+.highlight { position: absolute; left: 20px; right: 20px; top: 24px; bottom: 24px; border: 4px solid var(--accent); border-radius: var(--radius); }

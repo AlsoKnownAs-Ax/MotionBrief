@@ -1,0 +1,3 @@
+.list { display: flex; flex-direction: column; justify-content: center; gap: 56px; padding-left: 40px; }
+.item { display: flex; align-items: center; gap: 28px; }
+.item-icon { font-size: 80px; color: var(--accent2); }
