@@ -11,6 +11,9 @@
   "engines": {
     "node": "24.x"
   },
+  "puppeteer": {
+    "skipDownload": true
+  },
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",

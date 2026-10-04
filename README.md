@@ -31,7 +31,7 @@ pnpm dev
 
 pnpm skips `postinstall` when the lockfile hasn't changed, so after pulling a new `deps.json`, or after a failed fetch, run `pnpm deps:fetch`.
 
-HyperFrames, GSAP, the bundled icon sets (Lucide, Simple Icons) and the frame's OFL fonts are npm packages pinned in `package.json`. Puppeteer never downloads a Chrome of its own (`pnpm-workspace.yaml` denies its build script): the frame and the Checker run the `chrome-headless-shell` below, with HyperFrames telemetry and update checks off.
+HyperFrames, GSAP, the bundled icon sets (Lucide, Simple Icons) and the frame's OFL fonts are npm packages pinned in `package.json`. Puppeteer is locked to one version (`pnpm-workspace.yaml` overrides) and never downloads a Chrome of its own (its build script is denied, `package.json` sets `skipDownload` and CI installs with `PUPPETEER_SKIP_DOWNLOAD=1`): the frame, the Checker and Export MP4 (`@hyperframes/producer`, encoding with the pinned FFmpeg) run the `chrome-headless-shell` below, with HyperFrames telemetry and update checks off.
 
 | Name                    | Version is                           | Comes from                                                                                         |
 | ----------------------- | ------------------------------------ | -------------------------------------------------------------------------------------------------- |

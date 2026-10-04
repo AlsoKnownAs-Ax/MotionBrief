@@ -31,6 +31,8 @@ const bridge: Bridge = {
   showContextMenu: (items) => ipcRenderer.invoke(IPC.showContextMenu, items),
   chooseFile: (options) => ipcRenderer.invoke(IPC.chooseFile, options),
   pathForFile: (file) => webUtils.getPathForFile(file),
+  chooseSavePath: (options) => ipcRenderer.invoke(IPC.chooseSavePath, options),
+  showInFolder: (path) => ipcRenderer.send(IPC.showInFolder, path),
 };
 
 contextBridge.exposeInMainWorld("motionbrief", bridge);

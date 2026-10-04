@@ -2,4 +2,10 @@ allowBuilds:
   esbuild: true
   unrs-resolver: true
   # Its postinstall downloads a Chrome; the frame runs the pinned chrome-headless-shell from deps.json.
+  # package.json's "puppeteer" key (skipDownload) and CI's PUPPETEER_SKIP_DOWNLOAD=1 skip it too.
   puppeteer: false
+
+# @hyperframes/producer asks for ^25 of Puppeteer; lock it to the version the pinned chrome-headless-shell is chosen for.
+overrides:
+  puppeteer: 25.12.0
+  puppeteer-core: 25.12.0

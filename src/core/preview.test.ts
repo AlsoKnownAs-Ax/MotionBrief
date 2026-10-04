@@ -8,6 +8,7 @@ import storyboard from "./fixtures/storyboard/horizontal.json";
 import transcript from "./fixtures/storyboard/transcript.json";
 import { chromeHeadlessShellPath } from "./native";
 import { BLUEPRINT, BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
+import { silentWav } from "./test-support/voiceover";
 
 /** Hand-written Scene code for two units of the horizontal fixture; the rest play as fallback Scenes. */
 async function editorCode(): Promise<Record<string, UnitCode>> {
@@ -18,26 +19,6 @@ async function editorCode(): Promise<Record<string, UnitCode>> {
   };
 
   return { s01: await unit("s01"), s08: await unit("s08") };
-}
-
-/** A tiny synthetic Voiceover: a second of 8 kHz mono silence as a WAV file. */
-function silentWav(): Buffer {
-  const samples = 8000;
-  const header = Buffer.alloc(44);
-  header.write("RIFF", 0);
-  header.writeUInt32LE(36 + samples * 2, 4);
-  header.write("WAVEfmt ", 8);
-  header.writeUInt32LE(16, 16);
-  header.writeUInt16LE(1, 20);
-  header.writeUInt16LE(1, 22);
-  header.writeUInt32LE(8000, 24);
-  header.writeUInt32LE(16000, 28);
-  header.writeUInt16LE(2, 32);
-  header.writeUInt16LE(16, 34);
-  header.write("data", 36);
-  header.writeUInt32LE(samples * 2, 40);
-
-  return Buffer.concat([header, Buffer.alloc(samples * 2)]);
 }
 
 let workDir = "";
