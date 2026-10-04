@@ -2,11 +2,11 @@ import type { ConnectorError, StoryboardIssue, StoryboardRules, StylePreset, Tra
 import { defineHostTool } from "../connector";
 import { RETRIES, sendTurn, withSession, type AgentRun } from "../generation";
 import type { RevisionRecord } from "../projects";
-import { validateStoryboard, type Storyboard } from "../storyboard";
+import type { Storyboard } from "../storyboard";
 import type { PresetBrief } from "../style";
-import { applyPatch, PatchSchema, type Patch } from "./patch";
+import { PatchSchema, type Patch } from "./patch";
 import { PATCH_TOOL, patchIssuesMessage, revisionMessage, revisionSystem } from "./prompts";
-import { scopeIssues } from "./scope";
+import { validatePatch } from "./validate";
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
@@ -79,34 +79,16 @@ export async function runRevisionAgent({ storyboard, transcript, rulesFor, prese
       }
 
       const patch: Patch = submitted;
-      const { data: revised, error } = validateStoryboard(applyPatch(storyboard, patch), transcript, rulesFor(patch.captions ?? writtenFor));
+      const { data: revised, error } = validatePatch({ current: storyboard, patch, transcript, rulesFor, writtenFor, scope });
 
-      if (error) {
-        issues = error.issues;
-        message = patchIssuesMessage(issues);
-        continue;
-      }
-
-      issues = [...unknownScenes(patch, revised), ...scopeIssues(storyboard, revised, patch, scope)];
-
-      if (issues.length === 0) {
+      if (!error) {
         return { data: { storyboard: revised, patch }, error: null };
       }
 
+      issues = error;
       message = patchIssuesMessage(issues);
     }
 
     return { data: null, error: { code: "PATCH_INVALID", issues } };
-  });
-}
-
-/** Instructions for Scenes the revised Storyboard doesn't have. */
-function unknownScenes({ instructions }: Patch, storyboard: Storyboard): StoryboardIssue[] {
-  return instructions.flatMap(({ scene }, index) => {
-    if (storyboard.scenes.some(({ id }) => id === scene)) {
-      return [];
-    }
-
-    return [{ code: "REFERENCE", field: `instructions[${index}].scene`, message: `There is no Scene "${scene}" in the revised Storyboard.` }];
   });
 }
