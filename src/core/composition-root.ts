@@ -56,6 +56,8 @@ export type CoreOptions = {
   ffprobePath?: string;
   /** The source tree's fixtures folder: development builds open the fixture Project from it. */
   sampleDir?: string;
+  /** Told how many exports are running whenever that changes: main holds app updates back while any is. */
+  onExportsChange?: (running: number) => void;
 };
 
 /** The cache folder's subfolder of assembled preview pages. */
@@ -82,6 +84,7 @@ export function createCore({
   ffmpegPath = pinnedFfmpegPath(),
   ffprobePath = pinnedFfprobePath(),
   sampleDir,
+  onExportsChange,
 }: CoreOptions) {
   const clock = adapters?.clock ?? realClock;
   const disk = adapters?.disk ?? realDisk;
@@ -100,7 +103,14 @@ export function createCore({
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash });
   const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
-  const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
+  const exporter = createExporter({
+    workDir: join(cacheDir, EXPORT_DIR),
+    chromePath,
+    ffmpegPath,
+    ffprobePath,
+    locations: projectExportLocations(projects),
+    onRunningChange: onExportsChange,
+  });
   const generation = createGeneration({ connector, checker, previews, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
@@ -110,6 +120,8 @@ export function createCore({
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */
     shutdown: () => projects.closeAll(),
+    /** For main only, before it restarts into an app update: see the exporter's hold(). */
+    exports: { hold: exporter.hold, release: exporter.release },
   };
 }
 

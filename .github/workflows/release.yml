@@ -1,0 +1,154 @@
+name: release
+
+# A vX.Y.Z or vX.Y.Z-beta.N tag packages MotionBrief on each platform's own OS, from the native binaries
+# deps.json pins (the native-deps release), smoke-tests the packaged app, and gathers a draft GitHub Release:
+# installers, updater files, license texts, the FFmpeg source and build scripts, and SHA-256 sums. A maintainer
+# publishes the draft; beta tags become pre-releases, which only the beta update channel takes.
+# Code signing waits for the release gate (spec #23).
+
+on:
+  push:
+    tags: ["v*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Read the version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.tag.outputs.version }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+    steps:
+      - id: tag
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-beta\.(0|[1-9][0-9]*))?$ ]] \
+            || { echo "::error::$TAG isn't vX.Y.Z or vX.Y.Z-beta.N"; exit 1; }
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$([[ "$TAG" == *-beta.* ]] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+
+  package:
+    name: Package (${{ matrix.platform }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: mac-arm64
+            runner: macos-15
+            unpacked: dist/mac-arm64/MotionBrief.app/Contents/Resources
+          - platform: win-x64
+            runner: windows-2025
+            unpacked: dist/win-unpacked/resources
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - run: corepack enable
+
+      # Postinstall fetches the native binaries deps.json pins, and refuses any hash mismatch.
+      - run: pnpm install --frozen-lockfile
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+
+      # The tag is the version: the app reports it and the updater compares against it.
+      - run: npm pkg set version="$VERSION"
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+
+      # Builds, writes out/licenses, checks vendor/ against deps.json (beforePack) and packs.
+      - run: pnpm package
+        env:
+          # Unsigned until the release gate: don't pick up a certificate from the runner's keychain.
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+
+      # Runs the packed app: the core from app.asar, every bundled executable from app.asar.unpacked.
+      - run: pnpm package:smoke
+
+      - name: Stage the release assets
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          UNPACKED: ${{ matrix.unpacked }}
+        run: |
+          mkdir release
+          # Installers, the macOS updater zip, blockmaps for partial downloads, and the updater's feed files.
+          find dist -maxdepth 1 -type f \( -name '*.exe' -o -name '*.dmg' -o -name '*.zip' -o -name '*.blockmap' -o -name '*.yml' \) \
+            ! -name 'builder-*.yml' ! -name '*__uninstaller*' -exec cp {} release/ \;
+          # The license texts the app ships; the notices differ by platform, the rest don't.
+          cp "$UNPACKED/licenses/THIRD_PARTY_NOTICES.txt" "release/THIRD_PARTY_NOTICES-$PLATFORM.txt"
+          if [[ "$PLATFORM" == win-x64 ]]; then
+            cp "$UNPACKED/licenses/LICENSE.txt" "$UNPACKED/licenses/COPYING.GPLv2.txt" "$UNPACKED/licenses/LICENSES.chromium.html" release/
+          fi
+          ls -l release
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-${{ matrix.platform }}
+          path: release/*
+          compression-level: 0
+
+  publish:
+    name: Draft the release
+    needs: [version, package]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release
+
+      # The complete corresponding source of the bundled FFmpeg and whisper-cli, and the scripts that built them,
+      # from the native-deps release they came from, checked against that release's sums.
+      - name: Fetch the native-deps source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for tag in $(jq -r '.ffmpeg.version, ."whisper-cli".version' deps.json | sort -u); do
+            gh release download "$tag" -p native-deps-source.tar -p SHA256SUMS.txt -D "native/$tag"
+            (cd "native/$tag" && sha256sum --check --ignore-missing SHA256SUMS.txt)
+            cp "native/$tag/native-deps-source.tar" "release/$tag-source.tar"
+          done
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
+          PRERELEASE: ${{ needs.version.outputs.prerelease }}
+        run: |
+          (cd release && sha256sum -- * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          sources=$(cd release && ls ./*-source.tar | sed 's|^\./||' | paste -sd, - | sed 's/,/, /g')
+          cat > notes.md << EOF
+          MotionBrief $VERSION for Windows x64 and macOS arm64, built from $GITHUB_SHA. Not code-signed yet.
+
+          - \`LICENSE.txt\`: MotionBrief's MIT license.
+          - \`THIRD_PARTY_NOTICES-<platform>.txt\`: every bundled npm package and native dependency, with its license.
+          - \`COPYING.GPLv2.txt\`: the bundled FFmpeg and FFprobe are GPL version 2 or later (libx264, libx265).
+          - \`LICENSES.chromium.html\`: Chromium's licenses, for Electron and chrome-headless-shell.
+          - $sources: the complete corresponding source of the bundled FFmpeg and whisper-cli, and the scripts that built them.
+          - \`SHA256SUMS.txt\`: SHA-256 of every file here.
+          EOF
+          flags=(--draft --verify-tag --title "MotionBrief $VERSION" --notes-file notes.md)
+          if [[ "$PRERELEASE" == true ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" release/* "${flags[@]}"

@@ -1,7 +1,11 @@
 import { join } from "node:path";
 
-/** The repo root in development: this file runs from src/core in tests and from out/core when built. */
-const ROOT = join(import.meta.dirname, "..", "..");
+/**
+ * Where vendor/ sits: the repo root in development (this file runs from src/core in tests and from out/main when
+ * built). A packaged app's root is app.asar, and electron-builder.yml unpacks vendor/ next to it, since
+ * executables can't run from inside the archive.
+ */
+const ROOT = join(import.meta.dirname, "..", "..").replace(/app\.asar$/, "app.asar.unpacked");
 
 /** Where chrome-headless-shell sits inside its Chrome for Testing archive on each platform MotionBrief ships for. */
 const CHROME_HEADLESS_SHELL: Partial<Record<NodeJS.Platform, string>> = {

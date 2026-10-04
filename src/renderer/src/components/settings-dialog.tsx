@@ -10,7 +10,9 @@ import { useNavigation } from "@renderer/navigation";
 import { sizeLabel } from "@renderer/new-project/labels";
 import { PresetEditorDialog } from "@renderer/style/preset-editor";
 import { PresetSettings } from "@renderer/style/preset-settings";
+import { useSetUpdateChannel, useUpdateState } from "@renderer/updates/update";
 import type { CacheStatus, ConnectionStatus } from "../../../contract";
+import type { UpdateState } from "../../../shared/ipc";
 
 export const useSettingsDialog = create<{ isOpen: boolean; setIsOpen: (isOpen: boolean) => void }>((set) => ({
   isOpen: false,
@@ -42,6 +44,7 @@ export function SettingsDialog() {
           <ClaudeSettings onOpenSetup={() => setIsOpen(false)} />
           <PresetSettings />
           <StorageSettings />
+          <UpdateSettings />
         </DialogContent>
       </Dialog>
       <PresetEditorDialog />
@@ -197,6 +200,54 @@ function cacheLabel(status: CacheStatus | undefined) {
   }
 
   return `${sizeLabel(status.usedBytes)} of ${sizeLabel(status.capBytes)}`;
+}
+
+/** The opt-in beta channel: GitHub pre-releases as well as stable releases. */
+function UpdateSettings() {
+  const { data: update } = useUpdateState();
+  const setChannel = useSetUpdateChannel();
+  const isBeta = update?.channel === "beta";
+
+  return (
+    <section aria-labelledby="settings-updates" className="flex flex-col gap-1">
+      <h3 id="settings-updates" className="text-app-sm font-medium">
+        Updates
+      </h3>
+      <dl className="flex flex-col">
+        <Row label="Channel">
+          <span className="text-app-sm text-ink-muted">{channelLabel(update)}</span>
+          <Button variant="ghost" size="sm" disabled={!update || setChannel.isPending} onClick={() => setChannel.mutate(isBeta ? "stable" : "beta")}>
+            {isBeta ? "Leave beta" : "Join beta"}
+          </Button>
+        </Row>
+      </dl>
+      <p className="text-app-xs text-ink-muted">{updatesNote(update)}</p>
+    </section>
+  );
+}
+
+function channelLabel(update: UpdateState | undefined) {
+  if (!update) {
+    return "Checking…";
+  }
+
+  if (update.channel === "beta") {
+    return "Beta";
+  }
+
+  return "Stable";
+}
+
+function updatesNote(update: UpdateState | undefined) {
+  if (update && !update.isEnabled) {
+    return "Development builds don't update.";
+  }
+
+  if (update?.channel === "beta") {
+    return "You get beta versions early, as well as every stable release. Leaving beta keeps this version until a newer stable one is out.";
+  }
+
+  return "Updates download in the background. Beta versions arrive earlier and may be less stable.";
 }
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
