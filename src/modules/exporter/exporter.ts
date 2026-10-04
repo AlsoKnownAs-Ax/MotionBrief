@@ -39,12 +39,12 @@ export type Exporter = ReturnType<typeof createExporter>;
  */
 export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, locations, onRunningChange }: ExporterOptions) {
   const running = new Set<string>();
+  let isHeld = false;
 
   async function* mp4({ source, path, video, signal = new AbortController().signal }: ExportRequest): AsyncGenerator<ExportStatus> {
-    const problem = await preflight(path);
-
-    if (problem) {
-      yield { state: "failed", error: problem };
+    // Checked and counted in one synchronous step, so hold() never misses an export that is starting.
+    if (isHeld) {
+      yield { state: "failed", error: { code: "UPDATING" } };
       return;
     }
 
@@ -54,6 +54,13 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
     onRunningChange?.(running.size);
 
     try {
+      const problem = await preflight(path);
+
+      if (problem) {
+        yield { state: "failed", error: problem };
+        return;
+      }
+
       yield { state: "rendering", stage: "preparing", progress: 0 };
       await clearAbandoned();
       const pageDir = join(dir, "page");
@@ -129,6 +136,17 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
   return {
     mp4,
     lastPath: (video: VideoRef) => locations.last(video),
+    /**
+     * Stops new exports from starting, for an app update about to restart, and returns how many are still
+     * running: the restart may go ahead only at 0. release() lets exports start again.
+     */
+    hold: () => {
+      isHeld = true;
+      return running.size;
+    },
+    release: () => {
+      isHeld = false;
+    },
   };
 }
 

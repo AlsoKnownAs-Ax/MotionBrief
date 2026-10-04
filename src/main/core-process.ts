@@ -109,6 +109,12 @@ export function startCoreProcess({
 
       child.postMessage(null, [port]);
     },
+    /** Sends the core a message over its parent port; dropped while the core is down. */
+    send(message: unknown) {
+      if (isRunning) {
+        child.postMessage(message);
+      }
+    },
     /** Kills the core as a crash would. Development only, to exercise the restart path. */
     crash() {
       child.kill();

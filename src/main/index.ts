@@ -18,7 +18,9 @@ import {
 import { handleConnectionStoreMessage } from "./connection-store";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
-import { startUpdater, type Updater } from "./updater";
+import { coreExportsHold } from "./exports-hold";
+import { startUpdater } from "./updater";
+import type { Updates } from "./updates";
 import { createWindow } from "./window";
 
 // IPC payloads come from the renderer, so they are checked before use.
@@ -48,7 +50,9 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 async function start() {
-  const updater = await startUpdater({ onChange: (state) => broadcast(IPC.updateChanged, state) });
+  // The core starts below; nothing is held before then.
+  const exportsHold = coreExportsHold((message) => core.send(message));
+  const updater = await startUpdater({ exports: exportsHold, onChange: (state) => broadcast(IPC.updateChanged, state) });
   const core = startCoreProcess({
     entry: coreEntry,
     appVersion: app.getVersion(),
@@ -63,6 +67,10 @@ async function start() {
     },
     onRestart: () => broadcast(IPC.coreRestarted),
     onRequest: async (message) => {
+      if (exportsHold.handle(message)) {
+        return undefined;
+      }
+
       const { success, data: exports } = ExportsMessageSchema.safeParse(message);
 
       if (success) {
@@ -153,7 +161,7 @@ function handleIpc(core: CoreProcess) {
   });
 }
 
-function handleUpdateIpc(updater: Updater) {
+function handleUpdateIpc(updater: Updates) {
   ipcMain.handle(IPC.getUpdateState, () => updater.state());
 
   ipcMain.handle(IPC.setUpdateChannel, (_event, payload: unknown) => {

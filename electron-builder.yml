@@ -10,8 +10,8 @@ directories:
 
 # Refuses to pack a vendor/ that doesn't match deps.json for the platform being built (ADR 0002).
 beforePack: ./scripts/release/before-pack.ts
-# Copies Electron's Chromium licenses into resources/licenses.
-afterPack: ./scripts/release/after-pack.ts
+# Copies Electron's Chromium licenses into out/licenses, before macOS packaging deletes them.
+afterExtract: ./scripts/release/after-extract.ts
 
 files:
   - out/**

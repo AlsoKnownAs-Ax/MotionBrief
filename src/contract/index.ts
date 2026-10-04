@@ -247,6 +247,8 @@ export const ExportErrorSchema = z.discriminatedUnion("code", [
   z.object({ code: z.literal("RENDER_FAILED"), message: z.string() }),
   /** The chosen folder isn't there, or the MP4 couldn't be moved into it. */
   z.object({ code: z.literal("SAVE_FAILED"), path: z.string(), message: z.string() }),
+  /** MotionBrief is restarting into an app update, so it starts no new exports. */
+  z.object({ code: z.literal("UPDATING") }),
 ]);
 
 /** Where an export stands: rendering through its stages, then saved or failed. */

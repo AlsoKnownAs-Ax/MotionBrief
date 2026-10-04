@@ -1,7 +1,7 @@
 // `pnpm package` runs this after the build: it writes out/licenses/, which electron-builder ships as the app's
 // resources/licenses and the release workflow attaches to the GitHub Release. It holds MotionBrief's own license,
 // the GPL that covers the bundled FFmpeg and THIRD_PARTY_NOTICES.txt: every npm package shipped or bundled, and
-// every native dependency in vendor/, with its license files. after-pack.ts adds Electron's Chromium licenses.
+// every native dependency in vendor/, with its license files. after-extract.ts adds Electron's Chromium licenses.
 import { execSync } from "node:child_process";
 import { copyFile, mkdir, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
@@ -18,17 +18,39 @@ export type Notice = {
 /** File names that hold a license or a notice the license requires to be passed on. */
 const LICENSE_FILE = /^(licen[cs]e|copying|notice|copyright)/i;
 
-/** The weights in vendor/ and the app data folder carry no license file of their own. */
+/** The MIT License, after its copyright line. */
+const MIT_PERMISSION = `Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.`;
+
+/**
+ * The weights in vendor/ and the app data folder carry no license file of their own: these are the licenses
+ * of the projects they come from (github.com/openai/whisper, github.com/snakers4/silero-vad).
+ */
 const MODEL_NOTICES: Notice[] = [
   {
     name: "whisper-model (OpenAI Whisper large-v3-turbo, ggml conversion from ggerganov/whisper.cpp)",
     license: "MIT",
-    files: [{ path: "", text: "https://github.com/openai/whisper/blob/main/LICENSE" }],
+    files: [{ path: "LICENSE (openai/whisper)", text: `MIT License\n\nCopyright (c) 2022 OpenAI\n\n${MIT_PERMISSION}` }],
   },
   {
     name: "whisper-vad-model (Silero VAD, ggml conversion from ggml-org/whisper-vad)",
     license: "MIT",
-    files: [{ path: "", text: "https://github.com/snakers4/silero-vad/blob/master/LICENSE" }],
+    files: [{ path: "LICENSE (snakers4/silero-vad)", text: `MIT License\n\nCopyright (c) 2020-present Silero Team\n\n${MIT_PERMISSION}` }],
   },
 ];
 

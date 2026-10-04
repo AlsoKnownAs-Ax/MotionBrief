@@ -3,9 +3,11 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { createRouterClient } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExportStatus, UnitCode, VideoRef, VideoSource } from "../contract";
 import storyboard from "./fixtures/checker/storyboard.json";
+import { createCore } from "./composition-root";
 import transcript from "./fixtures/checker/transcript.json";
 import { ffprobePath } from "./native";
 import { BLUEPRINT, connect, RULES } from "./test-support/checker";
@@ -178,6 +180,21 @@ describe("Export MP4", () => {
     },
     EXPORT_TIMEOUT_MS,
   );
+
+  it("starts no export while an app update holds them, and starts again once released", async () => {
+    const appDataDir = await mkdtemp(join(workDir, "app-data-"));
+    const { router, exports } = createCore({ appVersion: "1.2.3", appDataDir, cacheDir: join(appDataDir, "cache") });
+    const client = createRouterClient(router);
+    const { id: previewId } = await client.preview.open(await source());
+    const target = join(workDir, "missing folder", "Held.mp4");
+
+    expect(exports.hold()).toBe(0);
+    expect(await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }))).toEqual([{ state: "failed", error: { code: "UPDATING" } }]);
+
+    exports.release();
+    // Past the hold: this one fails on its missing folder instead.
+    expect(await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }))).toMatchObject([{ state: "failed", error: { code: "SAVE_FAILED" } }]);
+  });
 
   it("refuses a video that isn't open", async () => {
     const statuses = async () => collect(await connect().export.mp4({ previewId: "0123456789abcdef", path: join(workDir, "Nope.mp4"), video: UNOPENED }));

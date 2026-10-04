@@ -96,7 +96,11 @@ export function createCore({
   const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects), onRunningChange: onExportsChange });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }) };
+  return {
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }),
+    /** For main only, before it restarts into an app update: see the exporter's hold(). */
+    exports: { hold: exporter.hold, release: exporter.release },
+  };
 }
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */

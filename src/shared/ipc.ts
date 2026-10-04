@@ -83,6 +83,24 @@ export type ExportsMessage = {
   running: number;
 };
 
+/**
+ * main → core over the parent port, before restarting into an app update: hold (or release) new exports. The
+ * core answers with the same id and how many exports are still running; main restarts only at 0.
+ */
+export const EXPORTS_HOLD_CHANNEL = "exports-hold";
+
+export type ExportsHoldRequest = {
+  channel: typeof EXPORTS_HOLD_CHANNEL;
+  id: number;
+  hold: boolean;
+};
+
+export type ExportsHoldResponse = {
+  channel: typeof EXPORTS_HOLD_CHANNEL;
+  id: number;
+  running: number;
+};
+
 /** Stable follows GitHub releases; beta also takes pre-releases (vX.Y.Z-beta.N). */
 export type UpdateChannel = "stable" | "beta";
 

@@ -17,8 +17,22 @@ const ERROR_MESSAGES = {
   FFMPEG_MISSING: "FFmpeg is missing. Reinstall MotionBrief.",
   RENDER_FAILED: "The video couldn't be rendered.",
   SAVE_FAILED: "The MP4 couldn't be saved there. Try another folder.",
+  UPDATING: "MotionBrief is restarting to update. Export again once it reopens.",
   UNEXPECTED: "The export stopped unexpectedly.",
 } satisfies Record<Extract<ExportJob, { state: "failed" }>["error"]["code"], string>;
+
+/** What the error's tooltip adds: the producer's message or the path involved. */
+function errorDetail(error: Extract<ExportJob, { state: "failed" }>["error"]) {
+  if ("message" in error) {
+    return error.message;
+  }
+
+  if ("path" in error) {
+    return error.path;
+  }
+
+  return undefined;
+}
 
 function fileName(path: string) {
   return path.split(/[\\/]/).at(-1) ?? path;
@@ -79,7 +93,7 @@ function ExportOutcome({ job, onDismiss }: { job: ExportJob; onDismiss: () => vo
   }
 
   if (job.state === "failed") {
-    const detail = "message" in job.error ? job.error.message : job.error.path;
+    const detail = errorDetail(job.error);
 
     return (
       <span role="alert" className="flex items-center gap-1 text-app-xs text-status-fallback-ink">
