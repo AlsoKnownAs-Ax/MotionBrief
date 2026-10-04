@@ -10,6 +10,10 @@ import type { Preview, TimelineScene, TimelineWord, VideoTimeline } from "../../
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS } from "./labels";
 import { useOpenVideo } from "./open-video";
 import { formatTime, usePlayback } from "./playback";
+import { isRevising, useRevision } from "./revision";
+
+/** How a Scene a Revision is working on reads, whatever its status in the current Version. */
+const REVISING = { label: "Revising, playing the current Version", badge: "working", badgeLabel: "Revising" } as const;
 
 /** Zoom limits, in pixels per second. */
 const MIN_ZOOM = 8;
@@ -40,6 +44,9 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
   const fixError = useOpenVideo((state) => state.fixError);
+  const selection = useRevision((state) => state.selection);
+  const toggleScene = useRevision((state) => state.toggleScene);
+  const revising = useRevision((state) => (isRevising(state.status) ? state.status?.affected : undefined));
 
   return (
     <section aria-label="Scene timeline" className="flex shrink-0 flex-col bg-[#0b0b0b]" style={{ height }}>
@@ -53,7 +60,9 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
             {fixError}
           </span>
         ) : (
-          <span className="min-w-0 truncate text-app-xs text-ink-muted">Click a Scene or a word to go to it. Double-click a word to fix it.</span>
+          <span className="min-w-0 truncate text-app-xs text-ink-muted">
+            Click a Scene to select it for a Revision, Shift-click to add more. Click a word to go to it, double-click to fix it.
+          </span>
         )}
         <span className="flex-1" />
         <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
@@ -70,7 +79,12 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
               top={cardTop}
               height={cardHeight}
               thumbnail={thumbnails.get(scene.id)}
-              onSeek={seek}
+              isSelected={selection.includes(scene.id)}
+              isRevising={revising?.includes(scene.id) ?? false}
+              onSelect={(additive) => {
+                toggleScene(scene.id, additive);
+                seek(scene.start);
+              }}
             />
           ))}
           {timeline.scenes.map((scene) => (
@@ -198,15 +212,19 @@ type SceneCardProps = {
   top: number;
   height: number;
   thumbnail?: string;
-  onSeek: (time: number) => void;
+  isSelected: boolean;
+  /** A Revision is working on it; the current Version's Scene plays meanwhile. */
+  isRevising: boolean;
+  /** Selects it, or with Shift or Ctrl adds it to the selection or takes it out. */
+  onSelect: (additive: boolean) => void;
 };
 
-function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: SceneCardProps) {
+function SceneCard({ scene, timeline, px, top, height, thumbnail, isSelected, isRevising, onSelect }: SceneCardProps) {
   const width = (scene.end - scene.start) * px - 3;
   const aspect = timeline.width / timeline.height;
   const thumbHeight = Math.min(height - 12, 150);
   const thumbWidth = Math.min(thumbHeight * aspect, width - 12);
-  const status = SCENE_STATUS[scene.status];
+  const status = isRevising ? REVISING : SCENE_STATUS[scene.status];
   const showsMeta = width > thumbWidth + 88;
   // Without room beside the thumbnail, the status badge sits on it.
   const badge = status.badge && (
@@ -220,13 +238,21 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
       type="button"
       title={`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${formatTime(scene.start)} to ${formatTime(scene.end)}`}
       aria-label={`${sceneName(scene)}, ${SCENE_TYPE_LABELS[scene.type]}, ${status.label}, from ${formatTime(scene.start)}`}
-      className="absolute flex items-center gap-2 overflow-hidden rounded-md bg-surface-1 p-1.5 text-left transition-colors hover:bg-surface-2"
+      aria-pressed={isSelected}
+      className={cn(
+        "absolute flex items-center gap-2 overflow-hidden rounded-md bg-surface-1 p-1.5 text-left transition-[background-color,box-shadow] hover:bg-surface-2",
+        isSelected && "bg-surface-2 shadow-[inset_0_0_0_2px_var(--primary)]",
+      )}
       style={{ left: scene.start * px, width, top, height }}
-      onClick={() => onSeek(scene.start)}
+      onClick={(event) => onSelect(event.shiftKey || event.ctrlKey || event.metaKey)}
     >
       {thumbWidth > 8 && (
         <span className="relative shrink-0 overflow-hidden rounded-sm bg-[#111]" style={{ width: thumbWidth, height: thumbWidth / aspect }}>
-          {thumbnail ? <img src={thumbnail} alt="" className="block size-full object-cover" /> : <span className="block size-full animate-pulse bg-surface-2" />}
+          {thumbnail ? (
+            <img src={thumbnail} alt="" className={cn("block size-full object-cover", isRevising && "opacity-45")} />
+          ) : (
+            <span className="block size-full animate-pulse bg-surface-2" />
+          )}
           {!showsMeta && badge}
         </span>
       )}

@@ -20,9 +20,9 @@ type Storyboard = { format: "horizontal"; scenes: Scene[] };
 /** The Storyboard of the `stacked` Transcript's first generation: five lone Scenes. */
 const storyboard = JSON.parse(await readFile(join(FIXTURES, "generation", "storyboard.json"), "utf8")) as Storyboard;
 
-/** Committed Scene code: `good` passes every check, `raw-color` fails the token lint. */
+/** Committed Scene code: the first generation's, of which `good` passes every check, or a variant of it for Revisions. */
 async function unitCode(variant: string, unit: string): Promise<UnitCode> {
-  const dir = ["good", "raw-color"].includes(variant) ? join(FIXTURES, "generation", variant) : join(FIXTURES, "revision", variant);
+  const dir = variant === "good" ? join(FIXTURES, "generation", variant) : join(FIXTURES, "revision", variant);
   const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(dir, `${unit}.${part}`), "utf8")));
 
   return { css: css ?? "", html: html ?? "", js: js ?? "" };
@@ -31,8 +31,6 @@ async function unitCode(variant: string, unit: string): Promise<UnitCode> {
 /** `good` s04, except that its definition is revealed by 1.5 s at the latest, wherever it is anchored. */
 const earlyDefinition = await unitCode("early-definition", "s04");
 
-/** s03 with a raw color, which the token lint rejects. */
-const rawColor = await unitCode("raw-color", "s03");
 
 function scene(storyboard: Storyboard, id: string): Scene {
   return structuredClone(storyboard.scenes.find((candidate) => candidate.id === id)!);
@@ -301,7 +299,8 @@ describe("a Revision that changes content", () => {
   beforeAll(async () => {
     const s03 = scene(storyboard, "s03");
     (s03.content.caption as { text: string }).text = "Instant";
-    const notS01 = await unitCode("good", "s02");
+    // Neither subagent has a recorded turn, so both stop before handing in code: s01's instruction can't be applied,
+    // and s03's new content ends as a fallback.
     connected = await connect({
       revision: [
         submitsPatch({
@@ -310,10 +309,6 @@ describe("a Revision that changes content", () => {
           summary: "Shortened the stat's caption and made the hook's headline bigger.",
         }),
       ],
-      // s01 never hands in code that passes, so its instruction can't be applied.
-      "scene-code s01": Array.from({ length: 3 }, () => submitsCode(notS01)),
-      // s03's new content never passes either: it ends as a fallback.
-      "scene-code s03": Array.from({ length: 3 }, () => submitsCode(rawColor)),
     });
     v1Units = await generatedGood(connected.project);
     ({ ended: done } = await revise(connected.core, connected.video, "Shorter caption on the stat, bigger hook headline", ["s01", "s03"]));
@@ -343,7 +338,7 @@ describe("a Revision that changes content", () => {
 
     expect(saved.units.s03).toBeUndefined();
     expect(saved.flags.map(({ unit }) => unit)).toEqual(["s03", "s05"]);
-    expect(saved.flags[0]?.reason).toContain("tokens");
+    expect(saved.flags[0]?.reason).toContain("No recorded turn left");
     expect(done.preview?.timeline.scenes.find(({ id }) => id === "s03")?.status).toBe("fallback");
   });
 });
@@ -397,10 +392,8 @@ describe("a Revision", () => {
     async () => {
       const s03 = scene(storyboard, "s03");
       (s03.content.caption as { text: string }).text = "Instant";
-      const { core, replay, project, video } = await connect({
-        revision: [submitsPatch({ scenes: [s03], summary: "Shortened the stat's caption." })],
-        "scene-code s03": [submitsCode(await unitCode("good", "s03"))],
-      });
+      // s03's subagent has no recorded turn: once released, it stops without code to check.
+      const { core, replay, project, video } = await connect({ revision: [submitsPatch({ scenes: [s03], summary: "Shortened the stat's caption." })] });
       await generatedGood(project);
       replay.hold("scene-code s03");
       const revision = await watch(core, video);
@@ -410,8 +403,7 @@ describe("a Revision", () => {
       await core.video.stopRevision(video);
       const stopped = await revision.until(({ state }) => state === "stopped");
       replay.release("scene-code s03");
-      // The released subagent hands in its code, which is checked, then thrown away.
-      await expect.poll(() => replay.sessions().open, { timeout: 60_000 }).toBe(0);
+      await expect.poll(() => replay.sessions().open).toBe(0);
       revision.stop();
 
       expect(writing.affected).toEqual(["s03"]);

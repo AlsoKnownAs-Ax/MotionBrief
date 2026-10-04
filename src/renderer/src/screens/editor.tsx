@@ -8,6 +8,7 @@ import { FORMAT_LABELS } from "@renderer/editor/labels";
 import { useOpenVideo } from "@renderer/editor/open-video";
 import { usePlayback } from "@renderer/editor/playback";
 import { Player, Transport } from "@renderer/editor/player";
+import { isRevising, useRevision } from "@renderer/editor/revision";
 import { SidePanel } from "@renderer/editor/side-panel";
 import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
@@ -68,7 +69,38 @@ function GenerationBadge() {
     );
   }
 
-  return null;
+  return <RevisionBadge />;
+}
+
+/** A Revision's progress while it runs; the current Version plays meanwhile. */
+function RevisionBadge() {
+  const status = useRevision((state) => state.status);
+
+  if (!isRevising(status)) {
+    return null;
+  }
+
+  return (
+    <Badge role="status" status="working" pulse>
+      {status?.state === "rebuilding" ? `Revising · ${status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length} of ${status.units.length}` : "Revising"}
+    </Badge>
+  );
+}
+
+/** Follows the open video's Revisions while it is open in the editor; only a stored Project's video has them. */
+function useFollowRevisions() {
+  const projectId = useOpenVideo((state) => state.projectId);
+  const isStored = useOpenVideo((state) => state.isStored);
+  const format = useOpenVideo((state) => state.preview?.timeline.format);
+  const follow = useRevision((state) => state.follow);
+
+  useEffect(() => {
+    if (!isStored || !format) {
+      return;
+    }
+
+    return follow({ projectId, format });
+  }, [projectId, isStored, format, follow]);
 }
 
 /** The window's size, for the panes' limits. */
@@ -119,6 +151,7 @@ export function Editor() {
   const maxTimeline = Math.round(windowSize.height * PANE_LIMITS.timelineHeight.maxShare);
 
   useSpaceToPlay();
+  useFollowRevisions();
 
   if (!preview) {
     return <GenerationStage />;
