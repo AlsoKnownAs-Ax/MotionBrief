@@ -196,7 +196,7 @@ describe("opening a Project recorded against an older frame major", { timeout: T
   });
 
   it("refuses to retry a unit that isn't flagged", async () => {
-    await expect(setup.core.video.retry({ ...video, units: ["s01"] })).rejects.toMatchObject({ code: "NOT_FLAGGED", data: { unit: "s01" } });
+    await expect(setup.core.video.retry({ ...video, units: ["s01"] })).rejects.toMatchObject({ code: "NOT_FLAGGED", data: { units: ["s01"] } });
   });
 
   it("regenerates only the Scenes the creator retries, in a new Version", async () => {
@@ -267,11 +267,13 @@ describe("review notes across a frame major update and a Retry", { timeout: TIME
       }
     }
 
-    expect(last).toMatchObject({ state: "done", version: 3 });
+    // Nothing now passes, so the video stays at its Version, s02 still with its code and note.
+    expect(last).toMatchObject({ state: "done", version: 2 });
     expect(last?.units.find(({ id }) => id === "s02")?.status).toBe("flagged");
     expect(replay.asked.map(({ options }) => options.label)).toContain("scene-code s02");
+    expect(await readdir(join(path, "horizontal", "versions"))).toEqual(["1.json", "2.json"]);
 
-    const saved = await versionFile(path, 3);
+    const saved = await versionFile(path, 2);
     expect(Object.keys(saved.units)).toEqual(["s01", "s02", "s04"]);
     expect(saved.flags).toContainEqual({ unit: "s02", kind: "review-note", reason: CROWDED });
     expect(saved.flags.filter(({ unit }) => unit === "s02")).toHaveLength(1);
