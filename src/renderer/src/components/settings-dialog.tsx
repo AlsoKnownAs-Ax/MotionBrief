@@ -8,6 +8,8 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { core, orpc, queryClient } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import { sizeLabel } from "@renderer/new-project/labels";
+import { PresetEditorDialog } from "@renderer/style/preset-editor";
+import { PresetSettings } from "@renderer/style/preset-settings";
 import type { CacheStatus, ConnectionStatus } from "../../../contract";
 
 export const useSettingsDialog = create<{ isOpen: boolean; setIsOpen: (isOpen: boolean) => void }>((set) => ({
@@ -15,7 +17,7 @@ export const useSettingsDialog = create<{ isOpen: boolean; setIsOpen: (isOpen: b
   setIsOpen: (isOpen) => set({ isOpen }),
 }));
 
-/** App settings; opened from the title bar or the app menu. Holds the Claude connection for now. */
+/** App settings; opened from the title bar or the app menu: the Claude connection, Style Presets and the cache. */
 export function SettingsDialog() {
   const { isOpen, setIsOpen } = useSettingsDialog();
 
@@ -30,16 +32,20 @@ export function SettingsDialog() {
   );
 
   return (
-    <Dialog open={isOpen} onOpenChange={setIsOpen}>
-      <DialogContent className="sm:max-w-lg">
-        <DialogHeader>
-          <DialogTitle>Settings</DialogTitle>
-          <DialogDescription>Changes apply to the next run.</DialogDescription>
-        </DialogHeader>
-        <ClaudeSettings onOpenSetup={() => setIsOpen(false)} />
-        <StorageSettings />
-      </DialogContent>
-    </Dialog>
+    <>
+      <Dialog open={isOpen} onOpenChange={setIsOpen}>
+        <DialogContent className="max-h-[calc(100vh-4rem)] overflow-y-auto sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Settings</DialogTitle>
+            <DialogDescription>Changes apply to the next run.</DialogDescription>
+          </DialogHeader>
+          <ClaudeSettings onOpenSetup={() => setIsOpen(false)} />
+          <PresetSettings />
+          <StorageSettings />
+        </DialogContent>
+      </Dialog>
+      <PresetEditorDialog />
+    </>
   );
 }
 
@@ -180,7 +186,7 @@ function StorageSettings() {
           </Button>
         </Row>
       </dl>
-      <p className="text-app-xs text-ink-muted">Resampled audio and raw transcriptions. Clearing it never touches a Project.</p>
+      <p className="text-app-xs text-ink-muted">Resampled audio, raw transcriptions and Style Preset samples. Clearing it never touches a Project.</p>
     </section>
   );
 }

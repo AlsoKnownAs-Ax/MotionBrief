@@ -23,6 +23,11 @@ const BUNDLED_FONTS = {
   VT323: { slug: "vt323", package: "@fontsource/vt323", weights: [400] },
 } satisfies Record<FontFamily, BundledFont>;
 
+/** The weights the frame ships for a family; a face in another weight would be synthesized by the browser. */
+export function bundledWeights(family: FontFamily): number[] {
+  return [...BUNDLED_FONTS[family].weights];
+}
+
 /** A file the page needs, copied from `from` to `path` relative to the page. */
 export type FontFile = { path: string; from: string };
 

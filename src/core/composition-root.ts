@@ -7,8 +7,9 @@ import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
 import { createExporter, projectExportLocations } from "../modules/exporter";
 import { createMedia } from "../modules/media";
-import { createPreviews } from "../modules/preview";
+import { createPreviews, createStills } from "../modules/preview";
 import { createProjects } from "../modules/projects";
+import { createPresetStore } from "../modules/style";
 import { createSystem, realClock, realDisk, type Clock, type Disk } from "../modules/system";
 import { createWhisperCli, createWhisperTranscriber, type WhisperEngine } from "../modules/transcriber";
 import { createTranscriptionModel } from "../modules/transcription-model";
@@ -88,12 +89,14 @@ export function createCore({
   // Assembled pages keep themselves to the newest few and export renders delete themselves, so the cache's per-file LRU leaves both alone.
   const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR, EXPORT_DIR] });
   const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
+  const stills = createStills({ cache, chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
+  const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
   const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }) };
+  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }) };
 }
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */

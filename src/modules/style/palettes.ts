@@ -36,7 +36,8 @@ export const WHITEBOARD: Palette = {
     muted: "#5b6678",
     accent: "#2563eb",
     accent2: "#0d9488",
-    accent3: "#d97706",
+    // A shade under Tailwind's amber-600 (2.998:1), so it reaches 3:1 on bg.
+    accent3: "#d77506",
     good: "#16a34a",
     bad: "#dc2626",
   },
@@ -59,6 +60,8 @@ export const SKETCH_PAPER: Palette = {
     good: "#2f9a57",
     bad: "#c8372c",
   },
+  // Mustard is 1.8:1 on the paper: a fill behind ink, never text or lines.
+  fills: ["accent3"],
 };
 
 export const PHOSPHOR: Palette = {
