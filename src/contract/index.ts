@@ -502,6 +502,26 @@ export const GenerationStatusSchema = z.object({
   error: GenerationErrorSchema.optional(),
 });
 
+/**
+ * What opening a video found after an app update changed the frame's major version: its units were checked again
+ * against the new frame, at no cost, and these no longer pass. They play as flagged fallback Scenes in a new Version.
+ */
+export const FrameUpdateSchema = z.object({
+  /** The frame contract the units were written against, and the one they were checked against now. */
+  previous: z.string(),
+  frameContractVersion: z.string(),
+  /** The units that became flagged fallbacks, named after their Scene or Canvas. */
+  units: z.array(z.string()).min(1),
+});
+
+/** A saved video, opened to play its newest Version. */
+export const OpenedVideoSchema = z.object({
+  version: z.number().int().positive(),
+  preview: PreviewSchema,
+  /** Present when this open re-checked the units after a frame major update and some failed. */
+  frameUpdate: FrameUpdateSchema.optional(),
+});
+
 /** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */
 export const CacheStatusSchema = z.object({
   usedBytes: z.number().int().nonnegative(),
@@ -798,6 +818,42 @@ export const coreContract = {
       .input(VideoRefSchema),
     /** Streams the video's generation now and after every change, until the window stops listening. */
     generation: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(GenerationStatusSchema)),
+    /**
+     * Opens a saved video to play its newest Version. After an app update that changed the frame's major version,
+     * its units are first checked again (lint, check and the contract; no agent). Units that fail become flagged
+     * fallbacks in a new Version, and nothing is regenerated until the creator asks.
+     */
+    open: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        /** The Project has no video in this Format yet. */
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        /** A Version or unit file in the Project can't be read as one. */
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(VideoRefSchema)
+      .output(OpenedVideoSchema),
+    /**
+     * Regenerates flagged units with the Scene-code model, checked and retried like a first generation, and saves
+     * the result as a new Version. Progress streams through `generation`. Only ever starts when the creator asks.
+     */
+    retry: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        GENERATING: { data: z.object({ projectId: z.string() }) },
+        /** The newest Version doesn't flag this unit, so there is nothing to retry. */
+        NOT_FLAGGED: { data: z.object({ unit: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(VideoRefSchema.extend({ units: z.array(z.string()).min(1) })),
   },
   cache: {
     status: oc.output(CacheStatusSchema),
@@ -867,3 +923,5 @@ export type GenerationError = z.infer<typeof GenerationErrorSchema>;
 export type GenerationUnit = z.infer<typeof GenerationUnitSchema>;
 export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
 export type GenerationPreviewError = z.infer<typeof GenerationPreviewErrorSchema>;
+export type FrameUpdate = z.infer<typeof FrameUpdateSchema>;
+export type OpenedVideo = z.infer<typeof OpenedVideoSchema>;

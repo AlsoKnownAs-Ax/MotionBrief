@@ -25,8 +25,8 @@ import { folderKey, samePath } from "./paths";
 import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
 import { summarize } from "./summary";
-import { readVideo, saveVideo, type VideoDocumentError } from "./video";
-import { latestVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version } from "./videos";
+import { readVideo, saveVideo, type VideoDocument, type VideoDocumentError } from "./video";
+import { latestVersion, readVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version, type VersionError } from "./videos";
 
 /** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
 export type Trash = (path: string) => Promise<void>;
@@ -79,6 +79,11 @@ export type ProjectVideo = {
   /** The video's newest Version; absent until its first generation is saved. */
   version?: number;
 };
+
+export type FrameCheck = NonNullable<VideoDocument["frameChecked"]>;
+
+/** A video's newest Version as saved, its units' Scene code by unit id, and the frame re-check it last passed. */
+export type StoredVideo = { version: Version; code: Record<string, UnitCode>; frameChecked?: FrameCheck };
 
 export type ProjectChanges = {
   name?: string;
@@ -818,6 +823,60 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     });
   }
 
+  /** The video's newest Version with its units' Scene code, and the frame re-check it passed; absent before its first generation is saved. */
+  async function storedVideo(projectId: string, format: Format): Promise<Result<StoredVideo | undefined, ProjectsError | VersionError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    return enqueue(project, async (): Promise<Result<StoredVideo | undefined, ProjectsError | VersionError>> => {
+      const number = await latestVersion(project.dir, format);
+
+      if (number === undefined) {
+        return { data: undefined, error: null };
+      }
+
+      const [{ data: stored, error }, { data: video, error: videoError }] = await Promise.all([readVersion(project.dir, format, number), readVideo(project.dir, format)]);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      if (videoError) {
+        return { data: null, error: videoError };
+      }
+
+      return { data: { ...stored, frameChecked: video.frameChecked }, error: null };
+    });
+  }
+
+  /** Remembers that a Version's units pass a frame contract, so they aren't re-checked against it again. */
+  function rememberFrameCheck(projectId: string, format: Format, frameChecked: FrameCheck): Promise<Result<null, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
+    }
+
+    return enqueue(project, async () => {
+      const { data: video, error } = await readVideo(project.dir, format);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      const { error: saveError } = await saveVideo(project.dir, format, { ...video, frameChecked });
+
+      if (saveError) {
+        return { data: null, error: saveError };
+      }
+
+      return { data: null, error: null };
+    });
+  }
+
   /** Runs a write in the Project folder after its earlier changes, wherever the folder is by then. */
   function write<T>(projectId: string, step: (dir: string) => Promise<Result<T, FileError>>): Promise<Result<T, ProjectsError>> {
     const project = open.get(projectId);
@@ -880,6 +939,8 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
     lastExportPath,
     rememberExportPath,
+    storedVideo,
+    rememberFrameCheck,
     close,
     disconnect,
     closeAll,

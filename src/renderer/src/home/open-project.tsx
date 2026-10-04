@@ -6,6 +6,7 @@ import { useToast } from "@renderer/components/toast";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { core, orpc, queryClient } from "@renderer/core/connection";
+import { openStoredVideo } from "@renderer/editor/stored-video";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { sinceLabel } from "./labels";
@@ -33,7 +34,10 @@ export function useOpeningPath() {
 export async function openProject(path: string, { force = false } = {}) {
   useOpenPrompt.setState({ prompt: undefined, openingPath: path });
   const { data: opened, error } = await safe(core.project.open({ path, force }));
-  useOpenPrompt.setState({ openingPath: undefined });
+
+  if (error) {
+    useOpenPrompt.setState({ openingPath: undefined });
+  }
 
   if (isDefinedError(error) && error.code === "PROJECT_LOCKED") {
     askAboutLock(error.data, { label: "Open anyway", run: () => void openProject(path, { force: true }) });
@@ -57,7 +61,13 @@ export async function openProject(path: string, { force = false } = {}) {
   }
 
   void queryClient.invalidateQueries({ queryKey: orpc.project.list.key() });
-  useNavigation.getState().openProject(project);
+  // A Project with a video opens in the editor; the first open after a frame major update re-checks it first.
+  const shown = await openStoredVideo(project);
+  useOpenPrompt.setState({ openingPath: undefined });
+
+  if (shown === "no-video") {
+    useNavigation.getState().openProject(project);
+  }
 }
 
 /** Asks before changing a Project whose lock says it is open elsewhere; `action` goes ahead anyway. */
