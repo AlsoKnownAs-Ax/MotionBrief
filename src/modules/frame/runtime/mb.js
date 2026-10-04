@@ -137,7 +137,7 @@
     return from.clipPath !== undefined || from.filter !== undefined;
   }
 
-  /** How long the camera takes to move between two Scenes on a Canvas, centred on the next Scene's start. */
+  /** How long the camera takes to move between two Scenes on a Canvas; it lands as the next Scene's first reveals start. */
   var CAMERA_SECONDS = 0.9;
 
   /** A Canvas unit's world: everything its Scene code draws, which the camera moves across. */
@@ -183,10 +183,10 @@
   }
 
   /**
-   * An element's box in the frame while its unit is at rest: on a Canvas, with the camera on the
-   * first or the last Scene. From the layout, so neither the seek order nor running Transitions move it.
+   * Where an incoming element rests in the frame as its unit starts: from the layout, with the
+   * camera on a Canvas's first Scene, so neither the seek order nor running Transitions move it.
    */
-  function frameBox(element, unitId, stop) {
+  function restingBox(element, unitId) {
     var world = worldOf(unitId);
 
     if (!world || !world.contains(element) || Object.keys(data().units[unitId].sceneStarts).length < 2) {
@@ -195,8 +195,7 @@
       return { x: box.x, y: box.y, w: box.w, h: box.h, scale: 1 };
     }
 
-    var stops = cameraStops(unitId);
-    var camera = stop === "last" ? stops[stops.length - 1] : stops[0];
+    var camera = cameraStops(unitId)[0];
     var inWorld = boxWithin(element, world);
 
     return {
@@ -208,17 +207,80 @@
     };
   }
 
+  /** Runs `measure` with the unit's host on the root page at rest, leaving out the root Transitions' tweens on it. */
+  function withHostAtRest(unitId, measure) {
+    var host = document.getElementById("el-" + unitId);
+
+    if (!host) {
+      return measure();
+    }
+
+    var transform = host.style.transform;
+    var filter = host.style.filter;
+
+    host.style.transform = "none";
+    host.style.filter = "none";
+
+    var result = measure();
+
+    host.style.transform = transform;
+    host.style.filter = filter;
+
+    return result;
+  }
+
+  /**
+   * The outgoing element as the viewer sees it as its unit ends: its unit's timeline is put on its
+   * last moment for the measurement and back after it, so Scene code's own moves (MB.travel, GSAP
+   * transforms) and the camera count, whatever time the page was last seeked to.
+   */
+  function boundaryBox(carry) {
+    var element = one("#" + carry.element);
+    var timeline = (window.__timelines || {})[carry.from];
+    var measure = function () {
+      var rect = withHostAtRest(carry.from, function () {
+        return element.getBoundingClientRect();
+      });
+
+      return { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
+    };
+
+    if (!timeline) {
+      return measure();
+    }
+
+    var time = timeline.time();
+
+    timeline.time(data().units[carry.from].duration, true);
+
+    var box = measure();
+
+    timeline.time(time, true);
+
+    return box;
+  }
+
+  /** How much bigger the outgoing element is than the incoming one, by area; 1 when either has no size. */
+  function sizeRatio(from, to) {
+    var ratio = Math.sqrt((from.w * from.h) / (to.w * to.h));
+
+    if (!isFinite(ratio) || ratio <= 0) {
+      return 1;
+    }
+
+    return ratio;
+  }
+
   /** Centre-to-centre offset and size ratio that put the incoming element over the outgoing one. */
   function carryOffset(carry, unitId) {
-    var from = frameBox(one("#" + carry.element), carry.from, "last");
-    var to = frameBox(one("#" + carry.target), unitId, "first");
-    var scale = to.w > 0 && to.h > 0 ? Math.sqrt((from.w * from.h) / (to.w * to.h)) : 1;
+    var from = boundaryBox(carry);
+    var to = restingBox(one("#" + carry.target), unitId);
 
     return {
       // The incoming element is drawn inside its own world's scale, so its offset is too.
       x: (from.x + from.w / 2 - (to.x + to.w / 2)) / to.scale,
       y: (from.y + from.h / 2 - (to.y + to.h / 2)) / to.scale,
-      scale: scale || 1,
+      scale: sizeRatio(from, to),
     };
   }
 
@@ -415,7 +477,7 @@
     /**
      * Owned by the frame, never called by Scene code: the camera across a Canvas. It rests on the
      * first Scene's region of `#<unit>-world`, then moves to each next Scene's region over 0.9 s,
-     * centred on that Scene's start so it lands before the Scene's first word.
+     * landing 50 ms before that Scene's first word (its start + the Scene lead), as reveals start.
      */
     camera: function (tl, unitId) {
       var world = worldOf(unitId);
@@ -433,7 +495,7 @@
           world,
           { x: from.x, y: from.y, scale: from.scale },
           { x: to.x, y: to.y, scale: to.scale, duration: CAMERA_SECONDS, ease: data().motion.easeInOut, immediateRender: false },
-          Math.max(0, starts[to.sceneId] - CAMERA_SECONDS / 2),
+          Math.max(0, starts[to.sceneId] + data().sceneLead - LEAD - CAMERA_SECONDS),
         );
       }
 

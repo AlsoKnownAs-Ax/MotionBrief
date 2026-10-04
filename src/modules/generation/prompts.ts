@@ -161,7 +161,7 @@ The Style Preset (reach its colors and fonts only through the tokens):
 ${JSON.stringify(presetForCode(preset), null, 1)}
 
 YOUR UNIT: "${unit.id}", ${unit.scenes.length > 1 ? `a Canvas with Scenes ${scenes}` : "a lone Scene"}. It lasts ${seconds(unit.duration)} s (S.duration).
-Scene starts within the unit, in seconds: ${JSON.stringify(unit.sceneStarts)}${unit.carryIn ? `\nCarried over from the Scene before: #${unit.carryIn.target}, on screen from the start.` : ""}
+Scene starts within the unit, in seconds: ${JSON.stringify(unit.sceneStarts)}${carriedLine(unit)}
 
 Its Storyboard entries:
 ${JSON.stringify(unit.scenes, null, 1)}
@@ -173,6 +173,14 @@ Spoken words, in seconds from the unit's start:
 ${spoken}
 
 Write the unit and hand it in with ${SCENE_CODE_TOOL}.`;
+}
+
+function carriedLine({ carryIn }: Unit): string {
+  if (!carryIn) {
+    return "";
+  }
+
+  return `\nCarried over from the Scene before: #${carryIn.target}, on screen from the start.`;
 }
 
 export function findingsMessage(findings: CheckFinding[]): string {

@@ -280,9 +280,16 @@ describe("the frame, in a headless browser", () => {
 
   describe("Transitions", () => {
     let frame: OpenFrame | undefined;
+    /** The fixture with s04's first element on its first word, "The", for the camera to land before. */
+    const firstWord = structuredClone(horizontal);
+    const s04 = firstWord.scenes[3]!;
+
+    if (s04.type === "flow") {
+      s04.content.steps[0]!.at = 38;
+    }
 
     beforeAll(async () => {
-      frame = await openFrame(horizontal, longTranscript, {});
+      frame = await openFrame(firstWord, longTranscript, {});
     }, BROWSER_TIMEOUT_MS);
 
     afterAll(() => closeFrame(frame));
@@ -325,13 +332,13 @@ describe("the frame, in a headless browser", () => {
     });
 
     // s03 and s04 share the Canvas c1, side by side; s04 starts 0.25 s before "The", spoken at 15.7 s.
-    // The camera moves over 0.9 s, centred on 15.45 s.
-    it("camera: rests on the first Scene's region, then moves across the Canvas to the next one around its start", async () => {
-      await page().seek(14.9);
+    // The camera moves over 0.9 s and lands 50 ms before that word, at 15.65 s.
+    it("camera: rests on the first Scene's region, then moves across the Canvas to the next one before its first word", async () => {
+      await page().seek(14.7);
       const resting = [(await rectOf(page(), '[data-region="s03"]')).x, (await rectOf(page(), '[data-region="s04"]')).x];
-      await page().seek(15.45);
+      await page().seek(15.2);
       const moving = (await rectOf(page(), '[data-region="s04"]')).x;
-      await page().seek(16);
+      await page().seek(15.7);
       const arrived = [(await rectOf(page(), '[data-region="s03"]')).x, (await rectOf(page(), '[data-region="s04"]')).x];
 
       expect(resting).toEqual([0, 1920]);
@@ -340,11 +347,13 @@ describe("the frame, in a headless browser", () => {
       expect(arrived).toEqual([-1920, 0]);
     });
 
-    it("camera: lands before the next Scene's first word, so its elements arrive in the frame", async () => {
-      // "server" is spoken at 16.1 s.
-      await page().seek(16.2);
+    it("camera: has landed when an element on the next Scene's first word arrives, wholly in the frame", async () => {
+      // #s04-server is anchored to "The", s04's first word, in this page's Storyboard.
+      await page().seek(15.8);
+      const server = await rectOf(page(), "#s04-server");
 
-      expect((await rectOf(page(), "#s04-server")).x).toBeGreaterThanOrEqual(120);
+      expect(server.x).toBeGreaterThanOrEqual(120);
+      expect(server.x + server.width).toBeLessThanOrEqual(1800);
       expect(await effectiveOpacity(page(), "#s04-server")).toBeGreaterThanOrEqual(0.3);
     });
 
@@ -427,14 +436,14 @@ describe("the frame, in a headless browser", () => {
   describe("push Transitions in every direction", () => {
     let frame: OpenFrame | undefined;
     /** The fixture with its cut, its crossfade into the Canvas and a later crossfade turned into pushes. */
-    const pushes: Storyboard = {
-      ...horizontal,
-      scenes: horizontal.scenes.map((scene) => {
-        const type = ({ s01: "push-right", s02: "push-up", s07: "push-down" } as const)[scene.id as "s01" | "s02" | "s07"];
+    const pushes = structuredClone(horizontal);
+    const PUSH_FROM = { s01: "push-right", s02: "push-up", s07: "push-down" } as const;
 
-        return type ? { ...scene, transition: { type } } : scene;
-      }),
-    };
+    pushes.scenes
+      .filter((scene) => scene.id in PUSH_FROM)
+      .forEach((scene) => {
+        scene.transition = { type: PUSH_FROM[scene.id as keyof typeof PUSH_FROM] };
+      });
 
     beforeAll(async () => {
       frame = await openFrame(pushes, longTranscript, {});

@@ -151,9 +151,14 @@ const PUSHES = {
  */
 function transitionJs(from: Unit | undefined, to: Unit, width: number, height: number): string[] {
   const type = to.transitionIn;
-  const seconds = type ? TRANSITION_SECONDS[type] : undefined;
 
-  if (!from || !type || !seconds) {
+  if (!from || !type) {
+    return [];
+  }
+
+  const seconds = TRANSITION_SECONDS[type];
+
+  if (!seconds) {
     return [];
   }
 
@@ -175,7 +180,7 @@ function transitionJs(from: Unit | undefined, to: Unit, width: number, height: n
 
   if (type in PUSHES) {
     const { axis, sign } = PUSHES[type as keyof typeof PUSHES];
-    const distance = sign * (axis === "x" ? width : height);
+    const distance = sign * { x: width, y: height }[axis];
     // The Style Preset's Motion sets the ease, as it does for the camera on a Canvas.
     const ease = "MB_DATA.motion.easeInOut";
 

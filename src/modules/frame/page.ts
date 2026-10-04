@@ -1,5 +1,6 @@
 import { createRequire } from "node:module";
 import type { Format, UnitCode } from "../../contract";
+import { SCENE_LEAD_SECONDS } from "../storyboard";
 import { frameCss } from "./css";
 import { bundledFonts } from "./fonts";
 import { FRAME_SIZES } from "./formats";
@@ -50,6 +51,7 @@ export async function framePage({ format, units, style }: { format: Format; unit
     height,
     safe,
     motion: motionDefaults(style.motion),
+    sceneLead: SCENE_LEAD_SECONDS,
     connector: { curve: style.treatments.connector.style === "curved", sketchy: style.treatments.line === "sketchy" },
     units: Object.fromEntries(units.map(({ id, ...timing }) => [id, timing])),
   };
@@ -83,9 +85,11 @@ export function wrapUnit({ unit, format, style, code }: { unit: UnitTiming; form
   const { width, height } = FRAME_SIZES[format];
   const timeline = motionDefaults(style.motion).fps > 0 ? `MB.quantize(tl, ${unit.duration})` : "tl";
   const owned = [
-    ...(Object.keys(unit.sceneStarts).length > 1 ? [`  MB.camera(tl, "${unit.id}");`] : []),
-    ...(unit.carryIn ? [`  MB.carry(tl, "${unit.id}");`] : []),
-  ];
+    { adds: Object.keys(unit.sceneStarts).length > 1, js: `  MB.camera(tl, "${unit.id}");` },
+    { adds: unit.carryIn !== undefined, js: `  MB.carry(tl, "${unit.id}");` },
+  ]
+    .filter(({ adds }) => adds)
+    .map(({ js }) => js);
 
   return `<template>
 <style>

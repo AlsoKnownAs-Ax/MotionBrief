@@ -24,7 +24,7 @@ ${elements.map((element, index) => lineHtml(scene, element, index === 0)).join("
 .fb-line { max-width: 100%; color: var(--ink); }
 .fb-code { padding: 28px 36px; margin: 0; white-space: pre; line-height: 1.4; }
 .fb-world, .fb-region { position: absolute; left: 0; top: 0; }`,
-    html: scenes.length > 1 ? canvasHtml(unit.id, scenes, stacks, format) : stacks.join("\n"),
+    html: unitHtml(unit.id, scenes, stacks, format),
     js: blocks
       .flatMap(({ scene, elements }) => elements.map(({ id }) => `${scene.id}-${id}`))
       .filter((domId) => domId !== unit.carryIn?.target)
@@ -33,18 +33,29 @@ ${elements.map((element, index) => lineHtml(scene, element, index === 0)).join("
   };
 }
 
-/** The Canvas: a world of frame-sized regions, one per Scene, in reading order for the Format. */
-function canvasHtml(unitId: string, scenes: Scene[], stacks: string[], format: Format): string {
+/** Which way a Canvas's regions follow each other, in frames: across in horizontal, down in vertical. */
+const CANVAS_STEP = {
+  horizontal: { x: 1, y: 0 },
+  vertical: { x: 0, y: 1 },
+} satisfies Record<Format, { x: number; y: number }>;
+
+/** A lone Scene's lines; or, on a Canvas, a world of frame-sized regions, one per Scene, in reading order for the Format. */
+function unitHtml(unitId: string, scenes: Scene[], stacks: string[], format: Format): string {
+  if (scenes.length < 2) {
+    return stacks.join("\n");
+  }
+
   const { width, height } = FRAME_SIZES[format];
-  const across = format === "horizontal";
+  const step = CANVAS_STEP[format];
   const regions = scenes.map(
     (scene, index) =>
-      `<div class="fb-region" data-region="${scene.id}" style="left: ${across ? index * width : 0}px; top: ${across ? 0 : index * height}px; width: ${width}px; height: ${height}px">
+      `<div class="fb-region" data-region="${scene.id}" style="left: ${index * step.x * width}px; top: ${index * step.y * height}px; width: ${width}px; height: ${height}px">
 ${stacks[index]}
 </div>`,
   );
+  const span = scenes.length - 1;
 
-  return `<div id="${unitId}-world" class="fb-world" style="width: ${across ? scenes.length * width : width}px; height: ${across ? height : scenes.length * height}px">
+  return `<div id="${unitId}-world" class="fb-world" style="width: ${(1 + span * step.x) * width}px; height: ${(1 + span * step.y) * height}px">
 ${regions.join("\n")}
 </div>`;
 }

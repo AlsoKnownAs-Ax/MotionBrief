@@ -41,7 +41,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const px = zoom ?? clampZoom((viewportWidth - TAIL) / Math.max(timeline.duration, 1));
   const area = height - HEADER - SCROLLBAR;
   const canvases = useMemo(() => canvasesOf(timeline.scenes), [timeline.scenes]);
-  const brackets = canvases.length > 0 ? BRACKETS : 0;
+  const brackets = bracketsHeight(canvases);
   const cardTop = RULER + GAP + brackets;
   const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP);
   const wordTop = cardTop + cardHeight + GAP;
@@ -267,6 +267,15 @@ function canvasesOf(scenes: TimelineScene[]): TimelineScene[][] {
       return [...runs, [scene]];
     }, [])
     .filter((run) => run.length > 1);
+}
+
+/** The row for Canvas brackets takes room only when the video has a Canvas. */
+function bracketsHeight(canvases: TimelineScene[][]): number {
+  if (canvases.length === 0) {
+    return 0;
+  }
+
+  return BRACKETS;
 }
 
 /** A bracket over the Scenes sharing a Canvas, spanning their cards. */

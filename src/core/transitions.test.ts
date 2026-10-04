@@ -93,6 +93,71 @@ describe("hand-written Scene code for a Canvas and a carry-over", () => {
   });
 });
 
+describe("a carry-over out of an element Scene code has moved", () => {
+  /** s06 slides its verdict, "caching", 360 px right and 40 px up after revealing it. */
+  async function movedCode() {
+    return { ...(await handWritten()), s06: { ...(await unitCode("s06")), js: await readFile(join(import.meta.dirname, "fixtures", "transitions", "s06-moved.js"), "utf8") } };
+  }
+
+  /**
+   * Opens a fresh page, so the flight is measured on its first play, seeks `first` and then 32.27 s
+   * (just into s07); gives where the carried element starts its flight, and where the viewer saw
+   * the outgoing element at 32.2 s, as s06 ends.
+   */
+  async function flightFrom(first: number) {
+    const frame = await openFrame(horizontal, transcript, await movedCode(), BLUEPRINT);
+
+    try {
+      await frame.page.seek(first);
+      await frame.page.seek(32.27);
+      const leaving = centreOf(await rectOf(frame.page, "#s07-caching"));
+      await frame.page.seek(32.2);
+      const outgoing = centreOf(await rectOf(frame.page, "#s06-caching"));
+      const layout = await frame.page.evaluate<{ x: number; y: number }>(
+        `(() => { let x = 0, y = 0, node = document.querySelector("#s06-caching"); const e = node; for (; node; node = node.offsetParent) { x += node.offsetLeft; y += node.offsetTop; } return { x: x + e.offsetWidth / 2, y: y + e.offsetHeight / 2 }; })()`,
+      );
+
+      return { leaving, outgoing, layout };
+    } finally {
+      await closeFrame(frame);
+    }
+  }
+
+  it(
+    "starts from where the viewer last saw it, not from its layout box, playing forward",
+    async () => {
+      const { leaving, outgoing, layout } = await flightFrom(31);
+
+      expect(outgoing.x - layout.x).toBeCloseTo(360, -1);
+      expect(leaving.x).toBeCloseTo(outgoing.x, -1);
+      expect(leaving.y).toBeCloseTo(outgoing.y, -1);
+    },
+    BROWSER_TIMEOUT_MS,
+  );
+
+  it(
+    "starts from the same place when the flight is first played seeking backwards",
+    async () => {
+      const { leaving, outgoing } = await flightFrom(40);
+
+      expect(leaving.x).toBeCloseTo(outgoing.x, -1);
+      expect(leaving.y).toBeCloseTo(outgoing.y, -1);
+    },
+    BROWSER_TIMEOUT_MS,
+  );
+
+  it(
+    "starts from the same place when the page's first seek lands in the flight",
+    async () => {
+      const { leaving, outgoing } = await flightFrom(32.27);
+
+      expect(leaving.x).toBeCloseTo(outgoing.x, -1);
+      expect(leaving.y).toBeCloseTo(outgoing.y, -1);
+    },
+    BROWSER_TIMEOUT_MS,
+  );
+});
+
 describe("which units a change regenerates", () => {
   /** The fixture Storyboard with a change made to a copy. */
   function changed(change: (storyboard: Storyboard) => void): Storyboard {

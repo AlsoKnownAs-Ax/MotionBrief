@@ -94,10 +94,18 @@ function unitOf(run: SceneTiming[], previous: SceneTiming[] | undefined, next: S
     scenes: run.map(({ scene }) => scene),
     transitionIn: transitionInto(run, previous),
     sceneStarts: Object.fromEntries(run.map(({ scene, start: sceneStart }) => [scene.id, seconds(sceneStart - start)])),
-    // A carried element is already on screen as the unit starts: it flies in from the Scene before.
-    anchors: carryIn ? { ...anchors, [carryIn.target]: 0 } : anchors,
+    anchors: withCarried(anchors, carryIn),
     ...(carryIn && { carryIn }),
   };
+}
+
+/** A carried element is already on screen as the unit starts: it flies in from the Scene before. */
+function withCarried(anchors: Record<string, number>, carryIn: UnitTiming["carryIn"]): Record<string, number> {
+  if (!carryIn) {
+    return anchors;
+  }
+
+  return { ...anchors, [carryIn.target]: 0 };
 }
 
 /** The Transition into a run: the one the Scene before it names. */
