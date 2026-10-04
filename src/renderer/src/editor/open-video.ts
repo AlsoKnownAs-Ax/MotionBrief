@@ -20,7 +20,10 @@ type OpenVideo = {
   wordFixes: Record<number, string>;
   /** Why the last word fix couldn't be saved. */
   fixError?: string;
-  open: (project: { id: string; name: string; isStored?: boolean }, preview: Preview) => void;
+  /** Opens a video; one still being generated has no preview until its Storyboard is valid. */
+  open: (project: { id: string; name: string; isStored?: boolean }, preview?: Preview) => void;
+  /** Shows a newer preview of the same video, such as one with more of its units written, keeping the word fixes. */
+  showPreview: (preview: Preview) => void;
   fixWord: (index: number, text: string) => Promise<void>;
 };
 
@@ -53,6 +56,7 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
         wordFixes: {},
         fixError: undefined,
       }),
+    showPreview: (preview) => set({ preview }),
     fixWord: async (index, text) => {
       const { projectId, isStored, wordFixes } = get();
       const before = wordFixes[index];

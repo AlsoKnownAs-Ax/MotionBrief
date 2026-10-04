@@ -210,7 +210,7 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
   const showsMeta = width > thumbWidth + 88;
   // Without room beside the thumbnail, the status badge sits on it.
   const badge = status.badge && (
-    <Badge status={status.badge} className={cn(!showsMeta && "absolute top-1 left-1")}>
+    <Badge status={status.badge} pulse={status.badge === "working"} className={cn(!showsMeta && "absolute top-1 left-1")}>
       {(showsMeta || thumbWidth > 72) && status.badgeLabel}
     </Badge>
   );

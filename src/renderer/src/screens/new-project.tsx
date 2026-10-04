@@ -4,8 +4,10 @@ import { ArrowLeftIcon, AudioLinesIcon, CircleAlertIcon, LoaderCircleIcon } from
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@renderer/components/ui/button";
 import { core, orpc } from "@renderer/core/connection";
+import { useGeneration } from "@renderer/editor/generation";
 import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
+import { GenerateBar } from "@renderer/new-project/generate-bar";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { ProjectForm, type ProjectChanges } from "@renderer/new-project/project-form";
 import { TranscriptPane, type FixWord } from "@renderer/new-project/transcript-pane";
@@ -14,7 +16,7 @@ import type { Project } from "../../../contract";
 
 /**
  * New Project: a Voiceover makes a Project folder and starts transcribing at once, while the creator names it and
- * picks its Format, Style Preset and language. Every choice saves as it changes.
+ * picks its Format, Style Preset and language. Every choice saves as it changes. Generate hands the Project to the editor.
  */
 export function NewProject() {
   const droppedVoiceover = useNavigation((state) => state.droppedVoiceover);
@@ -43,6 +45,12 @@ export function NewProject() {
 
   useCloseOnLeave(project?.id);
 
+  /** The editor follows the generation and keeps the Project open. */
+  function openGenerating(generating: Project) {
+    useGeneration.getState().follow(generating, { projectId: generating.id, format: generating.format });
+    useNavigation.getState().openEditor();
+  }
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline-soft px-3">
@@ -51,13 +59,13 @@ export function NewProject() {
         </Button>
         <h1 className="text-app-body font-medium">New Project</h1>
       </div>
-      {project ? <ProjectEditor project={project} onProject={setProject} /> : null}
+      {project ? <ProjectEditor project={project} onProject={setProject} onGenerating={() => openGenerating(project)} /> : null}
       {project ? null : <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} />}
     </div>
   );
 }
 
-/** Releases the Project's lock when the creator leaves the screen. */
+/** Releases the Project's lock when the creator leaves the screen, unless the editor took the Project over. */
 function useCloseOnLeave(projectId: string | undefined) {
   useEffect(() => {
     if (!projectId) {
@@ -65,7 +73,9 @@ function useCloseOnLeave(projectId: string | undefined) {
     }
 
     return () => {
-      void safe(core.project.close({ projectId }));
+      if (useNavigation.getState().screen !== "editor") {
+        void safe(core.project.close({ projectId }));
+      }
     };
   }, [projectId]);
 }
@@ -122,9 +132,9 @@ function VoiceoverDrop({ isCreating, error, onVoiceover }: VoiceoverDropProps) {
   );
 }
 
-type ProjectEditorProps = { project: Project; onProject: (project: Project) => void };
+type ProjectEditorProps = { project: Project; onProject: (project: Project) => void; onGenerating: () => void };
 
-function ProjectEditor({ project, onProject }: ProjectEditorProps) {
+function ProjectEditor({ project, onProject, onGenerating }: ProjectEditorProps) {
   const { data: transcription } = useQuery(orpc.project.transcription.experimental_liveOptions({ input: { projectId: project.id } }));
 
   /** Shows a choice at once, then whatever the core saved; a new name waits for its folder to be renamed. */
@@ -155,16 +165,19 @@ function ProjectEditor({ project, onProject }: ProjectEditorProps) {
   };
 
   return (
-    <div className="flex min-h-0 flex-1 gap-5 p-5">
-      <div className="w-[360px] shrink-0 overflow-y-auto pr-1">
-        <ProjectForm project={project} transcription={transcription} onChange={change} />
+    <>
+      <div className="flex min-h-0 flex-1 gap-5 p-5">
+        <div className="w-[360px] shrink-0 overflow-y-auto pr-1">
+          <ProjectForm project={project} transcription={transcription} onChange={change} />
+        </div>
+        <TranscriptPane
+          transcription={transcription}
+          onRetry={() => void safe(core.project.retryTranscription({ projectId: project.id }))}
+          onFixWord={fixWord}
+        />
       </div>
-      <TranscriptPane
-        transcription={transcription}
-        onRetry={() => void safe(core.project.retryTranscription({ projectId: project.id }))}
-        onFixWord={fixWord}
-      />
-    </div>
+      <GenerateBar project={project} transcription={transcription} onGenerating={onGenerating} />
+    </>
   );
 }
 

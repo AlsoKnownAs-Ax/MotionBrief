@@ -143,6 +143,9 @@ const UNITS = ["s01", "s02", "s03", "s04", "s05"];
 // Every unit is checked in the pinned chrome-headless-shell, each check taking seconds.
 const RUN_TIMEOUT_MS = 300_000;
 
+// Making and transcribing a Project takes a few seconds while the other test files run.
+const PROJECT_TIMEOUT_MS = 60_000;
+
 describe("first generation", () => {
   let core: CoreClient;
   let replay: Awaited<ReturnType<typeof connect>>["replay"];
@@ -303,7 +306,7 @@ describe("first generation", () => {
   });
 });
 
-describe("a generation", () => {
+describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
   it(
     "fails with the issues of a Storyboard that is still invalid after 2 retries, leaving no video",
     async () => {
