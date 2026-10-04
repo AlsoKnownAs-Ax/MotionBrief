@@ -137,6 +137,91 @@
     return from.clipPath !== undefined || from.filter !== undefined;
   }
 
+  /** How long the camera takes to move between two Scenes on a Canvas, centred on the next Scene's start. */
+  var CAMERA_SECONDS = 0.9;
+
+  /** A Canvas unit's world: everything its Scene code draws, which the camera moves across. */
+  function worldOf(unitId) {
+    return document.getElementById(unitId + "-world");
+  }
+
+  var cameras = {};
+
+  /**
+   * Where the camera rests on each Scene of a Canvas, in Scene order: the world's translation and
+   * scale that fit the Scene's region in the frame, centred. Measured from the layout, which the
+   * regions' explicit sizes fix, so every seek gives the same moves.
+   */
+  function cameraStops(unitId) {
+    if (cameras[unitId]) {
+      return cameras[unitId];
+    }
+
+    var world = worldOf(unitId);
+    var ids = Object.keys(data().units[unitId].sceneStarts);
+
+    if (!world) {
+      throw new Error("MB: the Canvas " + unitId + ' needs its world, <div id="' + unitId + '-world">, around its Scenes');
+    }
+
+    cameras[unitId] = ids.map(function (sceneId) {
+      var region = world.querySelector('[data-region="' + sceneId + '"]');
+
+      if (!region) {
+        throw new Error("MB: the Canvas " + unitId + ' needs a region <div data-region="' + sceneId + '"> for Scene ' + sceneId);
+      }
+
+      var box = boxWithin(region, world);
+      var width = data().width;
+      var height = data().height;
+      var scale = Math.min(1, width / box.w, height / box.h);
+
+      return { sceneId: sceneId, x: (width - box.w * scale) / 2 - box.x * scale, y: (height - box.h * scale) / 2 - box.y * scale, scale: scale };
+    });
+
+    return cameras[unitId];
+  }
+
+  /**
+   * An element's box in the frame while its unit is at rest: on a Canvas, with the camera on the
+   * first or the last Scene. From the layout, so neither the seek order nor running Transitions move it.
+   */
+  function frameBox(element, unitId, stop) {
+    var world = worldOf(unitId);
+
+    if (!world || !world.contains(element) || Object.keys(data().units[unitId].sceneStarts).length < 2) {
+      var box = boxWithin(element, null);
+
+      return { x: box.x, y: box.y, w: box.w, h: box.h, scale: 1 };
+    }
+
+    var stops = cameraStops(unitId);
+    var camera = stop === "last" ? stops[stops.length - 1] : stops[0];
+    var inWorld = boxWithin(element, world);
+
+    return {
+      x: camera.x + inWorld.x * camera.scale,
+      y: camera.y + inWorld.y * camera.scale,
+      w: inWorld.w * camera.scale,
+      h: inWorld.h * camera.scale,
+      scale: camera.scale,
+    };
+  }
+
+  /** Centre-to-centre offset and size ratio that put the incoming element over the outgoing one. */
+  function carryOffset(carry, unitId) {
+    var from = frameBox(one("#" + carry.element), carry.from, "last");
+    var to = frameBox(one("#" + carry.target), unitId, "first");
+    var scale = to.w > 0 && to.h > 0 ? Math.sqrt((from.w * from.h) / (to.w * to.h)) : 1;
+
+    return {
+      // The incoming element is drawn inside its own world's scale, so its offset is too.
+      x: (from.x + from.w / 2 - (to.x + to.w / 2)) / to.scale,
+      y: (from.y + from.h / 2 - (to.y + to.h / 2)) / to.scale,
+      scale: scale || 1,
+    };
+  }
+
   window.MB = {
     /** The frame contract this runtime implements. */
     version: data().contractVersion,
@@ -323,6 +408,73 @@
 
       tl.to(target, { scale: o.scale || motion.emphasis, color: o.color || "var(--accent)", duration: 0.2, ease: "power2.out" }, time);
       tl.to(target, { scale: 1, duration: 0.4 * motion.pace, ease: motion.ease }, time + 0.2);
+
+      return tl;
+    },
+
+    /**
+     * Owned by the frame, never called by Scene code: the camera across a Canvas. It rests on the
+     * first Scene's region of `#<unit>-world`, then moves to each next Scene's region over 0.9 s,
+     * centred on that Scene's start so it lands before the Scene's first word.
+     */
+    camera: function (tl, unitId) {
+      var world = worldOf(unitId);
+      var stops = cameraStops(unitId);
+      var starts = data().units[unitId].sceneStarts;
+
+      world.style.transformOrigin = "0 0";
+      tl.set(world, { x: stops[0].x, y: stops[0].y, scale: stops[0].scale }, 0);
+
+      for (var i = 1; i < stops.length; i++) {
+        var from = stops[i - 1];
+        var to = stops[i];
+
+        tl.fromTo(
+          world,
+          { x: from.x, y: from.y, scale: from.scale },
+          { x: to.x, y: to.y, scale: to.scale, duration: CAMERA_SECONDS, ease: data().motion.easeInOut, immediateRender: false },
+          Math.max(0, starts[to.sceneId] - CAMERA_SECONDS / 2),
+        );
+      }
+
+      return tl;
+    },
+
+    /**
+     * Owned by the frame, never called by Scene code: a carry-over into a unit. The carried element
+     * starts over its counterpart in the Scene before, in place and size, and flies to its own place.
+     * It moves by the CSS translate and scale properties, which add to any transform Scene code
+     * animates; where the two are is measured once, from the layout, when the flight first plays.
+     */
+    carry: function (tl, unitId) {
+      var carry = data().units[unitId].carryIn;
+      var target = one("#" + carry.target);
+      var offset;
+
+      function measured() {
+        offset = offset || carryOffset(carry, unitId);
+
+        return offset;
+      }
+
+      target.style.translate = "var(--mb-carry-x, 0px) var(--mb-carry-y, 0px)";
+      target.style.scale = "var(--mb-carry-scale, 1)";
+      tl.fromTo(
+        target,
+        {
+          "--mb-carry-x": function () {
+            return measured().x + "px";
+          },
+          "--mb-carry-y": function () {
+            return measured().y + "px";
+          },
+          "--mb-carry-scale": function () {
+            return measured().scale;
+          },
+        },
+        { "--mb-carry-x": "0px", "--mb-carry-y": "0px", "--mb-carry-scale": 1, duration: carry.duration, ease: data().motion.easeInOut, immediateRender: false },
+        0,
+      );
 
       return tl;
     },

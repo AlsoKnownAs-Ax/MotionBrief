@@ -1,34 +1,52 @@
+import type { Format } from "../../contract";
 import { elementsOf, type Scene, type SceneElement } from "../storyboard";
+import { FRAME_SIZES } from "./formats";
 import type { UnitCode, UnitTiming } from "./page";
 
 /**
  * The fallback Scene: plain, word-anchored kinetic typography of each Scene's structured content in
  * the Preset's tokens. Every Storyboard element appears as a line with its DOM id, revealed on its
- * word, so a unit whose Scene code keeps failing still keeps the contract. A Canvas shows its
- * Scenes one after another.
+ * word, so a unit whose Scene code keeps failing still keeps the contract. A Canvas lays its Scenes
+ * out in frame-sized regions, side by side (on top of each other in vertical), for the camera to
+ * move across; a carried element is there from the start, flown in by the frame.
  */
-export function fallbackCode(scenes: Scene[], unit: UnitTiming): UnitCode {
+export function fallbackCode(scenes: Scene[], unit: UnitTiming, format: Format): UnitCode {
   const blocks = scenes.map((scene) => ({ scene, elements: elementsOf(scene) }));
+  const stacks = blocks.map(
+    ({ scene, elements }) =>
+      `<div id="fb-${scene.id}" class="mb-safe fb-stack" style="font-size: ${sizeFor(elements.length)}">
+${elements.map((element, index) => lineHtml(scene, element, index === 0)).join("\n")}
+</div>`,
+  );
 
   return {
     css: `.fb-stack { display: flex; flex-flow: column wrap; justify-content: center; align-content: center; gap: 24px 64px; }
 .fb-line { max-width: 100%; color: var(--ink); }
-.fb-code { padding: 28px 36px; margin: 0; white-space: pre; line-height: 1.4; }`,
-    html: blocks
-      .map(
-        ({ scene, elements }) =>
-          `<div id="fb-${scene.id}" class="mb-safe fb-stack" style="font-size: ${sizeFor(elements.length)}">
-${elements.map((element, index) => lineHtml(scene, element, index === 0)).join("\n")}
-</div>`,
-      )
-      .join("\n"),
+.fb-code { padding: 28px 36px; margin: 0; white-space: pre; line-height: 1.4; }
+.fb-world, .fb-region { position: absolute; left: 0; top: 0; }`,
+    html: scenes.length > 1 ? canvasHtml(unit.id, scenes, stacks, format) : stacks.join("\n"),
     js: blocks
-      .flatMap(({ scene, elements }, index) => [
-        ...elements.map(({ id }) => `MB.reveal(tl, "#${scene.id}-${id}", at("${scene.id}-${id}"), "fade");`),
-        ...hideWhenNextStarts(scene, blocks[index + 1]?.scene, unit),
-      ])
+      .flatMap(({ scene, elements }) => elements.map(({ id }) => `${scene.id}-${id}`))
+      .filter((domId) => domId !== unit.carryIn?.target)
+      .map((domId) => `MB.reveal(tl, "#${domId}", at("${domId}"), "fade");`)
       .join("\n"),
   };
+}
+
+/** The Canvas: a world of frame-sized regions, one per Scene, in reading order for the Format. */
+function canvasHtml(unitId: string, scenes: Scene[], stacks: string[], format: Format): string {
+  const { width, height } = FRAME_SIZES[format];
+  const across = format === "horizontal";
+  const regions = scenes.map(
+    (scene, index) =>
+      `<div class="fb-region" data-region="${scene.id}" style="left: ${across ? index * width : 0}px; top: ${across ? 0 : index * height}px; width: ${width}px; height: ${height}px">
+${stacks[index]}
+</div>`,
+  );
+
+  return `<div id="${unitId}-world" class="fb-world" style="width: ${across ? scenes.length * width : width}px; height: ${across ? height : scenes.length * height}px">
+${regions.join("\n")}
+</div>`;
 }
 
 /** Fewer, larger lines when a Scene has few elements; a diagram's many labels wrap into columns. */
@@ -88,15 +106,6 @@ function labelOf(scene: Scene, id: string): string {
   }
 
   return label;
-}
-
-/** On a Canvas, a Scene's lines give way to the next Scene's when it starts. */
-function hideWhenNextStarts(scene: Scene, next: Scene | undefined, unit: UnitTiming): string[] {
-  if (!next) {
-    return [];
-  }
-
-  return [`tl.set("#fb-${scene.id}", { autoAlpha: 0 }, ${unit.sceneStarts[next.id] ?? 0});`];
 }
 
 function escape(text: string): string {

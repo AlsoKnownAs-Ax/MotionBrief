@@ -1,0 +1,4 @@
+.compare { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 72px; }
+.sides { display: flex; gap: 64px; }
+.side { display: flex; flex-direction: column; gap: 24px; width: 640px; padding: 40px 48px; }
+.verdict { text-align: center; }

@@ -22,8 +22,13 @@ export type UnitTiming = {
   duration: number;
   /** DOM id `<sceneId>-<elementId>` → the time its word is spoken. */
   anchors: Record<string, number>;
-  /** Scene id → when the Scene starts. */
+  /** Scene id → when the Scene starts. More than one Scene: the unit is a Canvas the camera moves across. */
   sceneStarts: Record<string, number>;
+  /**
+   * A carry-over into the unit: the element with DOM id `element` in unit `from` flies over `duration`
+   * seconds from the unit's start to the place of `target`, its counterpart in this unit.
+   */
+  carryIn?: { from: string; element: string; target: string; duration: number };
 };
 
 /** A file the page needs: copied `from` a bundled package, or written with `content`. */
@@ -71,11 +76,16 @@ ${treatments.css}
 /**
  * A unit's composition: the frame's CSS and background around the agent's code, which runs in a
  * paused GSAP timeline as long as the unit, with `at` bound to the unit's anchors. Stepped Motion
- * plays the timeline through MB.quantize, so Scene code never handles the frame rate.
+ * plays the timeline through MB.quantize, so Scene code never handles the frame rate. The frame
+ * then adds what Scene code never writes: the camera across a Canvas and a carried element's flight.
  */
 export function wrapUnit({ unit, format, style, code }: { unit: UnitTiming; format: Format; style: FrameStyle; code: UnitCode }) {
   const { width, height } = FRAME_SIZES[format];
   const timeline = motionDefaults(style.motion).fps > 0 ? `MB.quantize(tl, ${unit.duration})` : "tl";
+  const owned = [
+    ...(Object.keys(unit.sceneStarts).length > 1 ? [`  MB.camera(tl, "${unit.id}");`] : []),
+    ...(unit.carryIn ? [`  MB.carry(tl, "${unit.id}");`] : []),
+  ];
 
   return `<template>
 <style>
@@ -94,6 +104,7 @@ ${withDeliberateLayering(code.html)}
   const at = S.at;
   const tl = gsap.timeline({ paused: true });
 ${code.js}
+${owned.join("\n")}
   tl.to({}, { duration: ${unit.duration} }, 0);
   window.__timelines["${unit.id}"] = ${timeline};
 })();

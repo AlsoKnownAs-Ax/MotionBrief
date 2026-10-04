@@ -323,6 +323,165 @@ describe("the frame, in a headless browser", () => {
       expect(halfway[0]).toBeCloseTo(0.5, 1);
       expect(halfway[1]).toBeCloseTo(0.5, 1);
     });
+
+    // s03 and s04 share the Canvas c1, side by side; s04 starts 0.25 s before "The", spoken at 15.7 s.
+    // The camera moves over 0.9 s, centred on 15.45 s.
+    it("camera: rests on the first Scene's region, then moves across the Canvas to the next one around its start", async () => {
+      await page().seek(14.9);
+      const resting = [(await rectOf(page(), '[data-region="s03"]')).x, (await rectOf(page(), '[data-region="s04"]')).x];
+      await page().seek(15.45);
+      const moving = (await rectOf(page(), '[data-region="s04"]')).x;
+      await page().seek(16);
+      const arrived = [(await rectOf(page(), '[data-region="s03"]')).x, (await rectOf(page(), '[data-region="s04"]')).x];
+
+      expect(resting).toEqual([0, 1920]);
+      expect(moving).toBeGreaterThan(0);
+      expect(moving).toBeLessThan(1920);
+      expect(arrived).toEqual([-1920, 0]);
+    });
+
+    it("camera: lands before the next Scene's first word, so its elements arrive in the frame", async () => {
+      // "server" is spoken at 16.1 s.
+      await page().seek(16.2);
+
+      expect((await rectOf(page(), "#s04-server")).x).toBeGreaterThanOrEqual(120);
+      expect(await effectiveOpacity(page(), "#s04-server")).toBeGreaterThanOrEqual(0.3);
+    });
+
+    // The Canvas c1 pushes left into s05, which starts 0.25 s before "In", spoken at 21.7 s, over 0.55 s.
+    it("push-left: the next Scene pushes the last one out to the left", async () => {
+      await page().seek(21.4);
+      const before = (await rectOf(page(), "#el-c1")).x;
+      await page().seek(21.73);
+      const [outgoing, incoming] = [await rectOf(page(), "#el-c1"), await rectOf(page(), "#el-s05")];
+      await page().seek(22.1);
+      const after = [(await rectOf(page(), "#el-s05")).x, await effectiveOpacity(page(), "#c1-bg")];
+
+      expect(before).toBe(0);
+      expect(outgoing.x).toBeLessThan(0);
+      expect(outgoing.x).toBeGreaterThan(-1920);
+      expect(incoming.x).toBeCloseTo(outgoing.x + 1920, 0);
+      expect(after).toEqual([0, 0]);
+    });
+
+    // s05 zooms through into s06, which starts 0.25 s before "Without", spoken at 26.1 s, over 0.45 s.
+    it("zoom-through: the last Scene grows past the camera and fades as the next one grows into place", async () => {
+      await page().seek(25.8);
+      const before = (await rectOf(page(), "#el-s05")).width;
+      await page().seek(26.07);
+      const during = [(await rectOf(page(), "#el-s05")).width, (await rectOf(page(), "#el-s06")).width, await effectiveOpacity(page(), "#s06-bg")];
+      await page().seek(26.4);
+      const after = [(await rectOf(page(), "#el-s06")).width, await effectiveOpacity(page(), "#s06-bg")];
+
+      expect(before).toBe(1920);
+      expect(during[0]).toBeGreaterThan(1920);
+      expect(during[1]).toBeLessThan(1920);
+      expect(during[2]).toBeGreaterThan(0);
+      expect(during[2]).toBeLessThan(1);
+      expect(after).toEqual([1920, 1]);
+    });
+
+    // s06 carries "caching" (its verdict, "Cache wins") into s07 (a list item, "Caching"), which starts
+    // 0.25 s before "Three", spoken at 32.5 s; the element flies for 0.6 s.
+    describe("carry-over", () => {
+      it("starts the incoming element over the outgoing one and flies it to its own place", async () => {
+        await page().seek(32.2);
+        const outgoing = centreOf(await rectOf(page(), "#s06-caching"));
+        await page().seek(32.27);
+        const leaving = centreOf(await rectOf(page(), "#s07-caching"));
+        await page().seek(32.55);
+        const flying = centreOf(await rectOf(page(), "#s07-caching"));
+        await page().seek(33);
+        const landed = centreOf(await rectOf(page(), "#s07-caching"));
+        await page().seek(35);
+        const own = centreOf(await rectOf(page(), "#s07-caching"));
+
+        expect(leaving.x).toBeCloseTo(outgoing.x, -1);
+        expect(leaving.y).toBeCloseTo(outgoing.y, -1);
+        expect(landed).toEqual(own);
+        expect(Math.hypot(landed.x - outgoing.x, landed.y - outgoing.y)).toBeGreaterThan(100);
+        expect(Math.hypot(flying.x - outgoing.x, flying.y - outgoing.y)).toBeGreaterThan(10);
+        expect(Math.hypot(flying.x - landed.x, flying.y - landed.y)).toBeGreaterThan(10);
+      });
+
+      it("shows the carried element from the start, as the Scene cuts in around it", async () => {
+        await page().seek(32.27);
+
+        expect(await effectiveOpacity(page(), "#s07-caching")).toBe(1);
+        expect(await effectiveOpacity(page(), "#s06-caching")).toBe(0);
+      });
+
+      it("flies the same way when the page is first seeked past it and back", async () => {
+        await page().seek(40);
+        await page().seek(32.27);
+        const leaving = centreOf(await rectOf(page(), "#s07-caching"));
+        await page().seek(32.2);
+        const outgoing = centreOf(await rectOf(page(), "#s06-caching"));
+
+        expect(leaving.x).toBeCloseTo(outgoing.x, -1);
+        expect(leaving.y).toBeCloseTo(outgoing.y, -1);
+      });
+    });
+  });
+
+  describe("push Transitions in every direction", () => {
+    let frame: OpenFrame | undefined;
+    /** The fixture with its cut, its crossfade into the Canvas and a later crossfade turned into pushes. */
+    const pushes: Storyboard = {
+      ...horizontal,
+      scenes: horizontal.scenes.map((scene) => {
+        const type = ({ s01: "push-right", s02: "push-up", s07: "push-down" } as const)[scene.id as "s01" | "s02" | "s07"];
+
+        return type ? { ...scene, transition: { type } } : scene;
+      }),
+    };
+
+    beforeAll(async () => {
+      frame = await openFrame(pushes, longTranscript, {});
+    }, BROWSER_TIMEOUT_MS);
+
+    afterAll(() => closeFrame(frame));
+
+    const page = () => frame!.page;
+
+    /** Seeks halfway through a 0.55 s push starting at `start`, and gives where the two units are. */
+    async function halfway(start: number, from: string, to: string) {
+      await page().seek(start + 0.28);
+
+      return [await rectOf(page(), `#el-${from}`), await rectOf(page(), `#el-${to}`)] as const;
+    }
+
+    // s02 starts 0.25 s before "That", spoken at 4.9 s.
+    it("push-right: the next Scene pushes the last one out to the right", async () => {
+      const [outgoing, incoming] = await halfway(4.65, "s01", "s02");
+
+      expect(outgoing.x).toBeGreaterThan(0);
+      expect(incoming.x).toBeCloseTo(outgoing.x - 1920, 0);
+      expect([outgoing.y, incoming.y]).toEqual([0, 0]);
+    });
+
+    // c1 starts 0.25 s before "Your", spoken at 10.5 s.
+    it("push-up: the next Scene pushes the last one out the top", async () => {
+      const [outgoing, incoming] = await halfway(10.25, "s02", "c1");
+
+      expect(outgoing.y).toBeLessThan(0);
+      expect(incoming.y).toBeCloseTo(outgoing.y + 1080, 0);
+      expect([outgoing.x, incoming.x]).toEqual([0, 0]);
+    });
+
+    // s08 starts 0.25 s before "Done", spoken at 36.9 s.
+    it("push-down: the next Scene pushes the last one out the bottom", async () => {
+      const [outgoing, incoming] = await halfway(36.65, "s07", "s08");
+
+      expect(outgoing.y).toBeGreaterThan(0);
+      expect(incoming.y).toBeCloseTo(outgoing.y - 1080, 0);
+    });
+
+    it("leaves the next Scene in place once the push is over", async () => {
+      await page().seek(37.4);
+
+      expect(await rectOf(page(), "#el-s08")).toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
+    });
   });
 
   describe("anchors after a Transcript change", () => {
@@ -377,6 +536,17 @@ function effectiveOpacity(page: FramePage, selector: string) {
     }
     return Math.round(opacity * 1000) / 1000;
   })()`);
+}
+
+/** Where an element is drawn in the frame, transforms included. */
+function rectOf(page: FramePage, selector: string) {
+  return page.evaluate<Box>(
+    `(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return { x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.width), height: Math.round(r.height) }; })()`,
+  );
+}
+
+function centreOf({ x, y, width, height }: Box) {
+  return { x: x + width / 2, y: y + height / 2 };
 }
 
 /** The box of the `.mb-safe` container around an element. */
