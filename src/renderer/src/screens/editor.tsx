@@ -136,20 +136,19 @@ function revisingLabel(status: RevisionStatus | undefined) {
   return `Revising · ${status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length} of ${status.units.length}`;
 }
 
-/** Follows the open video's Revisions while it is open in the editor; only a stored Project's video has them. */
+/** Follows the Revisions of the video the Format tabs show; only a stored Project's video has them. */
 function useFollowRevisions() {
-  const projectId = useOpenVideo((state) => state.projectId);
-  const isStored = useOpenVideo((state) => state.isStored);
-  const format = useOpenVideo((state) => state.preview?.timeline.format);
+  const projectId = useGeneration((state) => state.video?.projectId);
+  const format = useGeneration((state) => state.video?.format);
   const follow = useRevision((state) => state.follow);
 
   useEffect(() => {
-    if (!isStored || !format) {
+    if (!projectId || !format) {
       return;
     }
 
     return follow({ projectId, format });
-  }, [projectId, isStored, format, follow]);
+  }, [projectId, format, follow]);
 }
 
 function finishedUnits({ units }: GenerationStatus) {

@@ -28,7 +28,10 @@ type RevisionRun = AgentRun & {
   rulesFor: (captions: boolean) => StoryboardRules;
   preset: StylePreset;
   brief: PresetBrief;
+  /** Whether the video shows Captions now. */
   captions: boolean;
+  /** Whether the Storyboard was written for Captions: its rules, unless the patch switches them. */
+  writtenFor: boolean;
   history: RevisionRecord[];
   request: string;
   scope: string[];
@@ -39,7 +42,7 @@ type RevisionRun = AgentRun & {
  * Style Preset, scope and earlier Revisions. A patch is applied to the Storyboard and validated, and sent back with
  * its issues at most twice. A turn that hands in no patch is a reply.
  */
-export async function runRevisionAgent({ storyboard, transcript, rulesFor, preset, brief, captions, history, request, scope, ...run }: RevisionRun): Promise<Result<AgentOutcome, AgentError>> {
+export async function runRevisionAgent({ storyboard, transcript, rulesFor, preset, brief, captions, writtenFor, history, request, scope, ...run }: RevisionRun): Promise<Result<AgentOutcome, AgentError>> {
   let submitted: Patch | undefined;
   const submit = defineHostTool({
     name: PATCH_TOOL,
@@ -51,7 +54,7 @@ export async function runRevisionAgent({ storyboard, transcript, rulesFor, prese
       return { text: "Received. MotionBrief validates the revised Storyboard when your turn ends." };
     },
   });
-  const setup = { label: "revision", systemPrompt: revisionSystem(rulesFor(captions), brief), hostTools: [submit] };
+  const setup = { label: "revision", systemPrompt: revisionSystem(rulesFor(writtenFor), brief), hostTools: [submit] };
 
   return withSession<AgentOutcome, AgentError>(run, setup, async (session) => {
     let message = revisionMessage({ storyboard, transcript, preset, captions, history, request, scope });
@@ -76,7 +79,7 @@ export async function runRevisionAgent({ storyboard, transcript, rulesFor, prese
       }
 
       const patch: Patch = submitted;
-      const { data: revised, error } = validateStoryboard(applyPatch(storyboard, patch), transcript, rulesFor(patch.captions ?? captions));
+      const { data: revised, error } = validateStoryboard(applyPatch(storyboard, patch), transcript, rulesFor(patch.captions ?? writtenFor));
 
       if (error) {
         issues = error.issues;

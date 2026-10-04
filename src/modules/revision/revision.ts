@@ -64,8 +64,11 @@ export type Revisions = ReturnType<typeof createRevisions>;
 
 const IDLE: RevisionStatus = { state: "idle", affected: [], units: [] };
 
-/** The current Version with its units' code, as a Revision starts from it. */
-type Current = { version: Version; storyboard: Storyboard; code: Record<string, UnitCode> };
+/**
+ * The current Version with its units' code, as a Revision starts from it, and whether the video shows Captions: the
+ * creator's choice, else what its Storyboard was written for.
+ */
+type Current = { version: Version; storyboard: Storyboard; code: Record<string, UnitCode>; captions: boolean };
 
 type Store = ReturnType<typeof createStatusStore<RevisionStatus>>;
 
@@ -138,15 +141,26 @@ export function createRevisions({ connector, checker, previews, stills, projects
       return { data: null, error: projectError(error) };
     }
 
-    if (video.version === undefined || !video.transcript) {
+    const [{ data: stored, error: storedError }, { data: choice, error: choiceError }] = await Promise.all([
+      projects.storedVideo(projectId, format),
+      projects.captionsChoice(projectId, format),
+    ]);
+
+    if (storedError || choiceError) {
+      return { data: null, error: projectError((storedError ?? choiceError)!) };
+    }
+
+    if (!stored || !video.transcript) {
       return { data: null, error: { code: "NOT_GENERATED", projectId } };
     }
 
-    const { data: current, error: readError } = await readCurrent(ref, video.version);
+    const { success, data: storyboard, error: parseError } = StoryboardSchema.safeParse(stored.version.storyboard);
 
-    if (readError) {
-      return { data: null, error: readError };
+    if (!success) {
+      return { data: null, error: { code: "FILE_FAILED", path: `versions/${stored.version.version}.json`, message: parseError.message } };
     }
+
+    const current: Current = { version: stored.version, code: stored.code, storyboard, captions: choice ?? stored.version.captions };
 
     const unknown = request.scope.find((sceneId) => !current.storyboard.scenes.some(({ id }) => id === sceneId));
 
@@ -169,22 +183,6 @@ export function createRevisions({ connector, checker, previews, stills, projects
     running.delete(key);
     job.controller.abort();
     store.update({ state: "stopped", affected: [] });
-  }
-
-  async function readCurrent(ref: VideoRef, number: number): Promise<Result<Current, ReviseError>> {
-    const { data: stored, error } = await projects.readVersion(ref.projectId, ref.format, number);
-
-    if (error) {
-      return { data: null, error: projectError(error) };
-    }
-
-    const { success, data: storyboard, error: parseError } = StoryboardSchema.safeParse(stored.version.storyboard);
-
-    if (!success) {
-      return { data: null, error: { code: "FILE_FAILED", path: `versions/${number}.json`, message: parseError.message } };
-    }
-
-    return { data: { ...stored, storyboard }, error: null };
   }
 
   /** The video's earlier Revisions, oldest first: what each asked for and what it did. */
@@ -223,7 +221,8 @@ export function createRevisions({ connector, checker, previews, stills, projects
 
   async function revise(run: Run) {
     const { ref, request, transcript, current, job } = run;
-    const { preset, captions } = current.version;
+    const { preset, captions: writtenFor } = current.version;
+    const { captions } = current;
     const brief = presetBrief(preset, ref.format);
     const rulesFor = (withCaptions: boolean) => storyboardRules(preset, { format: ref.format, captions: withCaptions });
     const { data: outcome, error } = await runRevisionAgent({
@@ -237,6 +236,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
       preset,
       brief,
       captions,
+      writtenFor,
       history: await history(ref, current.version.version),
       request: request.message,
       scope: request.scope,
@@ -252,6 +252,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
       return publish(run, { state: "answered", affected: [], reply });
     }
 
+    // A Captions switch in the patch is the creator's choice from now on, and the Storyboard is written for it.
     const nextCaptions = patch.captions ?? captions;
     const instructions = Object.fromEntries(patch.instructions.map(({ scene, text }) => [scene, text]));
     const plans = planRebuild({ current: current.storyboard, next: storyboard, transcript, instructions, captionsChanged: nextCaptions !== captions });
@@ -261,16 +262,27 @@ export function createRevisions({ connector, checker, previews, stills, projects
       return publish(run, { state: "answered", affected: [], reply: patch.summary });
     }
 
-    await rebuild(run, { storyboard, plans, captions: nextCaptions, summary: patch.summary, preset });
+    await rebuild(run, { storyboard, plans, writtenFor: patch.captions ?? writtenFor, captions: nextCaptions, choice: patch.captions, summary: patch.summary, preset });
   }
 
-  type Rebuilt = { storyboard: Storyboard; plans: UnitRebuild[]; captions: boolean; summary: string; preset: StylePreset };
+  type Rebuilt = {
+    storyboard: Storyboard;
+    plans: UnitRebuild[];
+    /** Whether the revised Storyboard is written for Captions: its rules. */
+    writtenFor: boolean;
+    /** Whether the revised video shows Captions. */
+    captions: boolean;
+    /** The Captions choice the patch makes, if it switches them. */
+    choice?: boolean;
+    summary: string;
+    preset: StylePreset;
+  };
 
   /** Re-renders and regenerates what the rebuild rule says, then saves the next Version. */
-  async function rebuild(run: Run, { storyboard, plans, captions, summary, preset }: Rebuilt) {
+  async function rebuild(run: Run, { storyboard, plans, writtenFor, captions, choice, summary, preset }: Rebuilt) {
     const { ref, transcript, current, job } = run;
     const signal = job.controller.signal;
-    const rules = storyboardRules(preset, { format: ref.format, captions });
+    const rules = storyboardRules(preset, { format: ref.format, captions: writtenFor });
     const brief = presetBrief(preset, ref.format);
     const working = plans.filter(({ rebuild: need }) => need !== "keep");
     const progress = new Map<string, RevisionUnit>(working.map(({ unit, rebuild: need }) => [unit.id, { id: unit.id, rebuild: rebuildOf(need), status: "queued", attempts: 0 }]));
@@ -350,7 +362,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
     await commit(run, {
       storyboard,
       preset,
-      captions,
+      captions: writtenFor,
       units,
       flags: plans.flatMap(({ unit, previous }) => flagsOf(unit.id, previous?.id, code, regenerated, current.version.flags)),
       models: { ...current.version.models, ...models },
@@ -358,14 +370,14 @@ export function createRevisions({ connector, checker, previews, stills, projects
       createdAt: new Date(clock.now()).toISOString(),
       origin: "revision",
       revision: { request: run.request.message, scope: run.request.scope, summary, notApplied },
-    }, { storyboard, transcript, rules, preset, code, voiceover: run.voiceover });
+    }, { storyboard, transcript, rules, preset, code, voiceover: run.voiceover, captions }, choice);
   }
 
   /**
    * Saves the Revision's Version: the boundary after which Stop is too late. Checking for Stop and marking the run as
    * committing happen with nothing awaited between them, so a Revision is either discarded or saved and `done`.
    */
-  async function commit(run: Run, version: Omit<Version, "version">, source: Parameters<Previews["open"]>[0]) {
+  async function commit(run: Run, version: Omit<Version, "version">, source: Parameters<Previews["open"]>[0], captionsChoice?: boolean) {
     const { ref, job } = run;
 
     if (job.controller.signal.aborted) {
@@ -378,6 +390,14 @@ export function createRevisions({ connector, checker, previews, stills, projects
 
     if (saveError) {
       return publish(run, { state: "failed", affected: [], error: fileErrorOf(saveError) });
+    }
+
+    if (captionsChoice !== undefined) {
+      const { error: choiceError } = await projects.chooseCaptions(ref.projectId, ref.format, captionsChoice);
+
+      if (choiceError) {
+        return publish(run, { state: "failed", affected: [], error: fileErrorOf(choiceError) });
+      }
     }
 
     const { preview, previewError } = await previewOf(source);

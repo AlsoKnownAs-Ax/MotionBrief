@@ -40,6 +40,8 @@ type GenerationStore = {
   showFormat: (format: Format) => void;
   /** Listens to the generation again after losing it; the core kept it going. */
   reconnect: () => void;
+  /** Plays the open Format's newest saved Version again, such as one a Revision just saved. */
+  reopen: () => void;
   /** Stops the run; finished Scenes are kept and the rest become flagged fallbacks. */
   stop: () => Promise<void>;
   /** Regenerates flagged fallback units: these, or every flagged one. */
@@ -171,6 +173,13 @@ export const useGeneration = create<GenerationStore>((set, get) => {
 
       if (video) {
         listen(video);
+      }
+    },
+    reopen: () => {
+      const { video } = get();
+
+      if (video) {
+        void openStored(video);
       }
     },
     stop: async () => {

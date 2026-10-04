@@ -2,6 +2,7 @@ import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
 import type { RevisionError, RevisionStatus, TimelineScene, VideoRef } from "../../../contract";
+import { useGeneration } from "./generation";
 import { sceneName } from "./labels";
 import { useOpenVideo } from "./open-video";
 
@@ -91,8 +92,9 @@ export const useRevision = create<RevisionStore>((set, get) => {
           set({ status });
           ended(status, before);
 
-          if (status.state === "done" && before?.state !== "done" && status.preview) {
-            useOpenVideo.getState().showPreview(status.preview);
+          // The new Version plays as `video.open` builds it: with the video's Captions choice and its review notes.
+          if (status.state === "done" && before?.state !== "done" && status.version !== undefined) {
+            useGeneration.getState().reopen();
           }
         }
       })().catch(() => undefined);

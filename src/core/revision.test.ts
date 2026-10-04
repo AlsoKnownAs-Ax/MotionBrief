@@ -39,12 +39,12 @@ function scene(storyboard: Storyboard, id: string): Scene {
   return structuredClone(storyboard.scenes.find((candidate) => candidate.id === id)!);
 }
 
-type Patch = { scenes: Scene[]; remove?: string[]; instructions?: { scene: string; text: string }[]; summary: string };
+type Patch = { scenes: Scene[]; remove?: string[]; captions?: boolean; instructions?: { scene: string; text: string }[]; summary: string };
 
 /** A turn in which the Revision agent hands in a patch through its host tool. */
-function submitsPatch({ scenes, remove = [], instructions = [], summary }: Patch): AgentEvent[] {
+function submitsPatch({ scenes, remove = [], captions, instructions = [], summary }: Patch): AgentEvent[] {
   return [
-    { type: "tool-call", toolUseId: "toolu_patch", name: "mcp__motionbrief__submit_patch", input: { scenes, remove, instructions, summary } },
+    { type: "tool-call", toolUseId: "toolu_patch", name: "mcp__motionbrief__submit_patch", input: { scenes, remove, captions, instructions, summary } },
     { type: "turn-completed", status: "completed", text: summary },
   ];
 }
@@ -438,6 +438,30 @@ describe("a Revision", () => {
       expect(replay.askedOf("revision")).toHaveLength(3);
       expect(regenerated(replay)).toEqual([]);
       expect(await versions(project)).toEqual(["1.json"]);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
+    "follows the video's Captions choice, and only re-renders when a patch switches them",
+    async () => {
+      const { core, replay, project, video } = await connect({
+        revision: [replies("They are on."), submitsPatch({ scenes: [], captions: false, summary: "Turned the Captions off." })],
+      });
+      const v1Units = await generatedGood(project);
+      await core.video.setCaptions({ ...video, captions: true });
+
+      const { ended: answered } = await revise(core, video, "Are Captions on?");
+      const { ended } = await revise(core, video, "Turn the Captions off");
+      const saved = await readVersion(project, 2);
+
+      expect(answered.state).toBe("answered");
+      expect(replay.askedOf("revision")[0]?.message).toContain("Captions are on.");
+      expect(ended.units.map(({ rebuild }) => rebuild)).toEqual(["rerender", "rerender", "rerender", "rerender", "rerender"]);
+      expect(regenerated(replay)).toEqual([]);
+      expect(saved).toMatchObject({ captions: false, units: v1Units });
+      expect(await core.video.open(video)).toMatchObject({ version: 2, captions: false });
       await core.project.close({ projectId: project.id });
     },
     RUN_TIMEOUT_MS,
