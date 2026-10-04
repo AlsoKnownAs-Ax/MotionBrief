@@ -15,15 +15,16 @@ import { planUnits, type Unit } from "../assembler";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
-import type { PreviewError, Previews } from "../preview";
+import type { PreviewError, Previews, Stills } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type VideoContent } from "../projects";
 import type { Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
 import type { Clock } from "../system";
-import { writeStoryboard, writeUnitCode } from "./agents";
+import { writeStoryboard, writeUnitCode, type UnitOutcome } from "./agents";
+import { reviewUnit } from "./review";
 
-/** The model each agent role runs on until Settings choose others (Storyboard and Scene code: Opus). */
-export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5" };
+/** The model each agent role runs on until Settings choose others (Storyboard and Scene code: Opus; visual review: Sonnet). */
+export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5", review: "claude-sonnet-5-5" };
 
 export type Models = typeof DEFAULT_MODELS;
 
@@ -38,6 +39,8 @@ export type GenerationOptions = {
   connector: Connector;
   checker: Checker;
   previews: Previews;
+  /** The Renderer's stills of a unit, for its visual review. */
+  stills: Stills;
   projects: Projects;
   clock: Clock;
   /** Where agent sessions get their workspace folders. */
@@ -65,7 +68,7 @@ const IDLE: GenerationStatus = { state: "idle", units: [] };
  * Every finished unit is stored at once and the video plays as they finish. There is no approval
  * between the Storyboard and the Scenes, and nothing starts until Generate is pressed.
  */
-export function createGeneration({ connector, checker, previews, projects, clock, workDir, models = DEFAULT_MODELS }: GenerationOptions) {
+export function createGeneration({ connector, checker, previews, stills, projects, clock, workDir, models = DEFAULT_MODELS }: GenerationOptions) {
   const videos = new Map<string, ReturnType<typeof createStatusStore<GenerationStatus>>>();
   const running = new Set<string>();
 
@@ -155,7 +158,8 @@ export function createGeneration({ connector, checker, previews, projects, clock
     const saveRecord = () => projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), startedAt });
     const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: "queued", attempts: 0 }]));
     const code: Record<string, UnitCode> = {};
-    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, progress, store });
+    const notes: Record<string, string> = {};
+    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store });
     const failed = (fileError: { path: string; message: string }) =>
       publish({ state: "failed", error: { code: "FILE_FAILED", path: fileError.path, message: fileError.message } });
 
@@ -180,6 +184,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
         brief,
         unit,
         baseline,
+        review: (passing) => reviewUnit({ ...agent, model: models.review, stills, storyboard, transcript, rules, preset, brief, unit, code: passing }),
         onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
       });
 
@@ -192,12 +197,17 @@ export function createGeneration({ connector, checker, previews, projects, clock
 
         code[unit.id] = outcome.code;
         content.units[unit.id] = hash;
+
+        if (outcome.note) {
+          notes[unit.id] = outcome.note;
+          content.flags.push({ unit: unit.id, kind: "review-note", reason: outcome.note });
+        }
       } else {
         content.flags.push(flagOf(unit, outcome.reason));
       }
 
       const { error: saveError } = await saveRecord();
-      await publish({}, { id: unit.id, status: outcome.code ? "ready" : "fallback", attempts: outcome.attempts });
+      await publish({}, { id: unit.id, status: statusOf(outcome), attempts: outcome.attempts });
 
       return saveError ? fileErrorOf(saveError) : undefined;
     });
@@ -224,7 +234,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
    * Publishes the video's status with a preview of it so far: units with code play it, the rest play
    * as the Storyboard animatic, or as fallback Scenes once they've failed. One at a time, in order.
    */
-  function publisher({ ref, storyboard, transcript, rules, preset, code, progress, store }: PublishContext) {
+  function publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store }: PublishContext) {
     let last = Promise.resolve();
 
     return (change: Partial<GenerationStatus>, unit?: GenerationUnit) => {
@@ -236,7 +246,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
         const units = [...progress.values()];
         const pending = Object.fromEntries(units.filter(({ status }) => isWork(status)).map(({ id, status }) => [id, status as UnitWork]));
         const { data: video } = await projects.video(ref.projectId, ref.format);
-        const source = { storyboard, transcript, rules, preset, code: { ...code }, pending, voiceover: video?.voiceoverPath };
+        const source = { storyboard, transcript, rules, preset, code: { ...code }, pending, notes: { ...notes }, voiceover: video?.voiceoverPath };
         const { preview, previewError } = await previews.open(source).then(
           ({ data, error }) => ({ preview: data, previewError: error ? previewErrorOf(error) : undefined }),
           (cause: unknown) => ({ preview: null, previewError: thrown(cause) }),
@@ -277,6 +287,7 @@ type PublishContext = {
   rules: ReturnType<typeof storyboardRules>;
   preset: StylePreset;
   code: Record<string, UnitCode>;
+  notes: Record<string, string>;
   progress: Map<string, GenerationUnit>;
   store: ReturnType<typeof createStatusStore<GenerationStatus>>;
 };
@@ -285,6 +296,15 @@ type FileFailure = { path: string; message: string };
 
 function isWork(status: GenerationUnit["status"]): boolean {
   return status === "queued" || status === "writing" || status === "checking";
+}
+
+/** A unit plays its code, flagged when its repair was reverted, or its fallback Scene. */
+function statusOf(outcome: UnitOutcome): GenerationUnit["status"] {
+  if (!outcome.code) {
+    return "fallback";
+  }
+
+  return outcome.note ? "flagged" : "ready";
 }
 
 function flagOf(unit: Unit, reason: string): Flag {

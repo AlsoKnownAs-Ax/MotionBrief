@@ -218,8 +218,8 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
   return (
     <button
       type="button"
-      title={`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${formatTime(scene.start)} to ${formatTime(scene.end)}`}
-      aria-label={`${sceneName(scene)}, ${SCENE_TYPE_LABELS[scene.type]}, ${status.label}, from ${formatTime(scene.start)}`}
+      title={`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${formatTime(scene.start)} to ${formatTime(scene.end)}${scene.note ? `\nReview note: ${scene.note}` : ""}`}
+      aria-label={`${sceneName(scene)}, ${SCENE_TYPE_LABELS[scene.type]}, ${status.label}${scene.note ? `: ${scene.note}` : ""}, from ${formatTime(scene.start)}`}
       className="absolute flex items-center gap-2 overflow-hidden rounded-md bg-surface-1 p-1.5 text-left transition-colors hover:bg-surface-2"
       style={{ left: scene.start * px, width, top, height }}
       onClick={() => onSeek(scene.start)}
@@ -236,6 +236,7 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, onSeek }: Scen
             <span className="text-ink-muted tabular-nums">{scene.number}</span> {SCENE_TYPE_LABELS[scene.type]}
           </span>
           {badge}
+          {scene.note && <span className="max-w-full truncate text-app-xs text-ink-muted">{scene.note}</span>}
         </span>
       )}
     </button>

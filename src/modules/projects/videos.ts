@@ -14,12 +14,15 @@ const UNITS_DIR = "units";
 const VERSIONS_DIR = "versions";
 const GENERATION_FILE = "generation.json";
 
-/** A unit that plays something other than its own Scene code, and why. */
+/** A unit the creator should look at, and why. */
 export const FlagSchema = z.object({
   unit: z.string(),
-  /** Its code kept failing the checks, so it plays as its fallback Scene. */
-  kind: z.literal("fallback"),
-  /** The last findings, for the creator. */
+  /**
+   * `fallback`: its code kept failing the checks, so it plays as its fallback Scene. `review-note`: it plays
+   * its code, but its visual review's repair was reverted, so the reviewer's complaint stands.
+   */
+  kind: z.enum(["fallback", "review-note"]),
+  /** The last findings, or the reviewer's sentence, for the creator. */
   reason: z.string(),
 });
 

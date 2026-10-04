@@ -78,6 +78,7 @@ export function Player({ preview }: { preview: Preview }) {
 
 const SEGMENT_COLORS = {
   ready: "bg-[#3a3a3a]",
+  flagged: "bg-status-flagged",
   fallback: "bg-status-fallback",
   queued: "bg-status-working-tint",
   writing: "bg-status-working",
@@ -158,7 +159,7 @@ function Scrubber({ scenes, duration, time, onSeek }: ScrubberProps) {
       {scenes.map((scene) => (
         <div
           key={scene.id}
-          title={`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${SCENE_STATUS[scene.status].label}`}
+          title={`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${SCENE_STATUS[scene.status].label}${scene.note ? `: ${scene.note}` : ""}`}
           className={cn(
             "absolute top-[9px] h-1.5 rounded-[2px] transition-[top,height] group-hover:top-2 group-hover:h-2",
             SEGMENT_COLORS[scene.status],

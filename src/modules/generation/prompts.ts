@@ -13,6 +13,7 @@ import { pacingFor, type PresetBrief } from "../style";
 
 export const STORYBOARD_TOOL = "submit_storyboard";
 export const SCENE_CODE_TOOL = "submit_scene_code";
+export const REVIEW_TOOL = "submit_review";
 
 /** Ends a sentence, optionally followed by closing quotes or brackets. */
 const SENTENCE_END = /[.?!]["')\]”’]*$/;
@@ -180,6 +181,40 @@ ${findings.map(findingLine).join("\n")}`;
 
 export function noCodeMessage(): string {
   return `No code was handed in. Hand in the unit's {css, html, js} with the ${SCENE_CODE_TOOL} tool.`;
+}
+
+/** The visual reviewer: judges one unit's rendered stills once, against its Storyboard entries and the Style Preset. */
+export function reviewSystem(format: Format, brief: PresetBrief): string {
+  const { width, height } = FRAME_SIZES[format];
+
+  return `You are the visual reviewer for MotionBrief, which turns a Voiceover into a motion-graphics explainer video. You look at still frames of one unit (one Scene, or the Scenes sharing a Canvas) after its code passed every automatic check, and judge them against its Storyboard entries and the Style Preset. Hand in your verdict with the ${REVIEW_TOOL} tool.
+
+The frames are ${width}x${height} (${format}), drawn the way the video renders. Open each still with the Read tool.
+
+Report only concrete, fixable visual defects a viewer would notice: overlapping or colliding elements, text clipped or overflowing its box, content outside the frame${format === "vertical" ? " or inside the bottom Captions band" : ""}, unreadably small text, a Storyboard element missing, connectors that don't touch their nodes, a badly unbalanced or mostly empty composition, cramped layout, colors or treatments that ignore the Style Preset. Don't nitpick taste. Elements may still be arriving in a still taken mid-Scene; judge those by the Scene's last still.
+
+If nothing is wrong, hand in looksRight true with no problems. Otherwise list each problem precisely enough for the unit's author to fix it (which element, where, what is wrong), and write the note: one plain sentence for the creator naming what still looks wrong, shown if the fix doesn't work out.
+
+${brief.review}`;
+}
+
+/** What the reviewer looks at: the unit's Storyboard entries and its stills, saved in its workspace. */
+export function reviewMessage({ unit, stills }: { unit: Unit; stills: { file: string; time: number; sceneId: string }[] }): string {
+  const list = stills.map(({ file, time, sceneId }) => `- ${file}: Scene ${sceneId}, ${seconds(time - unit.start)} s into the unit`).join("\n");
+
+  return `Unit "${unit.id}". Its Storyboard entries:
+${JSON.stringify(unit.scenes, null, 1)}
+
+Its stills, in this folder:
+${list}
+
+Look at every still, then hand in your verdict with ${REVIEW_TOOL}.`;
+}
+
+/** The one repair pass: the reviewer's problems go back to the unit's author. */
+export function repairMessage(problems: string[]): string {
+  return `The unit passed every check, and a visual review of its rendered stills found these problems. Fix them, keep everything that passed (the checks run again), and hand in the whole unit again with ${SCENE_CODE_TOOL}:
+${problems.map((problem) => `- [visual] ${problem}`).join("\n")}`;
 }
 
 export function findingLine({ source, code, message, selector, time }: CheckFinding): string {

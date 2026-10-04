@@ -101,7 +101,7 @@ export function createCore({
   const projects = createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash });
   const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
   const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
-  const generation = createGeneration({ connector, checker, previews, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
+  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return {

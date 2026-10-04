@@ -20,46 +20,63 @@ type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
 export type Stills = ReturnType<typeof createStills>;
 
-/** Stills are this many pixels wide: sharp in a picker card or the Preset editor on a high-density screen. */
+/** Stills are this many pixels wide by default: sharp in a picker card or the Preset editor on a high-density screen. */
 const STILL_WIDTH = 640;
 
 /**
- * Single frames of small videos, such as a Style Preset's sample: assembled in a scratch folder, drawn in the
- * pinned browser, and cached as JPEG files. One browser at a time draws them, so a picker full of Presets never
- * launches a browser per card.
+ * Single frames of videos, such as a Style Preset's sample or a unit for visual review: assembled in a
+ * scratch folder, drawn in the pinned browser, and cached as JPEG files keyed by a hash of what they
+ * show. One browser at a time draws them, so a picker full of Presets never launches a browser per card.
  */
 export function createStills({ cache, chromePath }: StillsOptions) {
-  const drawing = new Map<string, Promise<Result<string, StillError>>>();
+  const drawing = new Map<string, Promise<Result<Uint8Array[], StillError>>>();
   let queue: Promise<unknown> = Promise.resolve();
 
   /** The frame at `time` seconds into the video, as a JPEG data URL. */
   async function still(source: VideoSource, time: number): Promise<Result<string, StillError>> {
-    const key = `stills/${stillId(source, time)}.jpg`;
-    const cached = await cache.get(key);
-    const jpeg = cached && (await readFile(cached).catch(() => undefined));
+    const { data: jpegs, error } = await frames(source, [time]);
 
-    if (jpeg) {
-      return { data: dataUrl(jpeg), error: null };
+    if (error) {
+      return { data: null, error };
     }
 
-    const pending = drawing.get(key);
+    return { data: dataUrl(jpegs[0] ?? new Uint8Array()), error: null };
+  }
+
+  /** The frames at each of `times` seconds into the video, `width` pixels wide, as JPEG bytes in the same order. */
+  async function frames(source: VideoSource, times: number[], width = STILL_WIDTH): Promise<Result<Uint8Array[], StillError>> {
+    const keys = times.map((time) => `stills/${stillId(source, time, width)}.jpg`);
+    const cached = await Promise.all(keys.map(readCached));
+
+    if (cached.every((jpeg) => jpeg !== undefined)) {
+      return { data: cached, error: null };
+    }
+
+    const id = keys.join(" ");
+    const pending = drawing.get(id);
 
     if (pending) {
       return pending;
     }
 
-    const done = queue.then(() => draw(source, time, key));
+    const done = queue.then(() => draw(source, times, width, keys));
     queue = done.catch(() => undefined);
-    drawing.set(key, done);
+    drawing.set(id, done);
 
     try {
       return await done;
     } finally {
-      drawing.delete(key);
+      drawing.delete(id);
     }
   }
 
-  async function draw(source: VideoSource, time: number, key: string): Promise<Result<string, StillError>> {
+  async function readCached(key: string): Promise<Uint8Array | undefined> {
+    const path = await cache.get(key);
+
+    return path ? readFile(path).catch(() => undefined) : undefined;
+  }
+
+  async function draw(source: VideoSource, times: number[], stillWidth: number, keys: string[]): Promise<Result<Uint8Array[], StillError>> {
     const { data: storyboard, error } = validateStoryboard(source.storyboard, source.transcript, source.rules);
 
     if (error) {
@@ -79,19 +96,24 @@ export function createStills({ cache, chromePath }: StillsOptions) {
     try {
       await mkdir(dir, { recursive: true });
       const { width, height } = await assemble({ dir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code });
-      const { data: frame, error: frameError } = await openFramePage({ dir, chromePath, width, height, scale: STILL_WIDTH / width });
+      const { data: frame, error: frameError } = await openFramePage({ dir, chromePath, width, height, scale: stillWidth / width });
 
       if (frameError) {
         return { data: null, error: frameError };
       }
 
       try {
-        await frame.seek(time);
-        const jpeg = await frame.screenshot();
-        // A still that can't be cached is still shown; it is only drawn again next time.
-        await cache.put(key, (path) => writeFile(path, jpeg).then(() => ({ data: null, error: null })));
+        const jpegs: Uint8Array[] = [];
 
-        return { data: dataUrl(jpeg), error: null };
+        for (const [index, time] of times.entries()) {
+          await frame.seek(time);
+          const jpeg = await frame.screenshot();
+          // A still that can't be cached is still shown; it is only drawn again next time.
+          await cache.put(keys[index] ?? "", (path) => writeFile(path, jpeg).then(() => ({ data: null, error: null })));
+          jpegs.push(jpeg);
+        }
+
+        return { data: jpegs, error: null };
       } finally {
         await frame.close();
       }
@@ -100,12 +122,12 @@ export function createStills({ cache, chromePath }: StillsOptions) {
     }
   }
 
-  return { still };
+  return { still, frames };
 }
 
-/** Same video, same moment, same frame: the id names all three. */
-function stillId(source: VideoSource, time: number): string {
-  const key = JSON.stringify({ frame: FRAME_CONTRACT_VERSION, width: STILL_WIDTH, time, source });
+/** Same video, same moment, same size: the id names all three. */
+function stillId(source: VideoSource, time: number, width: number): string {
+  const key = JSON.stringify({ frame: FRAME_CONTRACT_VERSION, width, time, source });
 
   return createHash("sha256").update(key).digest("hex").slice(0, 32);
 }

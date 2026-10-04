@@ -225,13 +225,16 @@ export const VideoSourceSchema = z.object({
   pending: z.record(z.string(), UnitWorkSchema).optional(),
   /** The Voiceover file, played as the video's audio track. Absent, the video plays silent. */
   voiceover: z.string().optional(),
+  /** The visual reviewer's remaining complaint per unit id, for units whose repair was reverted. */
+  notes: z.record(z.string(), z.string()).optional(),
 });
 
 /**
- * How a Scene plays: from its Scene code, or as its fallback Scene; or, while a generation is still
- * working on it, as the Storyboard animatic (its planned elements appearing on their words).
+ * How a Scene plays: from its Scene code (`flagged` when it carries a review note), or as its fallback
+ * Scene; or, while a generation is still working on it, as the Storyboard animatic (its planned
+ * elements appearing on their words).
  */
-export const SceneStatusSchema = z.enum(["ready", "fallback", ...UnitWorkSchema.options]);
+export const SceneStatusSchema = z.enum(["ready", "flagged", "fallback", ...UnitWorkSchema.options]);
 
 /** A video laid out in time, as the editor's player and Scene timeline show it. Times are seconds. */
 export const VideoTimelineSchema = z.object({
@@ -250,6 +253,8 @@ export const VideoTimelineSchema = z.object({
       start: z.number().nonnegative(),
       end: z.number().nonnegative(),
       status: SceneStatusSchema,
+      /** The visual reviewer's sentence on a `flagged` Scene: what still looks wrong after its reverted repair. */
+      note: z.string().optional(),
       /** The Transition from the Scene before into this one; the first Scene has none. */
       transitionIn: TransitionTypeSchema.optional(),
     }),
