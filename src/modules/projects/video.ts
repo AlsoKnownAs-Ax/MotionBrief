@@ -10,6 +10,11 @@ export const VIDEO_FILE = "video.json";
 export const VideoDocumentSchema = z.object({
   /** Where the creator last saved this video's MP4: a location they chose, outside the Project. */
   lastExportPath: z.string().optional(),
+  /**
+   * The Version whose units last passed the re-check after a frame major update, and the frame contract they passed:
+   * that Version isn't re-checked again until the next major update.
+   */
+  frameChecked: z.object({ version: z.number().int().positive(), frameContractVersion: z.string() }).optional(),
 });
 
 export type VideoDocument = z.infer<typeof VideoDocumentSchema>;

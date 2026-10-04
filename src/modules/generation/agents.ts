@@ -13,6 +13,7 @@ import {
   findingsMessage,
   noCodeMessage,
   noStoryboardMessage,
+  repairMessage,
   SCENE_CODE_TOOL,
   sceneCodeSystem,
   STORYBOARD_TOOL,
@@ -88,8 +89,14 @@ export async function writeStoryboard({ transcript, rules, brief, ...run }: Stor
   });
 }
 
-/** How a unit ended: its passing Scene code, or why it plays as its fallback Scene. */
-export type UnitOutcome = { code: UnitCode; attempts: number } | { code: null; attempts: number; reason: string };
+/**
+ * How a unit ended: its passing Scene code, with the reviewer's note when its repair was reverted, or
+ * why it plays as its fallback Scene.
+ */
+export type UnitOutcome = { code: UnitCode; attempts: number; note?: string } | { code: null; attempts: number; reason: string };
+
+/** A visual review of passing code: what to repair, or `null` when it looks right or couldn't be reviewed. */
+export type ReviewCode = (code: UnitCode) => Promise<{ problems: string[]; note: string } | null>;
 
 type UnitRun = AgentRun & {
   checker: Checker;
@@ -101,6 +108,8 @@ type UnitRun = AgentRun & {
   unit: Unit;
   /** What the Checker finds on the page with no unit's code, so page-wide findings the unit didn't cause are told apart. */
   baseline: CheckFinding[];
+  /** Reviews the code once it passes the checks; its problems get one repair pass. */
+  review: ReviewCode;
   /** The unit is being written (`attempts` handed in so far) or checked. */
   onProgress: (status: "writing" | "checking", attempts: number) => void;
   /** Said after the unit's brief in the first message, such as what a Revision asks of it. */
@@ -110,9 +119,11 @@ type UnitRun = AgentRun & {
 /**
  * A Scene-code subagent: writes one unit, which the Checker checks on its own (every other unit drawn
  * as its fallback Scene), and rewrites it with the findings at most twice. A finding that names no unit
- * counts against it unless the page has it without the unit's code too.
+ * counts against it unless the page has it without the unit's code too. Passing code is reviewed once
+ * and repaired at most once; a repair that fails the checks is reverted to the passing code, which then
+ * carries the reviewer's note.
  */
-export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, onProgress, request, ...run }: UnitRun): Promise<UnitOutcome> {
+export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, review, onProgress, request, ...run }: UnitRun): Promise<UnitOutcome> {
   let submitted: UnitCode | undefined;
   const submit = defineHostTool({
     name: SCENE_CODE_TOOL,
@@ -130,6 +141,49 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
   });
   const options = { label: `scene-code ${unit.id}`, systemPrompt: sceneCodeSystem(storyboard.format, brief), hostTools: [submit] };
   let attempts = 0;
+  // Read through a function: the host tool sets it while a turn runs.
+  const handedIn = () => submitted;
+  const known = new Set(baseline.map(findingKey));
+
+  /** The unit's own findings on the code; an error when the checks couldn't run. */
+  async function findingsOf(code: UnitCode): Promise<Result<CheckFinding[], string>> {
+    const { data: report, error } = await checker.check({ storyboard, transcript, rules, preset, code: { [unit.id]: code } });
+
+    if (error) {
+      return { data: null, error: error.code };
+    }
+
+    return { data: report.findings.filter((finding) => finding.unit === unit.id || (finding.unit === undefined && !known.has(findingKey(finding)))), error: null };
+  }
+
+  /** The one review and repair pass of passing code: the repair is kept only if it passes the checks too. */
+  async function reviewed(session: Session, code: UnitCode): Promise<UnitOutcome> {
+    const problems = await review(code);
+
+    if (!problems) {
+      return { code, attempts };
+    }
+
+    const reverted = { code, attempts, note: problems.note };
+    submitted = undefined;
+    onProgress("writing", attempts);
+    const turnError = await runTurn(session, repairMessage(problems.problems));
+    const repair = handedIn();
+
+    if (turnError || !repair) {
+      return reverted;
+    }
+
+    attempts += 1;
+    onProgress("checking", attempts);
+    const { data: findings } = await findingsOf(repair);
+
+    if (!findings || findings.length > 0) {
+      return { ...reverted, attempts };
+    }
+
+    return { code: repair, attempts };
+  }
 
   const outcome = await withSession(run, options, async (session): Promise<Result<UnitOutcome, never>> => {
     let message = request ? `${unitMessage({ storyboard, preset, unit, transcript })}\n\n${request}` : unitMessage({ storyboard, preset, unit, transcript });
@@ -153,17 +207,14 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
       attempts += 1;
       onProgress("checking", attempts);
       const code = submitted;
-      const { data: report, error } = await checker.check({ storyboard, transcript, rules, preset, code: { [unit.id]: code } });
+      const { data: findings, error } = await findingsOf(code);
 
-      if (error) {
-        return { data: { code: null, attempts, reason: `The checks couldn't run: ${error.code}` }, error: null };
+      if (error !== null) {
+        return { data: { code: null, attempts, reason: `The checks couldn't run: ${error}` }, error: null };
       }
 
-      const known = new Set(baseline.map(findingKey));
-      const findings = report.findings.filter((finding) => finding.unit === unit.id || (finding.unit === undefined && !known.has(findingKey(finding))));
-
       if (findings.length === 0) {
-        return { data: { code, attempts }, error: null };
+        return { data: await reviewed(session, code), error: null };
       }
 
       reason = summary(findings);
@@ -195,7 +246,7 @@ export type SessionSetup = { label: string; systemPrompt: string; hostTools: Hos
 export async function withSession<T, E>(
   { connector, model, workDir, signal }: AgentRun,
   setup: SessionSetup,
-  work: (session: Session) => Promise<Result<T, E>>,
+  work: (session: Session, workspaceDir: string) => Promise<Result<T, E>>,
 ): Promise<Result<T, E | { code: "AGENT_FAILED"; error: ConnectorError }>> {
   const workspaceDir = join(workDir, randomUUID());
   await mkdir(workspaceDir, { recursive: true });
@@ -211,7 +262,7 @@ export async function withSession<T, E>(
     signal?.addEventListener("abort", interrupt);
 
     try {
-      return await work(session);
+      return await work(session, workspaceDir);
     } finally {
       signal?.removeEventListener("abort", interrupt);
       session.close();
@@ -222,7 +273,7 @@ export async function withSession<T, E>(
 }
 
 /** Sends one message and waits for the agent's turn to end; a turn that doesn't complete answers with its error. */
-async function runTurn(session: Session, message: string): Promise<ConnectorError | undefined> {
+export async function runTurn(session: Session, message: string): Promise<ConnectorError | undefined> {
   const { error } = await sendTurn(session, message);
 
   return error ?? undefined;

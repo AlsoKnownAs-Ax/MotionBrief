@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { FramePage } from "../modules/checker";
 import { bundledPreset } from "../modules/style";
 import transcript from "./fixtures/checker/transcript.json";
-import { closeFrame, FRAME_TIMEOUT_MS, openFrame, type OpenFrame } from "./test-support/frame";
+import { CLOSE_TIMEOUT_MS, closeFrame, FRAME_TIMEOUT_MS, openFrame, type OpenFrame } from "./test-support/frame";
 import { lookCheckCode, lookCheckStoryboard } from "./test-support/look-check";
 
 type PresetId = Parameters<typeof bundledPreset>[0];
@@ -18,7 +18,7 @@ function presetFrame(id: PresetId) {
     await frame.page.seek(8);
   }, FRAME_TIMEOUT_MS);
 
-  afterAll(() => closeFrame(frame));
+  afterAll(() => closeFrame(frame), CLOSE_TIMEOUT_MS);
 
   return () => frame!.page;
 }

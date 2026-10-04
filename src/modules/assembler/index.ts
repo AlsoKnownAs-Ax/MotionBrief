@@ -1,2 +1,2 @@
 export { assemble, type AssembledPage, type AssembleOptions } from "./assemble";
-export { planUnits, type Unit } from "./units";
+export { planUnits, unitsToRegenerate, type Unit } from "./units";

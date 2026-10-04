@@ -177,6 +177,8 @@ export const StoryboardIssueSchema = z.object({
     "TRANSITION",
     "CANVAS",
     "CAPTIONS",
+    /** A Revision's patch changes Scenes outside the ones the creator selected. */
+    "SCOPE",
   ]),
   /** The Scene at fault; absent when the issue is with the Storyboard as a whole. */
   sceneId: z.string().optional(),
@@ -225,13 +227,16 @@ export const VideoSourceSchema = z.object({
   pending: z.record(z.string(), UnitWorkSchema).optional(),
   /** The Voiceover file, played as the video's audio track. Absent, the video plays silent. */
   voiceover: z.string().optional(),
+  /** The visual reviewer's remaining complaint per unit id, for units whose repair was reverted. */
+  notes: z.record(z.string(), z.string()).optional(),
 });
 
 /**
- * How a Scene plays: from its Scene code, or as its fallback Scene; or, while a generation is still
- * working on it, as the Storyboard animatic (its planned elements appearing on their words).
+ * How a Scene plays: from its Scene code (`flagged` when it carries a review note), or as its fallback
+ * Scene; or, while a generation is still working on it, as the Storyboard animatic (its planned
+ * elements appearing on their words).
  */
-export const SceneStatusSchema = z.enum(["ready", "fallback", ...UnitWorkSchema.options]);
+export const SceneStatusSchema = z.enum(["ready", "flagged", "fallback", ...UnitWorkSchema.options]);
 
 /** A video laid out in time, as the editor's player and Scene timeline show it. Times are seconds. */
 export const VideoTimelineSchema = z.object({
@@ -250,6 +255,8 @@ export const VideoTimelineSchema = z.object({
       start: z.number().nonnegative(),
       end: z.number().nonnegative(),
       status: SceneStatusSchema,
+      /** The visual reviewer's sentence on a `flagged` Scene: what still looks wrong after its reverted repair. */
+      note: z.string().optional(),
       /** The Transition from the Scene before into this one; the first Scene has none. */
       transitionIn: TransitionTypeSchema.optional(),
     }),
@@ -279,6 +286,8 @@ export const ExportErrorSchema = z.discriminatedUnion("code", [
   z.object({ code: z.literal("RENDER_FAILED"), message: z.string() }),
   /** The chosen folder isn't there, or the MP4 couldn't be moved into it. */
   z.object({ code: z.literal("SAVE_FAILED"), path: z.string(), message: z.string() }),
+  /** MotionBrief is restarting into an app update, so it starts no new exports. */
+  z.object({ code: z.literal("UPDATING") }),
 ]);
 
 /** Where an export stands: rendering through its stages, then saved or failed. */
@@ -525,10 +534,11 @@ export const RevisionUnitSchema = z.object({
 export const RevisionStatusSchema = z.object({
   /**
    * `idle` until a request is sent; `revising` while the agent reads it; `rebuilding` while units are re-rendered and
-   * regenerated. It ends `answered` (a reply or one clarifying question, no Version), `done` (a new Version), `failed`
-   * or `stopped`; neither of the last two leaves a Version.
+   * regenerated; `saving` once its Version is being saved, when Stop is too late. It ends `answered` (a reply or one
+   * clarifying question, no Version), `done` (a new Version), `failed` or `stopped`; neither of the last two leaves a
+   * Version.
    */
-  state: z.enum(["idle", "revising", "rebuilding", "answered", "done", "failed", "stopped"]),
+  state: z.enum(["idle", "revising", "rebuilding", "saving", "answered", "done", "failed", "stopped"]),
   request: RevisionRequestSchema.optional(),
   /** Scenes of the current Version the Revision is working on: the scope while the agent reads it, then what it rebuilds. */
   affected: z.array(z.string()),
@@ -545,6 +555,26 @@ export const RevisionStatusSchema = z.object({
   /** Set when the new Version is saved but couldn't be shown. */
   previewError: GenerationPreviewErrorSchema.optional(),
   error: RevisionErrorSchema.optional(),
+});
+
+/**
+ * What opening a video found after an app update changed the frame's major version: its units were checked again
+ * against the new frame, at no cost, and these no longer pass. They play as flagged fallback Scenes in a new Version.
+ */
+export const FrameUpdateSchema = z.object({
+  /** The frame contract the units were written against, and the one they were checked against now. */
+  previous: z.string(),
+  frameContractVersion: z.string(),
+  /** The units that became flagged fallbacks, named after their Scene or Canvas. */
+  units: z.array(z.string()).min(1),
+});
+
+/** A saved video, opened to play its newest Version. */
+export const OpenedVideoSchema = z.object({
+  version: z.number().int().positive(),
+  preview: PreviewSchema,
+  /** Present when this open re-checked the units after a frame major update and some failed. */
+  frameUpdate: FrameUpdateSchema.optional(),
 });
 
 /** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */
@@ -864,6 +894,42 @@ export const coreContract = {
     revision: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(RevisionStatusSchema)),
     /** Stops the running Revision and discards it: the current Version stays as it is. */
     stopRevision: oc.input(VideoRefSchema),
+    /**
+     * Opens a saved video to play its newest Version. After an app update that changed the frame's major version,
+     * its units are first checked again (lint, check and the contract; no agent). Units that fail become flagged
+     * fallbacks in a new Version, and nothing is regenerated until the creator asks.
+     */
+    open: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        /** The Project has no video in this Format yet. */
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        /** A Version or unit file in the Project can't be read as one. */
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(VideoRefSchema)
+      .output(OpenedVideoSchema),
+    /**
+     * Regenerates flagged units with the Scene-code model, checked and retried like a first generation, and saves
+     * the result as a new Version. Progress streams through `generation`. Only ever starts when the creator asks.
+     */
+    retry: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        GENERATING: { data: z.object({ projectId: z.string() }) },
+        /** The newest Version doesn't flag this unit, so there is nothing to retry. */
+        NOT_FLAGGED: { data: z.object({ unit: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(VideoRefSchema.extend({ units: z.array(z.string()).min(1) })),
   },
   cache: {
     status: oc.output(CacheStatusSchema),
@@ -937,3 +1003,5 @@ export type RevisionRequest = z.infer<typeof RevisionRequestSchema>;
 export type RevisionError = z.infer<typeof RevisionErrorSchema>;
 export type RevisionUnit = z.infer<typeof RevisionUnitSchema>;
 export type RevisionStatus = z.infer<typeof RevisionStatusSchema>;
+export type FrameUpdate = z.infer<typeof FrameUpdateSchema>;
+export type OpenedVideo = z.infer<typeof OpenedVideoSchema>;

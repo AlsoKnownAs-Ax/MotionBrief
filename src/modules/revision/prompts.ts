@@ -45,8 +45,6 @@ type RevisionContext = {
 
 /** The request with what it is about: the Transcript, the current Storyboard, the Style Preset, the scope and earlier Revisions. */
 export function revisionMessage({ storyboard, transcript, preset, captions, history, request, scope }: RevisionContext): string {
-  const earlier = history.map(({ request: asked, summary }) => `- "${asked}": ${summary}`).join("\n");
-
   return `Transcript (index:word, with the time each word starts):
 ${transcript.words.map(({ text, start }, index) => `${index}:${text}@${start.toFixed(1)}`).join(" ")}
 
@@ -54,12 +52,36 @@ The current Storyboard:
 ${JSON.stringify(storyboard, null, 1)}
 
 Style Preset "${preset.name}": ${preset.direction}
-Captions are ${captions ? "on" : "off"}.
-${earlier ? `\nEarlier Revisions, oldest first:\n${earlier}\n` : ""}
-${scope.length > 0 ? `The creator selected Scenes ${scope.join(", ")}: the request is about them.` : "No Scenes are selected: the request is about the whole video."}
+${captionsLine(captions)}
+${historyLines(history)}
+${scopeLine(scope)}
 
 The request:
 ${request}`;
+}
+
+function captionsLine(captions: boolean): string {
+  if (captions) {
+    return "Captions are on.";
+  }
+
+  return "Captions are off.";
+}
+
+function historyLines(history: RevisionRecord[]): string {
+  if (history.length === 0) {
+    return "";
+  }
+
+  return `\nEarlier Revisions, oldest first:\n${history.map(({ request: asked, summary }) => `- "${asked}": ${summary}`).join("\n")}\n`;
+}
+
+function scopeLine(scope: string[]): string {
+  if (scope.length === 0) {
+    return "No Scenes are selected: the request is about the whole video.";
+  }
+
+  return `The creator selected Scenes ${scope.join(", ")}: the request is about them, and only they may change.`;
 }
 
 export function patchIssuesMessage(issues: StoryboardIssue[]): string {
@@ -69,7 +91,7 @@ ${issues.map(issueLine).join("\n")}`;
 
 /** What a Scene-code subagent regenerating a unit is told on top of its brief: the instructions, and the code it had. */
 export function regenerateRequest(instructions: string[], previous: UnitCode | undefined): string {
-  const asked = instructions.length > 0 ? `THE CREATOR ASKED FOR THIS CHANGE:\n${instructions.map((text) => `- ${text}`).join("\n")}\n\n` : "";
+  const asked = instructionLines(instructions);
 
   if (!previous) {
     return asked.trim();
@@ -77,4 +99,12 @@ export function regenerateRequest(instructions: string[], previous: UnitCode | u
 
   return `${asked}The unit's code before this Revision, which passed every check. Keep what still fits and change what the Storyboard entries or the request now ask for:
 ${JSON.stringify(previous, null, 1)}`;
+}
+
+function instructionLines(instructions: string[]): string {
+  if (instructions.length === 0) {
+    return "";
+  }
+
+  return `THE CREATOR ASKED FOR THIS CHANGE:\n${instructions.map((text) => `- ${text}`).join("\n")}\n\n`;
 }

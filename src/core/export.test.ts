@@ -3,9 +3,11 @@ import { mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { createRouterClient } from "@orpc/server";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ExportStatus, UnitCode, VideoRef, VideoSource } from "../contract";
 import storyboard from "./fixtures/checker/storyboard.json";
+import { createCore } from "./composition-root";
 import transcript from "./fixtures/checker/transcript.json";
 import { ffprobePath } from "./native";
 import { BLUEPRINT, connect, RULES } from "./test-support/checker";
@@ -59,8 +61,8 @@ async function openPreview(options: Parameters<typeof connect>[0] = {}) {
 }
 
 /** The same, as the horizontal video of a Project the core has open. */
-async function openVideo() {
-  const opened = await openPreview();
+async function openVideo(options: Parameters<typeof connect>[0] = {}) {
+  const opened = await openPreview(options);
   const project = await opened.client.project.create({ voiceoverPath: voiceover, format: "horizontal" });
   closers.push(() => opened.client.project.close({ projectId: project.id }));
   const video: VideoRef = { projectId: project.id, format: "horizontal" };
@@ -98,9 +100,11 @@ describe("Export MP4", () => {
     let opened: Awaited<ReturnType<typeof openVideo>>;
     let target = "";
     let statuses: ExportStatus[] = [];
+    const running: number[] = [];
+    const onExportsChange = (count: number) => running.push(count);
 
     beforeAll(async () => {
-      opened = await openVideo();
+      opened = await openVideo({ onExportsChange });
       target = join(workDir, "Exported video.mp4");
       statuses = await collect(await opened.client.export.mp4({ previewId: opened.previewId, path: target, video: opened.video }));
     }, EXPORT_TIMEOUT_MS);
@@ -143,6 +147,10 @@ describe("Export MP4", () => {
 
       expect(saved).toEqual({ lastExportPath: target });
     });
+
+    it("telling main while it runs, so an app update waits for it", () => {
+      expect(running).toEqual([1, 0]);
+    });
   });
 
   it(
@@ -172,6 +180,21 @@ describe("Export MP4", () => {
     },
     EXPORT_TIMEOUT_MS,
   );
+
+  it("starts no export while an app update holds them, and starts again once released", async () => {
+    const appDataDir = await mkdtemp(join(workDir, "app-data-"));
+    const { router, exports } = createCore({ appVersion: "1.2.3", appDataDir, cacheDir: join(appDataDir, "cache") });
+    const client = createRouterClient(router);
+    const { id: previewId } = await client.preview.open(await source());
+    const target = join(workDir, "missing folder", "Held.mp4");
+
+    expect(exports.hold()).toBe(0);
+    expect(await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }))).toEqual([{ state: "failed", error: { code: "UPDATING" } }]);
+
+    exports.release();
+    // Past the hold: this one fails on its missing folder instead.
+    expect(await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }))).toMatchObject([{ state: "failed", error: { code: "SAVE_FAILED" } }]);
+  });
 
   it("refuses a video that isn't open", async () => {
     const statuses = async () => collect(await connect().export.mp4({ previewId: "0123456789abcdef", path: join(workDir, "Nope.mp4"), video: UNOPENED }));

@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
-import type { GenerateError, Generation } from "../generation";
+import type { GenerateError, Generation, OpenVideoError, RetryError } from "../generation";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
@@ -218,6 +218,10 @@ export function createCoreRouter({
       }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
       stopRevision: api.video.stopRevision.handler(({ input }) => revisions.stop(input)),
+      open: api.video.open.handler(async ({ input }) => dataOrThrow(await generation.open(input))),
+      retry: api.video.retry.handler(async ({ input: { units, ...video } }) => {
+        dataOrThrow(await generation.retry(video, units));
+      }),
     },
     cache: {
       status: api.cache.status.handler(() => cache.status()),
@@ -236,7 +240,9 @@ function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null
   return result.data;
 }
 
-type CodedResult = { data: unknown; error: null } | { data: null; error: ProjectsError | PresetStoreError | GenerateError | ReviseError };
+type CodedResult =
+  | { data: unknown; error: null }
+  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
 function stillUnavailable(error: StillError): CheckerUnavailable {

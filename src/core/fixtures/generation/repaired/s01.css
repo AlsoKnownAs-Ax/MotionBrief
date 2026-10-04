@@ -1,0 +1,3 @@
+.hook { display: flex; flex-direction: column; justify-content: center; gap: 64px; }
+.kicker { display: flex; align-items: center; gap: 24px; }
+.kicker .mb-icon { font-size: 64px; }

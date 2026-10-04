@@ -1,13 +1,13 @@
 import { ArrowUpIcon, MessageSquareIcon, SquareIcon, XIcon } from "lucide-react";
-import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
-import type { TimelineScene } from "../../../contract";
+import type { RevisionStatus, TimelineScene } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_TYPE_LABELS, sceneName } from "./labels";
 import { useOpenVideo } from "./open-video";
-import { isRevising, useRevision, type ChatMessage } from "./revision";
+import { isRevising, nameOf, useRevision, type ChatMessage } from "./revision";
 
 /** The Chat tab: flagged Scenes, the conversation with the Revision agent, and the composer scoped by the selection. */
 export function Chat() {
@@ -25,7 +25,7 @@ function Thread({ scenes }: { scenes: TimelineScene[] }) {
   const messages = useRevision((state) => state.messages);
   const status = useRevision((state) => state.status);
   const generating = useGeneration((state) => isGenerating(state.status));
-  const flagged = generating ? [] : scenes.filter(({ status: sceneStatus }) => sceneStatus === "fallback");
+  const flagged = scenes.filter(({ status: sceneStatus }) => !generating && sceneStatus === "fallback");
   const ref = useRef<HTMLDivElement>(null);
   const working = isRevising(status);
 
@@ -53,21 +53,38 @@ function Thread({ scenes }: { scenes: TimelineScene[] }) {
       {messages.map((message) => (
         <Message key={message.id} message={message} scenes={scenes} />
       ))}
-      {working && (
-        <div role="status" className="flex gap-2.5 text-app-sm leading-[1.45]">
-          <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 animate-pulse rounded-full bg-status-working" />
-          <span className="flex flex-col gap-0.5">
-            <span className="text-app-xs text-ink-muted">Agent · working</span>
-            <span>{status?.state === "rebuilding" ? rebuildingText(status.units.length) : "Reading the request"}</span>
-          </span>
-        </div>
-      )}
+      {working ? <Working status={status} /> : null}
     </div>
   );
 }
 
-function rebuildingText(units: number) {
-  return `Rebuilding ${units} ${units === 1 ? "Scene" : "Scenes"}. The current Version plays until it's ready.`;
+/** The agent at work, in the thread: reading the request, then rebuilding Scenes. */
+function Working({ status }: { status?: RevisionStatus }) {
+  return (
+    <div role="status" className="flex gap-2.5 text-app-sm leading-[1.45]">
+      <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 animate-pulse rounded-full bg-status-working" />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-app-xs text-ink-muted">Agent · working</span>
+        <span>{workingText(status)}</span>
+      </span>
+    </div>
+  );
+}
+
+function workingText(status: RevisionStatus | undefined) {
+  if (status?.state !== "rebuilding" && status?.state !== "saving") {
+    return "Reading the request";
+  }
+
+  return `Rebuilding ${status.units.length} ${plural(status.units.length, "Scene")}. The current Version plays until it's ready.`;
+}
+
+function plural(count: number, noun: string) {
+  if (count === 1) {
+    return noun;
+  }
+
+  return `${noun}s`;
 }
 
 /** A Scene playing as its fallback, with Revise… to ask for it in chat. */
@@ -93,61 +110,62 @@ function FlagCard({ scene }: { scene: TimelineScene }) {
   );
 }
 
-function Message({ message, scenes }: { message: ChatMessage; scenes: TimelineScene[] }) {
-  switch (message.role) {
-    case "creator":
-      return (
-        <div className="max-w-[88%] self-end rounded-[14px_14px_4px_14px] bg-surface-2 px-3 py-[9px] text-app-sm leading-[1.45] whitespace-pre-wrap">
-          {message.scope.length > 0 && (
-            <span className="mb-1.5 flex flex-wrap gap-1">
-              {message.scope.map((sceneId) => (
-                <Chip key={sceneId} label={nameOf(scenes, sceneId)} />
-              ))}
-            </span>
-          )}
-          {message.text}
-        </div>
-      );
-    case "agent":
-      return (
-        <div className="flex gap-2.5 text-app-sm leading-[1.45]">
-          <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 rounded-full bg-[#555]" />
-          <span className="flex flex-col gap-0.5">
-            <span className="text-app-xs text-ink-muted">Agent</span>
-            <span>{message.text}</span>
-          </span>
-        </div>
-      );
-    case "event":
-      return (
-        <div className="flex items-center gap-2 text-app-xs text-ink-muted before:h-px before:flex-1 before:bg-hairline after:h-px after:flex-1 after:bg-hairline">
-          {message.text}
-        </div>
-      );
-    case "note":
-      return (
-        <p role={message.tone === "fallback" ? "alert" : undefined} className={cn("px-3 text-center text-app-xs", message.tone === "fallback" ? "text-status-fallback-ink" : "text-ink-muted")}>
-          {message.text}
-        </p>
-      );
-  }
+/** How each kind of chat line is drawn. */
+const MESSAGES = {
+  creator: ({ message, scenes }) => (
+    <div className="max-w-[88%] self-end rounded-[14px_14px_4px_14px] bg-surface-2 px-3 py-[9px] text-app-sm leading-[1.45] whitespace-pre-wrap">
+      {message.scope?.length ? (
+        <span className="mb-1.5 flex flex-wrap gap-1">
+          {message.scope.map((sceneId) => (
+            <Chip key={sceneId} label={nameOf(scenes, sceneId)} />
+          ))}
+        </span>
+      ) : null}
+      {message.text}
+    </div>
+  ),
+  agent: ({ message }) => (
+    <div className="flex gap-2.5 text-app-sm leading-[1.45]">
+      <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 rounded-full bg-[#555]" />
+      <span className="flex flex-col gap-0.5">
+        <span className="text-app-xs text-ink-muted">Agent</span>
+        <span>{message.text}</span>
+      </span>
+    </div>
+  ),
+  event: ({ message }) => (
+    <div className="flex items-center gap-2 text-app-xs text-ink-muted before:h-px before:flex-1 before:bg-hairline after:h-px after:flex-1 after:bg-hairline">
+      {message.text}
+    </div>
+  ),
+  note: ({ message }) => <Note message={message} />,
+} satisfies Record<ChatMessage["role"], (props: { message: ChatMessage; scenes: TimelineScene[] }) => ReactNode>;
+
+function Message(props: { message: ChatMessage; scenes: TimelineScene[] }) {
+  return MESSAGES[props.message.role](props);
 }
 
-function nameOf(scenes: TimelineScene[], sceneId: string) {
-  const scene = scenes.find(({ id }) => id === sceneId);
+function Note({ message }: { message: ChatMessage }) {
+  if (message.isProblem) {
+    return (
+      <p role="alert" className="px-3 text-center text-app-xs text-status-fallback-ink">
+        {message.text}
+      </p>
+    );
+  }
 
-  return scene ? sceneName(scene) : sceneId;
+  return <p className="px-3 text-center text-app-xs text-ink-muted">{message.text}</p>;
 }
 
 function Chip({ label, onRemove }: { label: string; onRemove?: () => void }) {
   return (
-    <span className={cn("inline-flex h-[22px] items-center gap-0.5 rounded-sm bg-primary/13 text-app-xs font-medium text-primary", onRemove ? "pr-[3px] pl-2" : "px-2")}>
+    <span className={cn("inline-flex h-[22px] items-center gap-0.5 rounded-sm bg-primary/13 px-2 text-app-xs font-medium text-primary", onRemove && "pr-[3px]")}>
       {label}
-      {onRemove && (
+      {onRemove ? (
         <button type="button" aria-label={`Remove ${label} from the request`} className="grid size-[18px] place-items-center rounded-xs hover:bg-primary/20" onClick={onRemove}>
           <XIcon className="size-3" aria-hidden="true" />
         </button>
-      )}
+      ) : null}
     </span>
   );
 }
@@ -175,6 +193,15 @@ function ScopeChips({ scenes }: { scenes: TimelineScene[] }) {
   );
 }
 
+/** Why the composer can't send right now, first match wins; none means it can. */
+const BLOCKED = [
+  { when: ({ isStored }: ComposerState) => !isStored, hint: "The fixture Project can't be revised" },
+  { when: ({ generating }: ComposerState) => generating, hint: "Revisions open once the video is generated" },
+  { when: ({ working }: ComposerState) => working, hint: "One Revision at a time; this one is running" },
+];
+
+type ComposerState = { isStored: boolean; generating: boolean; working: boolean };
+
 function Composer({ scenes }: { scenes: TimelineScene[] }) {
   const [text, setText] = useState("");
   const [isSending, setIsSending] = useState(false);
@@ -185,14 +212,8 @@ function Composer({ scenes }: { scenes: TimelineScene[] }) {
   const generating = useGeneration((state) => isGenerating(state.status));
   const isStored = useOpenVideo((state) => state.isStored);
   const textarea = useRef<HTMLTextAreaElement>(null);
-  const canSend = isStored && !generating && !working && !isSending && text.trim().length > 0;
-  const hint = !isStored
-    ? "The fixture Project can't be revised"
-    : generating
-      ? "Revisions open once the video is generated"
-      : working
-        ? "One Revision at a time; this one is running"
-        : "Enter to send · Shift+Enter for a new line";
+  const blocked = BLOCKED.find(({ when }) => when({ isStored, generating, working }));
+  const canSend = !blocked && !isSending && text.trim().length > 0;
 
   useEffect(() => {
     if (chatFocus > 0) {
@@ -235,7 +256,7 @@ function Composer({ scenes }: { scenes: TimelineScene[] }) {
         onKeyDown={onKeyDown}
       />
       <div className="flex items-center gap-2">
-        <span className="min-w-0 flex-1 truncate text-app-xs text-ink-muted">{hint}</span>
+        <span className="min-w-0 flex-1 truncate text-app-xs text-ink-muted">{blocked?.hint ?? "Enter to send · Shift+Enter for a new line"}</span>
         {working ? (
           <Button size="icon-sm" aria-label="Stop the Revision" title="Stop the Revision" onClick={stop}>
             <SquareIcon className="size-3 fill-current" />

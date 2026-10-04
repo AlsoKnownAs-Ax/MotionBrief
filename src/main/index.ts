@@ -6,11 +6,22 @@ import { isAbsolute, join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
-import { IPC, type ChooseFileOptions, type ChooseSavePathOptions, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
+import {
+  EXPORTS_CHANNEL,
+  IPC,
+  type ChooseFileOptions,
+  type ChooseSavePathOptions,
+  type ContextMenuItem,
+  type ExportsMessage,
+  type MenuPosition,
+} from "../shared/ipc";
 import { handleConnectionStoreMessage } from "./connection-store";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
+import { coreExportsHold } from "./exports-hold";
 import { handleTrashMessage } from "./trash";
+import { startUpdater } from "./updater";
+import type { Updates } from "./updates";
 import { createWindow } from "./window";
 
 // IPC payloads come from the renderer, so they are checked before use.
@@ -23,6 +34,9 @@ const ChooseFileOptionsSchema = z.object({
   filters: z.array(z.object({ name: z.string(), extensions: z.array(z.string()) })),
 }) satisfies z.ZodType<ChooseFileOptions>;
 const ChooseSavePathOptionsSchema = ChooseFileOptionsSchema.extend({ defaultPath: z.string() }) satisfies z.ZodType<ChooseSavePathOptions>;
+const UpdateChannelSchema = z.enum(["stable", "beta"]);
+// Comes from the core process.
+const ExportsMessageSchema = z.object({ channel: z.literal(EXPORTS_CHANNEL), running: z.number() }) satisfies z.ZodType<ExportsMessage>;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -36,7 +50,10 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(start);
 }
 
-function start() {
+async function start() {
+  // The core starts below; nothing is held before then.
+  const exportsHold = coreExportsHold((message) => core.send(message));
+  const updater = await startUpdater({ exports: exportsHold, onChange: (state) => broadcast(IPC.updateChanged, state) });
   const core = startCoreProcess({
     entry: coreEntry,
     appVersion: app.getVersion(),
@@ -44,9 +61,26 @@ function start() {
     projectsDir: join(app.getPath("documents"), "MotionBrief"),
     cacheDir: cacheDir(),
     sampleDir: devOnly(join(app.getAppPath(), "src", "core", "fixtures")),
-    onExit: () => broadcast(IPC.coreExited),
+    onExit: () => {
+      // Its exports died with it.
+      updater.setRunningExports(0);
+      broadcast(IPC.coreExited);
+    },
     onRestart: () => broadcast(IPC.coreRestarted),
-    onRequest: async (message) => (await handleConnectionStoreMessage(message)) ?? handleTrashMessage(message),
+    onRequest: async (message) => {
+      if (exportsHold.handle(message)) {
+        return undefined;
+      }
+
+      const { success, data: exports } = ExportsMessageSchema.safeParse(message);
+
+      if (success) {
+        updater.setRunningExports(exports.running);
+        return undefined;
+      }
+
+      return (await handleConnectionStoreMessage(message)) ?? handleTrashMessage(message);
+    },
   });
   let hasStoppedCore = false;
 
@@ -62,6 +96,7 @@ function start() {
   });
   app.on("activate", focusOrCreateWindow);
   handleIpc(core);
+  handleUpdateIpc(updater);
   installAppMenu({ newWindow: createWindow, crashCore: devOnly(() => core.crash()) });
   createWindow();
 }
@@ -154,6 +189,22 @@ function handleIpc(core: CoreProcess) {
   });
 }
 
+function handleUpdateIpc(updater: Updates) {
+  ipcMain.handle(IPC.getUpdateState, () => updater.state());
+
+  ipcMain.handle(IPC.setUpdateChannel, (_event, payload: unknown) => {
+    const { success, data: channel } = UpdateChannelSchema.safeParse(payload);
+
+    if (!success) {
+      return updater.state();
+    }
+
+    return updater.setChannel(channel);
+  });
+
+  ipcMain.handle(IPC.restartToUpdate, () => updater.restart());
+}
+
 /** Resolves to the chosen item's id, or null if the menu closed without a choice. */
 function popupContextMenu(window: BrowserWindow, items: ContextMenuItem[]) {
   return new Promise<string | null>((resolve) => {
@@ -166,8 +217,8 @@ function popupContextMenu(window: BrowserWindow, items: ContextMenuItem[]) {
   });
 }
 
-function broadcast(channel: string) {
-  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel));
+function broadcast(channel: string, ...args: unknown[]) {
+  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, ...args));
 }
 
 function focusOrCreateWindow() {

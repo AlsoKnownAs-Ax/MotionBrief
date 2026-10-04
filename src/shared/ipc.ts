@@ -20,6 +20,14 @@ export const IPC = {
   chooseSavePath: "dialog:choose-save-path",
   /** renderer → main: reveal a file in Explorer or Finder. */
   showInFolder: "shell:show-in-folder",
+  /** renderer → main (invoke): the app update's state. */
+  getUpdateState: "update:get-state",
+  /** main → renderer: the app update's state changed; carries the new UpdateState. */
+  updateChanged: "update:changed",
+  /** renderer → main (invoke): switch the update channel, resolving to the new UpdateState. */
+  setUpdateChannel: "update:set-channel",
+  /** renderer → main (invoke): restart into the downloaded update; resolves to false when it can't now. */
+  restartToUpdate: "update:restart",
 } as const;
 
 /** window.postMessage tag the renderer uses to hand its core port to the preload. */
@@ -83,6 +91,48 @@ export type TrashResponse = {
 
 /** main → core over the parent port: the app is quitting. The core releases its Project locks, then exits. */
 export const CORE_SHUTDOWN_MESSAGE = "core:shutdown";
+
+/**
+ * core → main over the core's parent port: how many exports are running, sent whenever that changes, so an
+ * app update never restarts during one.
+ */
+export const EXPORTS_CHANNEL = "exports";
+
+export type ExportsMessage = {
+  channel: typeof EXPORTS_CHANNEL;
+  running: number;
+};
+
+/**
+ * main → core over the parent port, before restarting into an app update: hold (or release) new exports. The
+ * core answers with the same id and how many exports are still running; main restarts only at 0.
+ */
+export const EXPORTS_HOLD_CHANNEL = "exports-hold";
+
+export type ExportsHoldRequest = {
+  channel: typeof EXPORTS_HOLD_CHANNEL;
+  id: number;
+  hold: boolean;
+};
+
+export type ExportsHoldResponse = {
+  channel: typeof EXPORTS_HOLD_CHANNEL;
+  id: number;
+  running: number;
+};
+
+/** Stable follows GitHub releases; beta also takes pre-releases (vX.Y.Z-beta.N). */
+export type UpdateChannel = "stable" | "beta";
+
+export type UpdateState = {
+  channel: UpdateChannel;
+  /** False in development builds, which never update. */
+  isEnabled: boolean;
+  /** The version downloaded and waiting for a restart. */
+  readyVersion?: string;
+  /** An export is running in some window, so the app won't restart yet. */
+  isExporting: boolean;
+};
 
 /** Commands the app menu sends to the focused window. */
 export type AppCommand = "shortcuts.show" | "settings.show";

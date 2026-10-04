@@ -43,7 +43,7 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
   await Promise.all(page.assets.map((asset) => writeAsset(dir, asset)));
   await Promise.all(
     units.map(async (unit) => {
-      const unitCode = code[unit.id] ?? fallbackCode(unit.scenes, unit);
+      const unitCode = code[unit.id] ?? fallbackCode(unit.scenes, unit, format);
       const { html } = await inlineIcons(unitCode.html, preset.treatments.icons);
 
       await writeFile(join(dir, "compositions", `${unit.id}.html`), wrapUnit({ unit, format, style: preset, code: { ...unitCode, html } }));
@@ -123,7 +123,7 @@ ${[...clips, ...voiceover, page.overlay].filter(Boolean).join("\n")}
 <script>
 (function () {
   var tl = gsap.timeline({ paused: true });
-${units.flatMap((unit, index) => transitionJs(units[index - 1], unit)).join("\n")}
+${units.flatMap((unit, index) => transitionJs(units[index - 1], unit, width, height)).join("\n")}
   tl.to({}, { duration: ${duration} }, 0);
   // The HyperFrames runtime makes the registry; the page still builds without it.
   window.__timelines = window.__timelines || {};
@@ -135,21 +135,57 @@ ${units.flatMap((unit, index) => transitionJs(units[index - 1], unit)).join("\n"
 `;
 }
 
-/**
- * The Transition from one unit into the next, on the root timeline. A cut needs nothing: the
- * outgoing unit ends as the incoming one starts. Transitions the Assembler doesn't draw yet cut.
- */
-function transitionJs(from: Unit | undefined, to: Unit): string[] {
-  const seconds = to.transitionIn ? TRANSITION_SECONDS[to.transitionIn] : undefined;
+/** Where a push sends the outgoing unit: the incoming one arrives from the opposite side. */
+const PUSHES = {
+  "push-left": { axis: "x", sign: -1 },
+  "push-right": { axis: "x", sign: 1 },
+  "push-up": { axis: "y", sign: -1 },
+  "push-down": { axis: "y", sign: 1 },
+} as const;
 
-  if (!from || to.transitionIn !== "crossfade" || !seconds) {
+/**
+ * The Transition from one unit into the next, on the root timeline, over the time the two units
+ * overlap from the incoming unit's start. A cut needs nothing: the outgoing unit ends as the
+ * incoming one starts. A carry-over cuts too, while the frame flies the shared element inside the
+ * incoming unit; a camera move only happens inside a Canvas unit.
+ */
+function transitionJs(from: Unit | undefined, to: Unit, width: number, height: number): string[] {
+  const type = to.transitionIn;
+
+  if (!from || !type) {
     return [];
   }
 
-  const tween = `duration: ${seconds}, ease: "power2.inOut", immediateRender: false`;
+  const seconds = TRANSITION_SECONDS[type];
 
-  return [
-    `  tl.fromTo("#el-${from.id}", { opacity: 1 }, { opacity: 0, ${tween} }, ${to.start});`,
-    `  tl.fromTo("#el-${to.id}", { opacity: 0 }, { opacity: 1, ${tween} }, ${to.start});`,
-  ];
+  if (!seconds) {
+    return [];
+  }
+
+  /** Tweens one unit's host between two sets of properties, written as object literal bodies. */
+  const tween = (unit: Unit, [fromVars, toVars]: [string, string], ease: string) =>
+    `  tl.fromTo("#el-${unit.id}", { ${fromVars} }, { ${toVars}, duration: ${seconds}, ease: ${ease}, immediateRender: false }, ${to.start});`;
+
+  if (type === "crossfade") {
+    return [tween(from, ["opacity: 1", "opacity: 0"], '"power2.inOut"'), tween(to, ["opacity: 0", "opacity: 1"], '"power2.inOut"')];
+  }
+
+  if (type === "zoom-through") {
+    // The camera flies through the outgoing unit into the incoming one, which grows in behind it.
+    return [
+      tween(from, ['scale: 1, opacity: 1, filter: "blur(0px)"', 'scale: 2.2, opacity: 0, filter: "blur(8px)"'], '"power3.in"'),
+      tween(to, ['scale: 0.6, opacity: 0, filter: "blur(8px)"', 'scale: 1, opacity: 1, filter: "blur(0px)"'], '"power3.out"'),
+    ];
+  }
+
+  if (type in PUSHES) {
+    const { axis, sign } = PUSHES[type as keyof typeof PUSHES];
+    const distance = sign * { x: width, y: height }[axis];
+    // The Style Preset's Motion sets the ease, as it does for the camera on a Canvas.
+    const ease = "MB_DATA.motion.easeInOut";
+
+    return [tween(from, [`${axis}: 0`, `${axis}: ${distance}`], ease), tween(to, [`${axis}: ${-distance}`, `${axis}: 0`], ease)];
+  }
+
+  return [];
 }

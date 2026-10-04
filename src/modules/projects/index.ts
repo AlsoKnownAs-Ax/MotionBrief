@@ -7,7 +7,8 @@ export {
   type ProjectsError,
   type ProjectsOptions,
   type ProjectVideo,
+  type StoredVideo,
   type Trash,
 } from "./projects";
 export { createStatusStore } from "./status";
-export type { Flag, GenerationRecord, RevisionRecord, Version, VideoContent } from "./videos";
+export type { Flag, GenerationRecord, RevisionRecord, Version, VersionError, VideoContent } from "./videos";

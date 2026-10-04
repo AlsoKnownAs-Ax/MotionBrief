@@ -1,7 +1,7 @@
 import { safe } from "@orpc/client";
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
-import type { GenerationError, GenerationStatus, VideoRef } from "../../../contract";
+import type { GenerationError, GenerationStatus, Preview, VideoRef } from "../../../contract";
 import { useOpenVideo } from "./open-video";
 
 type GenerationStore = {
@@ -9,8 +9,11 @@ type GenerationStore = {
   status?: GenerationStatus;
   /** Why the window stopped hearing about the generation, such as the core going away. */
   lostError?: string;
-  /** Opens the video in the editor and follows its generation: the preview updates as units finish. */
-  follow: (project: { id: string; name: string }, video: VideoRef) => void;
+  /**
+   * Opens the video in the editor and follows its generation: the preview updates as units finish. A saved video
+   * opens with its newest Version's preview, and follows any Retry of its flagged Scenes.
+   */
+  follow: (project: { id: string; name: string }, video: VideoRef, preview?: Preview) => void;
   /** Listens to the generation again after losing it; the core kept it going. */
   reconnect: () => void;
   /** Stops following and releases the Project, when the creator leaves the editor. */
@@ -50,8 +53,8 @@ export const useGeneration = create<GenerationStore>((set, get) => {
   }
 
   return {
-    follow: (project, video) => {
-      useOpenVideo.getState().open({ ...project, isStored: true });
+    follow: (project, video, preview) => {
+      useOpenVideo.getState().open({ ...project, isStored: true }, preview);
       set({ status: undefined });
       listen(video);
     },

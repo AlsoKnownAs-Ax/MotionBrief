@@ -4,7 +4,8 @@ import { sceneTimings, type Storyboard } from "../storyboard";
 
 /**
  * The assembled video as the editor shows it: each Scene's timing, unit, status and Transition in, and the words.
- * A unit plays its code, or is still being generated (`pending`), or plays as its fallback Scene.
+ * A unit plays its code (flagged when it carries a review note), or is still being generated (`pending`), or
+ * plays as its fallback Scene.
  */
 export function timelineOf(
   storyboard: Storyboard,
@@ -12,6 +13,7 @@ export function timelineOf(
   page: AssembledPage,
   code: Record<string, UnitCode>,
   pending: Record<string, UnitWork> = {},
+  notes: Record<string, string> = {},
 ): VideoTimeline {
   const { format, width, height, duration, units } = page;
   const timings = sceneTimings(storyboard, transcript);
@@ -23,6 +25,7 @@ export function timelineOf(
     duration,
     scenes: timings.map(({ scene, start, end }, index) => {
       const unit = units.find(({ scenes }) => scenes.includes(scene))?.id ?? scene.id;
+      const status = statusOf(unit, code, pending, notes);
 
       return {
         id: scene.id,
@@ -31,7 +34,8 @@ export function timelineOf(
         unit,
         start: seconds(start),
         end: seconds(end),
-        status: statusOf(unit, code, pending),
+        status,
+        note: noteOf(status, notes[unit]),
         transitionIn: timings[index - 1]?.scene.transition?.type,
       };
     }),
@@ -43,12 +47,25 @@ export function timelineOf(
   };
 }
 
-function statusOf(unit: string, code: Record<string, UnitCode>, pending: Record<string, UnitWork>): SceneStatus {
+function statusOf(unit: string, code: Record<string, UnitCode>, pending: Record<string, UnitWork>, notes: Record<string, string>): SceneStatus {
+  if (code[unit] && notes[unit]) {
+    return "flagged";
+  }
+
   if (code[unit]) {
     return "ready";
   }
 
   return pending[unit] ?? "fallback";
+}
+
+/** Only a Scene playing its own code carries its unit's review note. */
+function noteOf(status: SceneStatus, note: string | undefined): string | undefined {
+  if (status !== "flagged") {
+    return undefined;
+  }
+
+  return note;
 }
 
 function seconds(value: number): number {

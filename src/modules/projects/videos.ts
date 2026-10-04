@@ -14,12 +14,15 @@ const UNITS_DIR = "units";
 const VERSIONS_DIR = "versions";
 const GENERATION_FILE = "generation.json";
 
-/** A unit that plays something other than its own Scene code, and why. */
+/** A unit the creator should look at, and why. */
 export const FlagSchema = z.object({
   unit: z.string(),
-  /** Its code kept failing the checks, so it plays as its fallback Scene. */
-  kind: z.literal("fallback"),
-  /** The last findings, for the creator. */
+  /**
+   * `fallback`: its code kept failing the checks, so it plays as its fallback Scene. `review-note`: it plays
+   * its code, but its visual review's repair was reverted, so the reviewer's complaint stands.
+   */
+  kind: z.enum(["fallback", "review-note"]),
+  /** The last findings, or the reviewer's sentence, for the creator. */
   reason: z.string(),
 });
 
@@ -54,8 +57,11 @@ export const VersionSchema = VideoContentSchema.extend({
   /** Counted from 1, in the order Versions were made. */
   version: z.number().int().positive(),
   createdAt: z.iso.datetime(),
-  /** What made it: a first generation or a Revision. */
-  origin: z.enum(["generation", "revision"]),
+  /**
+   * What made it: a first generation; the re-check after a frame major update, which flagged units that no longer
+   * pass; a Retry of flagged units; or a Revision.
+   */
+  origin: z.enum(["generation", "frame-update", "retry", "revision"]),
   /** Set on a Version a Revision made. */
   revision: RevisionRecordSchema.optional(),
 });
@@ -138,6 +144,60 @@ export async function saveVersion(dir: string, format: Format, version: Omit<Ver
   return { data: number, error: null };
 }
 
+export type VersionError = FileError | { code: "INVALID_DOCUMENT"; path: string; message: string };
+
+/** A saved Version with its units' Scene code, by unit id. */
+export async function readVersion(
+  dir: string,
+  format: Format,
+  number: number,
+): Promise<Result<{ version: Version; code: Record<string, UnitCode> }, VersionError>> {
+  const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
+  const { data: version, error } = await readDocument(path, VersionSchema);
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const code: Record<string, UnitCode> = {};
+
+  for (const [unit, hash] of Object.entries(version.units)) {
+    const { data: unitCode, error: unitError } = await readDocument(join(dir, format, UNITS_DIR, `${hash}.json`), UnitCodeSchema);
+
+    if (unitError) {
+      return { data: null, error: unitError };
+    }
+
+    code[unit] = unitCode;
+  }
+
+  return { data: { version, code }, error: null };
+}
+
+async function readDocument<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, VersionError>> {
+  const { data: text, error } = await fileStep(path, () => readFile(path, "utf8"));
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const parsed = schema.safeParse(parseJson(text));
+
+  if (!parsed.success) {
+    return { data: null, error: { code: "INVALID_DOCUMENT", path, message: parsed.error.message } };
+  }
+
+  return { data: parsed.data, error: null };
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
 /** The number of the video's newest Version; none before its first generation is saved. */
 export async function latestVersion(dir: string, format: Format): Promise<number | undefined> {
   const names = await readdir(join(dir, format, VERSIONS_DIR)).catch(() => []);
@@ -148,34 +208,6 @@ export async function latestVersion(dir: string, format: Format): Promise<number
   }
 
   return Math.max(...numbers);
-}
-
-/** A saved Version of the video. */
-export async function readVersion(dir: string, format: Format, number: number): Promise<Result<Version, FileError>> {
-  const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
-
-  return readJson(path, VersionSchema);
-}
-
-/** A unit's Scene code by the hash a Version names it by. */
-export async function readUnit(dir: string, format: Format, hash: string): Promise<Result<UnitCode, FileError>> {
-  return readJson(join(dir, format, UNITS_DIR, `${hash}.json`), UnitCodeSchema);
-}
-
-async function readJson<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, FileError>> {
-  const { data: found, error } = await fileStep(path, async () => JSON.parse(await readFile(path, "utf8")) as unknown);
-
-  if (error) {
-    return { data: null, error };
-  }
-
-  const parsed = schema.safeParse(found);
-
-  if (!parsed.success) {
-    return { data: null, error: { code: "FILE_FAILED", path, message: parsed.error.message } };
-  }
-
-  return { data: parsed.data, error: null };
 }
 
 function json(value: unknown): string {

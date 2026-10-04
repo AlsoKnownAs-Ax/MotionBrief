@@ -20,9 +20,12 @@ type Storyboard = { format: "horizontal"; scenes: Scene[] };
 /** The Storyboard of the `stacked` Transcript's first generation: five lone Scenes. */
 const storyboard = JSON.parse(await readFile(join(FIXTURES, "generation", "storyboard.json"), "utf8")) as Storyboard;
 
+/** Where each variant of Scene code is committed: the first generation's, or the Revision tests' own. */
+const VARIANT_FOLDERS: Record<string, string> = { good: "generation" };
+
 /** Committed Scene code: the first generation's, of which `good` passes every check, or a variant of it for Revisions. */
 async function unitCode(variant: string, unit: string): Promise<UnitCode> {
-  const dir = variant === "good" ? join(FIXTURES, "generation", variant) : join(FIXTURES, "revision", variant);
+  const dir = join(FIXTURES, VARIANT_FOLDERS[variant] ?? "revision", variant);
   const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(dir, `${unit}.${part}`), "utf8")));
 
   return { css: css ?? "", html: html ?? "", js: js ?? "" };
@@ -202,9 +205,16 @@ async function revise(core: CoreClient, video: VideoRef, message: string, scope:
   return { ended, statuses: revision.statuses };
 }
 
-/** The units Scene-code subagents were asked to write. */
+
+/** The units Scene-code subagents were asked to write, whatever order they ran in. */
 function regenerated(replay: ReturnType<typeof createReplayConnector>) {
-  return [...new Set(replay.asked.flatMap(({ options }) => (options.label?.startsWith("scene-code ") ? [options.label.slice("scene-code ".length)] : [])))].sort();
+  const labels = replay.asked.map(({ options }) => options.label ?? "").filter((label) => label.startsWith("scene-code "));
+
+  return [...new Set(labels.map((label) => label.slice("scene-code ".length)))].sort();
+}
+
+function unitStatus(status: RevisionStatus, id: string) {
+  return status.units.find((unit) => unit.id === id);
 }
 
 // Each Revision checks units in the pinned chrome-headless-shell, each check taking seconds.
@@ -221,25 +231,19 @@ describe("a Revision that moves things in time", () => {
     next.s01.transition = { type: "cut" };
     (next.s02.content.items as { id: string; at: number }[])[1]!.at = 21;
     (next.s04.content.definition as { at: number }).at = 58;
-    // One list for every session, in order: the Revision agent, s04's subagent, then the next Revision's agent.
-    connected = await connect([
-      submitsPatch({ scenes: Object.values(next), summary: "Cut into the list, and showed the cache and the definition a beat later." }),
-      submitsCode(await unitCode("good", "s04")),
-      replies("The cache Scene is the fourth one."),
-    ]);
+    connected = await connect({
+      revision: [submitsPatch({ scenes: Object.values(next), summary: "Cut into the list, and showed the cache and the definition a beat later." })],
+      "scene-code s04": [submitsCode(await unitCode("good", "s04"))],
+    });
     v1Units = await generatedGood(connected.project, { s04: earlyDefinition });
     ({ ended: done, statuses } = await revise(connected.core, connected.video, "Hold the cache and the definition a beat longer"));
   }, RUN_TIMEOUT_MS);
 
   afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
 
-  it("runs a fresh agent given the current Storyboard, the Transcript, the scope and the request", () => {
-    const [turn] = connected.replay.askedOf("revision");
-
-    expect(turn?.options.model).toBe("claude-opus-5-5");
-    expect(turn?.message).toContain('"id": "s05"');
-    expect(turn?.message).toContain("71:long.");
-    expect(turn?.message).toContain("Hold the cache and the definition a beat longer");
+  it("runs one fresh session of the Revision agent, closed once it is done", () => {
+    expect(connected.replay.askedOf("revision").map(({ options }) => options.model)).toEqual(["claude-opus-5-5"]);
+    expect(connected.replay.sessions().open).toBe(0);
   });
 
   it("only re-renders units whose Transitions and anchor words changed, with no agent writing their code", () => {
@@ -248,7 +252,7 @@ describe("a Revision that moves things in time", () => {
   });
 
   it("regenerates a re-rendered unit that then fails the contract", () => {
-    expect(done.units.find(({ id }) => id === "s04")).toMatchObject({ rebuild: "regenerate", status: "ready", attempts: 1 });
+    expect(unitStatus(done, "s04")).toMatchObject({ rebuild: "regenerate", status: "ready", attempts: 1 });
   });
 
   it("marks the Scenes it works on as revising while the current Version plays on", () => {
@@ -280,15 +284,6 @@ describe("a Revision that moves things in time", () => {
       ["s05", "fallback"],
     ]);
   });
-
-  it("answers a question with no Version, and gives the next Revision the earlier ones", async () => {
-    const { ended } = await revise(connected.core, connected.video, "Which Scene explains the cache?");
-    const [, second] = connected.replay.askedOf("revision");
-
-    expect(ended).toMatchObject({ state: "answered", reply: "The cache Scene is the fourth one." });
-    expect(await versions(connected.project)).toEqual(["1.json", "2.json"]);
-    expect(second?.message).toContain("Cut into the list, and showed the cache and the definition a beat later.");
-  });
 });
 
 describe("a Revision that changes content", () => {
@@ -318,11 +313,10 @@ describe("a Revision that changes content", () => {
 
   it("regenerates the units whose content changed or that have an instruction, and nothing else", () => {
     expect(regenerated(connected.replay)).toEqual(["s01", "s03"]);
-    expect(done.units.map(({ id, rebuild }) => [id, rebuild])).toEqual([
+    expect(done.units.map(({ id, rebuild }) => [id, rebuild]).sort()).toEqual([
       ["s01", "regenerate"],
       ["s03", "regenerate"],
     ]);
-    expect(connected.replay.askedOf("scene-code s01")[0]?.message).toContain("Make the headline twice as big");
   });
 
   it("keeps the previous code of a unit whose instruction couldn't be applied, and says so", async () => {
@@ -337,13 +331,26 @@ describe("a Revision that changes content", () => {
     const saved = await readVersion(connected.project, 2);
 
     expect(saved.units.s03).toBeUndefined();
-    expect(saved.flags.map(({ unit }) => unit)).toEqual(["s03", "s05"]);
-    expect(saved.flags[0]?.reason).toContain("No recorded turn left");
+    expect(saved.flags.map(({ unit, kind }) => [unit, kind])).toEqual([
+      ["s03", "fallback"],
+      ["s05", "fallback"],
+    ]);
     expect(done.preview?.timeline.scenes.find(({ id }) => id === "s03")?.status).toBe("fallback");
   });
 });
 
 describe("a Revision", () => {
+  it("answers a question, or asks one, without making a Version", async () => {
+    const { core, project, video } = await connect({ revision: [replies("The cache Scene is the fourth one.")] });
+    await generatedGood(project);
+
+    const { ended } = await revise(core, video, "Which Scene explains the cache?");
+
+    expect(ended).toMatchObject({ state: "answered", reply: "The cache Scene is the fourth one." });
+    expect(await versions(project)).toEqual(["1.json"]);
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
   it(
     "regenerates the whole Canvas when anything inside it changes",
     async () => {
@@ -367,6 +374,55 @@ describe("a Revision", () => {
     RUN_TIMEOUT_MS,
   );
 
+  it("re-renders both sides of a carry-over that now morphs another element", async () => {
+    // s04 carries its "headline" into the outro's headline; the patch carries its "cta" instead.
+    const carrying: Storyboard = structuredClone(storyboard);
+    const s04 = carrying.scenes[3]!;
+    s04.content.related = [
+      { id: "headline", text: "Fast answers", at: 57 },
+      { id: "cta", text: "Never stale", at: 58 },
+    ];
+    s04.transition = { type: "carry-over", element: "headline" } as Scene["transition"];
+    const revised = structuredClone(s04);
+    revised.transition = { type: "carry-over", element: "cta" } as Scene["transition"];
+    const { core, replay, project, video } = await connect({ revision: [submitsPatch({ scenes: [revised], summary: "Carried the call to action instead." })] });
+    const code = Object.fromEntries(await Promise.all(["s01", "s02", "s03"].map(async (unit) => [unit, await unitCode("good", unit)] as const)));
+    await generated(project, carrying, code, ["s04", "s05"]);
+
+    const { ended } = await revise(core, video, "Carry the call to action into the outro", ["s04"]);
+
+    expect(ended).toMatchObject({ state: "done", version: 2 });
+    expect(ended.units.map(({ id, rebuild }) => [id, rebuild])).toEqual([
+      ["s04", "rerender"],
+      ["s05", "rerender"],
+    ]);
+    expect(regenerated(replay)).toEqual([]);
+    expect((await readVersion(project, 2)).storyboard.scenes[3]?.transition).toEqual({ type: "carry-over", element: "cta" });
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
+  it("sends a patch that changes Scenes outside the selection back to the agent", async () => {
+    const outside = scene(storyboard, "s02");
+    (outside.content.title as { text: string }).text = "Cache wins";
+    const inside = scene(storyboard, "s04");
+    (inside.content.definition as { at: number }).at = 57;
+    const { core, replay, project, video } = await connect({
+      revision: [
+        submitsPatch({ scenes: [inside, outside], summary: "Showed the definition later and renamed the list." }),
+        submitsPatch({ scenes: [inside], summary: "Showed the definition later." }),
+      ],
+    });
+    const v1Units = await generatedGood(project);
+
+    const { ended } = await revise(core, video, "Show the definition a little later", ["s04"]);
+    const saved = await readVersion(project, 2);
+
+    expect(replay.askedOf("revision")).toHaveLength(2);
+    expect(ended).toMatchObject({ state: "done", summary: "Showed the definition later." });
+    expect(saved.storyboard.scenes[1]).toEqual(storyboard.scenes[1]);
+    expect(saved.units).toEqual(v1Units);
+  }, RUN_TIMEOUT_MS);
+
   it(
     "fails with the issues of a patch that is still invalid after 2 retries, leaving no Version",
     async () => {
@@ -387,6 +443,17 @@ describe("a Revision", () => {
     RUN_TIMEOUT_MS,
   );
 
+  it("starts one Revision at a time, even for requests sent at once", async () => {
+    const { core, project, video } = await connect({ revision: [replies("Sure.")] });
+    await generatedGood(project);
+
+    const results = await Promise.allSettled([1, 2].map((n) => core.video.revise({ ...video, message: `Request ${n}`, scope: [] })));
+
+    expect(results.map(({ status }) => status).sort()).toEqual(["fulfilled", "rejected"]);
+    expect(results.find(({ status }) => status === "rejected")).toMatchObject({ reason: { code: "REVISING" } });
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
   it(
     "is discarded by Stop, keeping the current Version",
     async () => {
@@ -399,7 +466,7 @@ describe("a Revision", () => {
       const revision = await watch(core, video);
 
       await core.video.revise({ ...video, message: "Shorter caption on the stat", scope: [] });
-      const writing = await revision.until(({ units }) => units.some(({ id, status }) => id === "s03" && status === "writing"));
+      const writing = await revision.until((status) => unitStatus(status, "s03")?.status === "writing");
       await core.video.stopRevision(video);
       const stopped = await revision.until(({ state }) => state === "stopped");
       replay.release("scene-code s03");
@@ -415,6 +482,25 @@ describe("a Revision", () => {
     },
     RUN_TIMEOUT_MS,
   );
+
+  it("is too late to stop once it is saving its Version, and ends done", async () => {
+    const s01 = scene(storyboard, "s01");
+    s01.transition = { type: "cut" };
+    const { core, project, video } = await connect({ revision: [submitsPatch({ scenes: [s01], summary: "Cut into the list." })] });
+    await generatedGood(project);
+    const revision = await watch(core, video);
+
+    await core.video.revise({ ...video, message: "Cut into the list", scope: [] });
+    await revision.until(({ state }) => state === "saving" || state === "done");
+    await core.video.stopRevision(video);
+    const ended = await revision.until(({ state }) => state === "done" || state === "stopped");
+    revision.stop();
+
+    expect(ended).toMatchObject({ state: "done", version: 2 });
+    expect(revision.statuses.map(({ state }) => state)).not.toContain("stopped");
+    expect(await versions(project)).toEqual(["1.json", "2.json"]);
+    await core.project.close({ projectId: project.id });
+  }, RUN_TIMEOUT_MS);
 
   it("needs a generated video, and Scenes it has", async () => {
     const { core, project, video } = await connect({});

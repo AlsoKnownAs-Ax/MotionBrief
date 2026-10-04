@@ -6,13 +6,18 @@ import { validateStoryboard, type Storyboard } from "../storyboard";
 import type { PresetBrief } from "../style";
 import { applyPatch, PatchSchema, type Patch } from "./patch";
 import { PATCH_TOOL, patchIssuesMessage, revisionMessage, revisionSystem } from "./prompts";
+import { scopeIssues } from "./scope";
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
 /** What the Revision agent came back with: a reply that changes nothing, or a valid revised Storyboard. */
-export type AgentOutcome =
-  | { kind: "reply"; text: string }
-  | { kind: "patch"; storyboard: Storyboard; patch: Patch };
+export type AgentOutcome = {
+  /** The answer or clarifying question, when the agent handed in no patch. */
+  reply?: string;
+  /** The revised Storyboard, valid and within the scope, and the patch it came from. */
+  storyboard?: Storyboard;
+  patch?: Patch;
+};
 
 export type AgentError = { code: "PATCH_INVALID"; issues: StoryboardIssue[] } | { code: "AGENT_FAILED"; error: ConnectorError };
 
@@ -63,7 +68,7 @@ export async function runRevisionAgent({ storyboard, transcript, rulesFor, prese
       if (!submitted) {
         // Only a first turn may answer; a retry that hands in nothing leaves the patch invalid.
         if (attempt === 0) {
-          return { data: { kind: "reply", text: text.trim() }, error: null };
+          return { data: { reply: text.trim() }, error: null };
         }
 
         message = patchIssuesMessage(issues);
@@ -72,13 +77,19 @@ export async function runRevisionAgent({ storyboard, transcript, rulesFor, prese
 
       const patch: Patch = submitted;
       const { data: revised, error } = validateStoryboard(applyPatch(storyboard, patch), transcript, rulesFor(patch.captions ?? captions));
-      const instructionIssues = revised ? unknownScenes(patch, revised) : [];
 
-      if (revised && instructionIssues.length === 0) {
-        return { data: { kind: "patch", storyboard: revised, patch }, error: null };
+      if (error) {
+        issues = error.issues;
+        message = patchIssuesMessage(issues);
+        continue;
       }
 
-      issues = error?.issues ?? instructionIssues;
+      issues = [...unknownScenes(patch, revised), ...scopeIssues(storyboard, revised, patch, scope)];
+
+      if (issues.length === 0) {
+        return { data: { storyboard: revised, patch }, error: null };
+      }
+
       message = patchIssuesMessage(issues);
     }
 

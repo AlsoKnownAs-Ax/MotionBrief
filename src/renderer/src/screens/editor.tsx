@@ -2,6 +2,7 @@ import { CircleAlertIcon, HouseIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
@@ -9,6 +10,7 @@ import { useOpenVideo } from "@renderer/editor/open-video";
 import { usePlayback } from "@renderer/editor/playback";
 import { Player, Transport } from "@renderer/editor/player";
 import { isRevising, useRevision } from "@renderer/editor/revision";
+import type { RevisionStatus } from "../../../contract";
 import { SidePanel } from "@renderer/editor/side-panel";
 import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
@@ -52,7 +54,7 @@ function GenerationBadge() {
   }
 
   if (status?.state === "writing") {
-    const finished = status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length;
+    const finished = status.units.filter((unit) => unit.status === "ready" || unit.status === "flagged" || unit.status === "fallback").length;
 
     return (
       <Badge role="status" status="working" pulse>
@@ -82,9 +84,17 @@ function RevisionBadge() {
 
   return (
     <Badge role="status" status="working" pulse>
-      {status?.state === "rebuilding" ? `Revising · ${status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length} of ${status.units.length}` : "Revising"}
+      {revisingLabel(status)}
     </Badge>
   );
+}
+
+function revisingLabel(status: RevisionStatus | undefined) {
+  if (status?.state !== "rebuilding") {
+    return "Revising";
+  }
+
+  return `Revising · ${status.units.filter((unit) => unit.status === "ready" || unit.status === "fallback").length} of ${status.units.length}`;
 }
 
 /** Follows the open video's Revisions while it is open in the editor; only a stored Project's video has them. */
@@ -159,6 +169,7 @@ export function Editor() {
 
   return (
     <main className="flex min-h-0 flex-1 flex-col">
+      <FrameUpdateNotice />
       <div className="flex min-h-0 flex-1">
         <section aria-label="Player" className="flex min-w-0 flex-1 flex-col gap-3 px-5 pt-4 pb-3.5">
           <GenerationNotice />

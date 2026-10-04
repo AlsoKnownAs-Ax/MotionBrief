@@ -1,0 +1,15 @@
+MB.connect("#s03-browser-balancer", "#s03-browser", "#s03-balancer");
+MB.connect("#s03-balancer-servers", "#s03-balancer", "#s03-servers");
+MB.connect("#s04-server-cache", "#s04-server", "#s04-cache");
+MB.connect("#s04-cache-database", "#s04-cache", "#s04-database");
+MB.reveal(tl, "#s03-browser", at("s03-browser"));
+MB.draw(tl, "#s03-browser-balancer", at("s03-browser-balancer"));
+MB.reveal(tl, "#s03-balancer", at("s03-balancer"), "pop");
+MB.draw(tl, "#s03-balancer-servers", at("s03-balancer-servers"));
+MB.reveal(tl, "#s03-servers", at("s03-servers"));
+MB.reveal(tl, "#s04-server", at("s04-server"));
+MB.draw(tl, "#s04-server-cache", at("s04-server-cache"));
+MB.reveal(tl, "#s04-cache", at("s04-cache"), "pop");
+MB.draw(tl, "#s04-cache-database", at("s04-cache-database"));
+MB.reveal(tl, "#s04-database", at("s04-database"));
+MB.travel(tl, "#s04-answer", ["#s04-database", "#s04-server"], at("s04-answer"));
