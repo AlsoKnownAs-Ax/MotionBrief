@@ -21,7 +21,7 @@ async function goodCode() {
 
 describe("Checker", () => {
   it(
-    "passes hand-written, token-only Scene code with no findings",
+    "passes hand-written, token-only Scene code, deliberate layering and a faint texture included, with no findings",
     async () => {
       const report = await connect().checker.check({ storyboard, transcript, rules: RULES, code: await goodCode() });
 
@@ -92,6 +92,45 @@ describe("Checker", () => {
 
     it("maps a HyperFrames layout finding to the unit it was found in", () => {
       expect(located(findings)).toContainEqual({ unit: "s02", source: "check", code: "content_overlap", selector: expect.any(String) });
+    });
+  });
+
+  describe("on Scene code breaking the Checker's own rules", () => {
+    let findings: CheckFinding[] = [];
+
+    beforeAll(async () => {
+      const code = { s01: await unitCode("rules", "s01"), s02: await unitCode("rules", "s02") };
+      ({ findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, code }));
+    }, BROWSER_TIMEOUT_MS);
+
+    it("reports an icon laid over text that nothing marks as deliberate layering", () => {
+      expect(findings.filter(({ code }) => code === "ICON_OVERLAPS_TEXT")).toEqual([
+        {
+          unit: "s01",
+          source: "rules",
+          code: "ICON_OVERLAPS_TEXT",
+          selector: "#s01-browser > svg.cursor",
+          message: expect.stringMatching(/overlaps the text "Browser".*data-layout-allow-overlap/),
+          time: expect.any(Number),
+        },
+      ]);
+    });
+
+    it("reports a texture overlay at opacity 0.6 or above", () => {
+      expect(findings.filter(({ code }) => code === "TEXTURE_TOO_OPAQUE")).toEqual([
+        {
+          unit: "s02",
+          source: "rules",
+          code: "TEXTURE_TOO_OPAQUE",
+          selector: "#root > div.scanlines",
+          message: expect.stringMatching(/reaches opacity 0\.7\b.*below 0\.6/),
+          time: expect.any(Number),
+        },
+      ]);
+    });
+
+    it("reports nothing else of its own", () => {
+      expect(findings.filter(({ source }) => source === "rules").map(({ code }) => code)).toEqual(["ICON_OVERLAPS_TEXT", "TEXTURE_TOO_OPAQUE"]);
     });
   });
 

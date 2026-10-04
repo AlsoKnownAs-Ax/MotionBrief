@@ -8,6 +8,7 @@ import { validateStoryboard } from "../storyboard";
 import { checkContract } from "./contract";
 import { runHyperframesCheck, type HyperframesError } from "./hyperframes";
 import { openFramePage, type FramePageError } from "./page";
+import { checkRules } from "./rules";
 import { tokenLint } from "./token-lint";
 
 export type CheckerOptions = {
@@ -46,8 +47,8 @@ export type Checker = ReturnType<typeof createChecker>;
 
 /**
  * Checks Scene code inside the frame: it assembles the Storyboard's units into a page in a
- * temporary folder, runs `hyperframes lint` and `check`, the token lint, icon lookup and the anchor
- * contract, and reports every finding against the unit it belongs to.
+ * temporary folder, runs `hyperframes lint` and `check`, the token lint, icon lookup, the anchor
+ * contract and the Checker's own rules, and reports every finding against the unit it belongs to.
  */
 export function createChecker({ chromePath }: CheckerOptions) {
   async function check({ storyboard: raw, transcript, rules, tokens, code }: CheckInput): Promise<CheckResult> {
@@ -91,25 +92,22 @@ export function createChecker({ chromePath }: CheckerOptions) {
     }
   }
 
-  /** `hyperframes check` and the contract each play the page in their own browser, side by side. */
+  /** `hyperframes check` and our own probe (the contract, then the rules) each play the page in their own browser, side by side. */
   async function checkPage(dir: string, assembled: AssembledPage): Promise<Result<CheckFinding[], CheckerError>> {
-    const [hyperframes, contract] = await Promise.all([
-      runHyperframesCheck({ dir, chromePath, units: assembled.units }),
-      probeContract(dir, assembled),
-    ]);
+    const [hyperframes, probed] = await Promise.all([runHyperframesCheck({ dir, chromePath, units: assembled.units }), probePage(dir, assembled)]);
 
     if (hyperframes.error) {
       return { data: null, error: hyperframes.error };
     }
 
-    if (contract.error) {
-      return { data: null, error: contract.error };
+    if (probed.error) {
+      return { data: null, error: probed.error };
     }
 
-    return { data: [...hyperframes.data, ...contract.data], error: null };
+    return { data: [...hyperframes.data, ...probed.data], error: null };
   }
 
-  async function probeContract(dir: string, assembled: AssembledPage): Promise<Result<CheckFinding[], FramePageError>> {
+  async function probePage(dir: string, assembled: AssembledPage): Promise<Result<CheckFinding[], FramePageError>> {
     const { data: page, error } = await openFramePage({ dir, chromePath, width: assembled.width, height: assembled.height });
 
     if (error) {
@@ -117,7 +115,10 @@ export function createChecker({ chromePath }: CheckerOptions) {
     }
 
     try {
-      return { data: await checkContract(page, assembled), error: null };
+      const contract = await checkContract(page, assembled);
+      const rules = await checkRules(page, assembled);
+
+      return { data: [...contract, ...rules], error: null };
     } finally {
       await page.close();
     }

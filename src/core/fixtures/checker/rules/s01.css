@@ -4,5 +4,5 @@
 .node-key .node-icon { color: var(--accent); }
 /* A stamp deliberately laid over the label. */
 .badge { position: absolute; left: 110px; top: 34px; padding: 4px 14px; border-radius: 999px; background: var(--accent); color: var(--bg); transform: rotate(-8deg); }
-/* A cursor deliberately laid over the label, as if clicking it. */
+/* A cursor laid over the label by accident: nothing marks it as deliberate. */
 .cursor { position: absolute; left: 150px; top: 40px; font-size: 48px; color: var(--accent); }
