@@ -5,9 +5,9 @@ import type { Checker, CheckerError } from "../checker";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
-import type { Previews, ThumbnailsError } from "../preview";
+import type { Previews, StillError, Stills, ThumbnailsError } from "../preview";
 import { validateStoryboard } from "../storyboard";
-import { BUNDLED_PALETTES, FONT_PAIRINGS, listPresets } from "../style";
+import { BUNDLED_PALETTES, bundledFonts, checkContrast, FONT_PAIRINGS, presetSample, type PresetStore, type PresetStoreError } from "../style";
 import type { System } from "../system";
 import type { TranscriptionModel } from "../transcription-model";
 
@@ -24,6 +24,8 @@ export type CoreRouterDeps = {
   sample?: SampleProject;
   projects: Projects;
   cache: Cache;
+  presets: PresetStore;
+  stills: Stills;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -32,7 +34,7 @@ export type CoreRouter = ReturnType<typeof createCoreRouter>;
 export type CoreContext = { connection?: string };
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -76,9 +78,26 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
       }),
     },
     style: {
-      presets: api.style.presets.handler(() => listPresets()),
+      presets: api.style.presets.handler(() => presets.list()),
       palettes: api.style.palettes.handler(() => structuredClone([...BUNDLED_PALETTES])),
       typography: api.style.typography.handler(() => structuredClone([...FONT_PAIRINGS])),
+      fonts: api.style.fonts.handler(() => bundledFonts()),
+      contrast: api.style.contrast.handler(({ input }) => ({ findings: checkContrast(input.palette) })),
+      duplicate: api.style.duplicate.handler(async ({ input }) => presetOrThrow(await presets.duplicate(input.id))),
+      save: api.style.save.handler(async ({ input }) => presetOrThrow(await presets.save(input.preset))),
+      remove: api.style.remove.handler(async ({ input }) => {
+        presetOrThrow(await presets.remove(input.id));
+      }),
+      sample: api.style.sample.handler(async ({ input, errors }) => {
+        const { source, time } = presetSample(input.preset);
+        const { data: image, error } = await stills.still(source, time);
+
+        if (error) {
+          throw errors.CHECKER_UNAVAILABLE({ data: stillUnavailable(error) });
+        }
+
+        return { image };
+      }),
     },
     preview: {
       open: api.preview.open.handler(async ({ input, errors }) => {
@@ -180,14 +199,45 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
 /** A Project store result as the core API answers it: the data, or the error as the contract defines it. */
 function dataOrThrow<T>({ data, error }: ProjectsResult<T>): T {
   if (error) {
-    const { code, ...details } = error;
-    throw new ORPCError(code, { data: details });
+    throwDeclared(error);
   }
 
   return data;
 }
 
+/** The same for the Preset store. */
+function presetOrThrow<T>({ data, error }: PresetResult<T>): T {
+  if (error) {
+    throwDeclared(error);
+  }
+
+  return data;
+}
+
+function throwDeclared({ code, ...details }: ProjectsError | PresetStoreError): never {
+  throw new ORPCError(code, { data: details });
+}
+
 type ProjectsResult<T> = { data: T; error: null } | { data: null; error: ProjectsError };
+
+type PresetResult<T> = { data: T; error: null } | { data: null; error: PresetStoreError };
+
+/** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
+function stillUnavailable(error: StillError): CheckerUnavailable {
+  if (error.code === "CHROME_MISSING") {
+    return { cause: error.code, detail: error.path };
+  }
+
+  if (error.code === "BROWSER_FAILED") {
+    return { cause: error.code, detail: error.message };
+  }
+
+  if (error.code === "INVALID_STORYBOARD") {
+    return { cause: "PAGE_FAILED", detail: JSON.stringify(error.issues) };
+  }
+
+  return { cause: "PAGE_FAILED", detail: `${error.path}: ${error.message}` };
+}
 
 function unavailable(
   error: Exclude<CheckerError, { code: "INVALID_STORYBOARD" | "UNKNOWN_UNIT" }> | Exclude<ThumbnailsError, { code: "PREVIEW_NOT_FOUND" }>,

@@ -27,6 +27,9 @@ export const CanvasPreferenceSchema = z.enum(["never", "where-it-helps", "whenev
 /** A Palette's fixed roles: backgrounds, surfaces, a line color, text, three accents, positive and negative. */
 export const PaletteRoleSchema = z.enum(["bg", "bg2", "surface", "surface2", "line", "ink", "muted", "accent", "accent2", "accent3", "good", "bad"]);
 
+/** The Palette roles that can be kept to fills: the accents, positive and negative. */
+export const AccentRoleSchema = z.enum(["accent", "accent2", "accent3", "good", "bad"]);
+
 const HexColorSchema = z.string().regex(/^#[0-9a-fA-F]{6}$/, "use a six-digit hex color, such as #ff7a3d");
 
 /** The colors of a Style Preset, light or dark; a Preset holds its own copy, never a link to a bundled Palette. */
@@ -34,6 +37,24 @@ export const PaletteSchema = z.object({
   name: z.string().trim().min(1).max(40),
   mode: z.enum(["light", "dark"]),
   colors: z.record(PaletteRoleSchema, HexColorSchema),
+  /** Accents used only as fills with ink on them, never as text or lines, so they may sit close to bg. */
+  fills: z.array(AccentRoleSchema).optional(),
+});
+
+/**
+ * Where a Palette falls short of WCAG AA: text (or ink on a fill) below 4.5:1, an accent used for text or lines
+ * below 3:1, a fill that barely stands out from bg, or a line color that barely shows. `block` stops a Preset
+ * from being saved; `warn` only says so. Ratios are rounded to two decimals, as they are compared.
+ */
+export const ContrastFindingSchema = z.object({
+  level: z.enum(["block", "warn"]),
+  use: z.enum(["text", "accent", "fill", "line"]),
+  /** The color that falls short. */
+  role: PaletteRoleSchema,
+  /** The color it is read against. */
+  against: PaletteRoleSchema,
+  ratio: z.number(),
+  minimum: z.number(),
 });
 
 /** The OFL font families the frame bundles; Scene code reaches them only through `var(--font-*)`. */
@@ -98,6 +119,9 @@ export const StylePresetSchema = z.object({
 
 /** A Style Preset as the app lists it: the bundled ones are read-only and are duplicated to edit. */
 export const ListedPresetSchema = StylePresetSchema.extend({ readOnly: z.boolean() });
+
+/** A font family the frame bundles, with the weights it ships; a face may use only these. */
+export const BundledFontSchema = z.object({ family: FontFamilySchema, weights: z.array(z.number().int()) });
 
 /** The 9 Scene Types. */
 export const SceneTypeSchema = z.enum([
@@ -324,7 +348,7 @@ export const TranscriptionModelStatusSchema = z.object({
 /** A Whisper language code, or `auto` to detect it from the Voiceover. */
 export const LanguageSchema = z.string().regex(/^(auto|[a-z]{2,3})$/, "auto, or a language code such as en");
 
-/** A Style Preset's id: one of the bundled Presets for now (blueprint, whiteboard, sketchbook, terminal). */
+/** A Style Preset's id: a bundled Preset (blueprint, whiteboard, sketchbook, terminal) or one of the creator's own. */
 export const StylePresetIdSchema = z.string().regex(/^[a-z0-9-]+$/);
 
 export const TranscriptWordSchema = z.object({
@@ -521,12 +545,48 @@ export const coreContract = {
       .output(z.object({ frameContractVersion: z.string(), findings: z.array(CheckFindingSchema) })),
   },
   style: {
-    /** The Style Presets to choose from, Blueprint first. The four bundled ones are read-only. */
+    /** The Style Presets to choose from: the four bundled ones, read-only and Blueprint first, then the creator's own. */
     presets: oc.output(z.array(ListedPresetSchema)),
     /** The bundled Palettes a Preset copies its colors from. */
     palettes: oc.output(z.array(PaletteSchema)),
     /** The bundled OFL font pairings a Preset copies its typography from. */
     typography: oc.output(z.array(TypographySchema)),
+    /** The font families the frame bundles, with their weights. */
+    fonts: oc.output(z.array(BundledFontSchema)),
+    /** Checks a Palette against the contrast rule; no findings means it passes. */
+    contrast: oc.input(z.object({ palette: PaletteSchema })).output(z.object({ findings: z.array(ContrastFindingSchema) })),
+    /** Makes the creator's own copy of any Preset, under a new id and name, to edit. */
+    duplicate: oc
+      .errors({ UNKNOWN_PRESET: { data: z.object({ id: z.string() }) }, FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) } })
+      .input(z.object({ id: StylePresetIdSchema }))
+      .output(ListedPresetSchema),
+    /**
+     * Saves the creator's edits to one of their own Presets, unless the contrast rule blocks its Palette. Answers
+     * with the warnings it saved with. Videos keep their own snapshot, so a save never changes one.
+     */
+    save: oc
+      .errors({
+        READ_ONLY: { data: z.object({ id: z.string() }) },
+        UNKNOWN_PRESET: { data: z.object({ id: z.string() }) },
+        LOW_CONTRAST: { data: z.object({ findings: z.array(ContrastFindingSchema) }) },
+        UNBUNDLED_WEIGHT: { data: z.object({ family: FontFamilySchema, weight: z.number(), weights: z.array(z.number()) }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(z.object({ preset: StylePresetSchema }))
+      .output(z.object({ preset: ListedPresetSchema, findings: z.array(ContrastFindingSchema) })),
+    /** Deletes one of the creator's own Presets; videos made with it keep their snapshot. */
+    remove: oc
+      .errors({
+        READ_ONLY: { data: z.object({ id: z.string() }) },
+        UNKNOWN_PRESET: { data: z.object({ id: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+      })
+      .input(z.object({ id: StylePresetIdSchema })),
+    /** A still of a small diagram drawn in the bundled frame in a Preset, as a JPEG data URL; cached by Preset. */
+    sample: oc
+      .errors({ CHECKER_UNAVAILABLE: { data: CheckerUnavailableSchema } })
+      .input(z.object({ preset: StylePresetSchema }))
+      .output(z.object({ image: z.string() })),
   },
   preview: {
     /**
@@ -678,7 +738,10 @@ export type PresetTransition = z.infer<typeof PresetTransitionSchema>;
 export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;
 export type PaletteRole = z.infer<typeof PaletteRoleSchema>;
+export type AccentRole = z.infer<typeof AccentRoleSchema>;
 export type Palette = z.infer<typeof PaletteSchema>;
+export type ContrastFinding = z.infer<typeof ContrastFindingSchema>;
+export type BundledFont = z.infer<typeof BundledFontSchema>;
 export type FontFamily = z.infer<typeof FontFamilySchema>;
 export type Face = z.infer<typeof FaceSchema>;
 export type Typography = z.infer<typeof TypographySchema>;
