@@ -63,7 +63,7 @@ describe("visual review and repair", () => {
     expect(done.state).toBe("done");
     expect(["s01", "s02", "s03", "s04", "s05"].map((unit) => replay.askedOf(`review ${unit}`).length)).toEqual([1, 0, 1, 1, 0]);
     expect(replay.askedOf("review s01")[0]?.options.model).toBe("claude-sonnet-5-5");
-    expect((await version()).models).toMatchObject({ review: "claude-sonnet-5-5" });
+    expect((await version()).models).toMatchObject({ visualReview: "claude-sonnet-5-5" });
   });
 
   it("draws the reviewed units' stills with the Renderer and keeps them in the cache by content hash", async () => {

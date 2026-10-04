@@ -280,6 +280,7 @@ function retryErrorMessage(error: unknown) {
 const STOP_HEADLINES = {
   stopped: () => "Stopped",
   "plan-limit": planLimitHeadline,
+  "cost-cap": () => "Cost cap reached",
   authentication: () => "Claude was disconnected",
   closed: () => "Stopped when the Project closed",
 } satisfies Record<GenerationStop["cause"], (stop: GenerationStop, now: Date) => string>;

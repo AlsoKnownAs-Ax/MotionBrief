@@ -87,7 +87,7 @@ async function newProject(core: CoreClient, dir: string): Promise<Project> {
 async function generate(core: CoreClient, video: VideoRef): Promise<GenerationStatus> {
   const stop = new AbortController();
   const statuses = await core.video.generation(video, { signal: stop.signal });
-  await core.video.generate(video);
+  await core.video.generate({ ...video, approved: true });
 
   for await (const status of statuses) {
     if (status.state === "done" || status.state === "failed") {
