@@ -206,11 +206,12 @@ export function createCoreRouter({
     },
     video: {
       estimate: api.video.estimate.handler(async ({ input }) => dataOrThrow(await generation.estimate(input))),
+      open: api.video.open.handler(async ({ input }) => dataOrThrow(await generation.open(input))),
+      setCaptions: api.video.setCaptions.handler(async ({ input: { captions, ...video } }) => dataOrThrow(await generation.setCaptions(video, captions))),
       generate: api.video.generate.handler(async ({ input }) => {
         dataOrThrow(await generation.start(input));
       }),
       generation: api.video.generation.handler(async ({ input, signal }) => dataOrThrow(await generation.watch(input, signal))),
-      open: api.video.open.handler(async ({ input }) => dataOrThrow(await generation.open(input))),
       stop: api.video.stop.handler(async ({ input }) => {
         dataOrThrow(await generation.stop(input));
       }),

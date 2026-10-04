@@ -15,6 +15,8 @@ export const VideoDocumentSchema = z.object({
    * that Version isn't re-checked again until the next major update.
    */
   frameChecked: z.object({ version: z.number().int().positive(), frameContractVersion: z.string() }).optional(),
+  /** Whether the video shows Captions, once the creator chose; until then its Format's default. */
+  captions: z.boolean().optional(),
 });
 
 export type VideoDocument = z.infer<typeof VideoDocumentSchema>;

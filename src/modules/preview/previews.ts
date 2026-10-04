@@ -69,7 +69,15 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
 
     const id = pageId({ ...source, storyboard }, voiceover && { size: voiceover.size, modified: voiceover.mtimeMs });
     const page = await build(id, async (dir) => {
-      const assembled = await assemble({ dir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code, voiceover: source.voiceover });
+      const assembled = await assemble({
+        dir,
+        storyboard,
+        transcript: source.transcript,
+        preset: source.preset,
+        code: source.code,
+        voiceover: source.voiceover,
+        captions: source.captions ?? source.rules.captions,
+      });
 
       return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source };
     });
@@ -193,7 +201,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
   return { open, thumbnails, source, close };
 }
 
-/** Same source, same id: the Storyboard, Transcript, Style Preset, code and Voiceover, and the frame they are built in. */
+/** Same source, same id: the Storyboard, Transcript, Style Preset, Captions, code and Voiceover, and the frame they are built in. */
 function pageId(source: VideoSource, voiceover: { size: number; modified: number } | undefined): string {
   const code = Object.fromEntries(Object.entries(source.code).sort(([a], [b]) => a.localeCompare(b)));
   const key = JSON.stringify({
@@ -201,6 +209,7 @@ function pageId(source: VideoSource, voiceover: { size: number; modified: number
     storyboard: source.storyboard,
     transcript: source.transcript,
     preset: source.preset,
+    captions: source.captions ?? source.rules.captions,
     code,
     voiceover: source.voiceover && { path: source.voiceover, ...voiceover },
   });

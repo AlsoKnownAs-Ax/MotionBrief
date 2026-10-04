@@ -45,7 +45,8 @@ ${brief.storyboard}`;
 
 const FORMAT_NOTES = {
   horizontal: "Wide diagrams and side-by-side comparisons work well.",
-  vertical: "Stack things, keep at most about 4 nodes or items per Scene. A bottom band is reserved for Captions.",
+  vertical:
+    "Stack things, keep at most about 4 nodes or items per Scene. A bottom band is reserved for Captions. A Canvas stacks its Scenes top to bottom, so the camera moves mostly up and down.",
 } satisfies Record<Format, string>;
 
 function captionsRule(captions: boolean): string {

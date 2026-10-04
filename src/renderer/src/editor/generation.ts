@@ -3,12 +3,26 @@ import { create } from "zustand";
 import { core, orpc, queryClient } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
-import type { GenerationError, GenerationStatus, GenerationStop, Preview, Project, VideoRef } from "../../../contract";
+import type { Format, GenerationError, GenerationStatus, GenerationStop, OpenedVideo, Project, VideoRef } from "../../../contract";
 import { useOpenVideo } from "./open-video";
+import { usePlayback } from "./playback";
+
+/** The open Format's saved video: its newest Version (none before the first is saved), or why it couldn't be opened. */
+export type StoredVideo = {
+  isLoading: boolean;
+  version?: number;
+  /** Whether it shows Captions, or will once generated, as the creator chose; absent for the Format's default. */
+  captions?: boolean;
+  error?: string;
+};
 
 type GenerationStore = {
+  /** The video the editor shows: the open Project and Format. */
+  video?: VideoRef;
   /** The open video's generation; absent for a video that wasn't generated in this window. */
   status?: GenerationStatus;
+  /** The open Format's video as the Project has it saved. */
+  stored?: StoredVideo;
   /** Why the window stopped hearing about the generation, such as the core going away. */
   lostError?: string;
   /** Stop was pressed and the run is saving what it keeps. */
@@ -19,9 +33,11 @@ type GenerationStore = {
   isReconnectOpen: boolean;
   /**
    * Opens the video in the editor and follows its generation: the preview updates as units finish. A saved video
-   * opens with its newest Version's preview, and follows any Retry of its flagged Scenes.
+   * opens at its newest Version, already `opened` when the caller opened it, and follows any Retry of its flagged Scenes.
    */
-  follow: (project: Project, video: VideoRef, preview?: Preview) => void;
+  follow: (project: Project, video: VideoRef, opened?: OpenedVideo) => void;
+  /** Shows the open Project's video in another Format, or its empty state when it has none yet. */
+  showFormat: (format: Format) => void;
   /** Listens to the generation again after losing it; the core kept it going. */
   reconnect: () => void;
   /** Stops the run; finished Scenes are kept and the rest become flagged fallbacks. */
@@ -36,26 +52,29 @@ type GenerationStore = {
 };
 
 let controller: AbortController | undefined;
-let followed: { project: Project; video: VideoRef } | undefined;
+let followed: Project | undefined;
 
 /** The generation the editor shows: one per window. */
 export const useGeneration = create<GenerationStore>((set, get) => {
-  function listen() {
+  function listen(video: VideoRef) {
     controller?.abort();
     const current = new AbortController();
     controller = current;
     set({ lostError: undefined });
 
-    if (!followed) {
-      return;
-    }
-
     void (async () => {
-      for await (const status of await core.video.generation(followed.video, { signal: current.signal })) {
+      for await (const status of await core.video.generation(video, { signal: current.signal })) {
         const before = get().status;
+
+        // Opening the saved Version resets a finished run to idle; the window keeps showing how the run ended.
+        if (status.state === "idle" && before?.state === "done") {
+          continue;
+        }
+
         set({ status });
 
-        if (status.preview) {
+        // Once done, the saved Version plays: it has the Transcript's newest word fixes.
+        if (status.preview && status.state !== "done") {
           useOpenVideo.getState().showPreview(status.preview);
         }
 
@@ -63,6 +82,10 @@ export const useGeneration = create<GenerationStore>((set, get) => {
           // The login is checked again, so the prompt shows where it stands now.
           void queryClient.invalidateQueries({ queryKey: orpc.connection.status.queryKey() });
           set({ isReconnectOpen: true });
+        }
+
+        if (status.state === "done" && before?.state !== "done") {
+          void openStored(video);
         }
       }
 
@@ -77,39 +100,99 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     });
   }
 
+  /** Looks up the Format's saved video and plays it, unless a generation of it is still writing it. */
+  async function openStored(video: VideoRef) {
+    set(({ stored }) => ({ stored: { ...stored, isLoading: true } }));
+    const { data: opened, error } = await safe(core.video.open(video));
+
+    if (get().video !== video) {
+      return;
+    }
+
+    if (error) {
+      set({ stored: { isLoading: false, error: openErrorMessage(error) } });
+      return;
+    }
+
+    showOpened(opened);
+  }
+
+  function showOpened(opened: OpenedVideo) {
+    set({ stored: { isLoading: false, version: opened.version, captions: opened.captions } });
+
+    if (opened.preview && !isGenerating(get().status)) {
+      useOpenVideo.getState().showPreview(opened.preview);
+    }
+  }
+
+  /** Follows the video's generation and plays its saved Version; a fixed word rebuilds it so its Captions show the fix. */
+  function show(video: VideoRef, opened?: OpenedVideo) {
+    set({ video, status: undefined, stored: { isLoading: true }, retryError: undefined });
+    useOpenVideo.setState({ onWordFixed: () => void openStored(video) });
+    listen(video);
+
+    if (opened) {
+      showOpened(opened);
+    } else {
+      void openStored(video);
+    }
+  }
+
   function unfollow() {
     controller?.abort();
     controller = undefined;
     followed = undefined;
-    set({ status: undefined, lostError: undefined, isStopping: false, retryError: undefined, isReconnectOpen: false });
+    set({ video: undefined, status: undefined, stored: undefined, lostError: undefined, isStopping: false, retryError: undefined, isReconnectOpen: false });
+    useOpenVideo.setState({ onWordFixed: undefined });
   }
 
   return {
     isStopping: false,
     isReconnectOpen: false,
-    follow: (project, video, preview) => {
-      useOpenVideo.getState().open({ ...project, isStored: true }, preview);
-      set({ status: undefined, retryError: undefined });
-      followed = { project, video };
-      listen();
+    follow: (project, video, opened) => {
+      useOpenVideo.getState().open({ ...project, isStored: true }, opened?.preview);
+      followed = project;
+      show(video, opened);
     },
-    reconnect: listen,
+    showFormat: (format) => {
+      const { video } = get();
+
+      if (!video || video.format === format) {
+        return;
+      }
+
+      // Both Formats share the Transcript, so word fixes carry over; only the player changes.
+      usePlayback.setState({ resumes: false });
+      useOpenVideo.setState({ preview: undefined });
+      show({ projectId: video.projectId, format });
+    },
+    reconnect: () => {
+      const { video } = get();
+
+      if (video) {
+        listen(video);
+      }
+    },
     stop: async () => {
-      if (!followed) {
+      const { video } = get();
+
+      if (!video) {
         return;
       }
 
       set({ isStopping: true });
-      await safe(core.video.stop(followed.video));
+      await safe(core.video.stop(video));
       set({ isStopping: false });
     },
     retry: async (units) => {
-      if (!followed) {
+      const { video } = get();
+
+      if (!video) {
         return;
       }
 
       set({ retryError: undefined });
-      const { error } = await safe(core.video.retry({ ...followed.video, units }));
+      const { error } = await safe(core.video.retry({ ...video, units }));
 
       if (error) {
         set({ retryError: retryErrorMessage(error) });
@@ -117,7 +200,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     },
     setReconnectOpen: (isOpen) => set({ isReconnectOpen: isOpen }),
     backToProject: () => {
-      const project = followed?.project;
+      const project = followed;
       unfollow();
 
       if (project) {
@@ -127,7 +210,6 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     leave: () => {
       const { projectId, isStored } = useOpenVideo.getState();
       unfollow();
-
       if (isStored) {
         void safe(core.project.close({ projectId }));
       }
@@ -138,6 +220,23 @@ export const useGeneration = create<GenerationStore>((set, get) => {
 /** Whether the generation is still writing the video, so it isn't complete yet. */
 export function isGenerating(status: GenerationStatus | undefined) {
   return status?.state === "planning" || status?.state === "writing";
+}
+
+const STORYBOARD_UNFIT = "This video's saved Storyboard doesn't fit its Transcript any more, so it can't play.";
+
+const OPEN_MESSAGES: Record<string, string> = {
+  VOICEOVER_MISSING: "The Voiceover isn't in the Project folder any more, so this video can't play.",
+  INVALID_STORYBOARD: STORYBOARD_UNFIT,
+  UNKNOWN_UNIT: STORYBOARD_UNFIT,
+};
+
+/** One sentence on why a saved video can't be played. */
+function openErrorMessage(error: unknown) {
+  if (error instanceof ORPCError && error.defined && error.code in OPEN_MESSAGES) {
+    return OPEN_MESSAGES[error.code];
+  }
+
+  return projectErrorMessage(error);
 }
 
 /** One sentence on why a generation ended without a video. */

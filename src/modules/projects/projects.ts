@@ -841,6 +841,28 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
   }
 
   function rememberExportPath(projectId: string, format: Format, path: string): Promise<Result<null, ProjectsError | VideoDocumentError>> {
+    return changeVideo(projectId, format, { lastExportPath: path });
+  }
+
+  /** Whether the creator turned the video's Captions on or off; absent until they chose. */
+  async function captionsChoice(projectId: string, format: Format): Promise<Result<boolean | undefined, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { data: video, error } = await enqueue(project, () => readVideo(project.dir, format));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: video.captions, error: null };
+  }
+
+  /** Saves a change to the video's document, after the folder's earlier changes. */
+  function changeVideo(projectId: string, format: Format, change: VideoDocument): Promise<Result<null, ProjectsError | VideoDocumentError>> {
     const project = open.get(projectId);
 
     if (!project) {
@@ -854,7 +876,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
         return { data: null, error };
       }
 
-      const { error: saveError } = await saveVideo(project.dir, format, { ...video, lastExportPath: path });
+      const { error: saveError } = await saveVideo(project.dir, format, { ...video, ...change });
 
       if (saveError) {
         return { data: null, error: saveError };
@@ -895,27 +917,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
 
   /** Remembers that a Version's units pass a frame contract, so they aren't re-checked against it again. */
   function rememberFrameCheck(projectId: string, format: Format, frameChecked: FrameCheck): Promise<Result<null, ProjectsError | VideoDocumentError>> {
-    const project = open.get(projectId);
-
-    if (!project) {
-      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
-    }
-
-    return enqueue(project, async () => {
-      const { data: video, error } = await readVideo(project.dir, format);
-
-      if (error) {
-        return { data: null, error };
-      }
-
-      const { error: saveError } = await saveVideo(project.dir, format, { ...video, frameChecked });
-
-      if (saveError) {
-        return { data: null, error: saveError };
-      }
-
-      return { data: null, error: null };
-    });
+    return changeVideo(projectId, format, { frameChecked });
   }
 
   /** Runs a write in the Project folder after its earlier changes, wherever the folder is by then. */
@@ -1004,6 +1006,9 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     rememberExportPath,
     storedVideo,
     rememberFrameCheck,
+    captionsChoice,
+    /** Saves whether the video shows Captions. */
+    chooseCaptions: (projectId: string, format: Format, captions: boolean) => changeVideo(projectId, format, { captions }),
     close,
     disconnect,
     closeAll,

@@ -74,7 +74,15 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
         return;
       }
 
-      await assemble({ dir: pageDir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code, voiceover: source.voiceover });
+      await assemble({
+        dir: pageDir,
+        storyboard,
+        transcript: source.transcript,
+        preset: source.preset,
+        code: source.code,
+        voiceover: source.voiceover,
+        captions: source.captions ?? source.rules.captions,
+      });
 
       const outcome = yield* renderMp4({ pageDir, output, chromePath, ffmpegPath, ffprobePath, signal });
 

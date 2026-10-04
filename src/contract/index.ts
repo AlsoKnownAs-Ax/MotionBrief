@@ -227,6 +227,11 @@ export const VideoSourceSchema = z.object({
   voiceover: z.string().optional(),
   /** The visual reviewer's remaining complaint per unit id, for units whose repair was reverted. */
   notes: z.record(z.string(), z.string()).optional(),
+  /**
+   * Whether Captions are drawn, when that differs from what the Storyboard was written for (`rules.captions`):
+   * Captions turned on later still check the Storyboard by the rules it was written to.
+   */
+  captions: z.boolean().optional(),
 });
 
 /**
@@ -530,10 +535,12 @@ export const FrameUpdateSchema = z.object({
   units: z.array(z.string()).min(1),
 });
 
-/** A saved video, opened to play its newest Version. */
+/** A video of a Project as it plays now: its newest Version, or nothing in a Format without a video. */
 export const OpenedVideoSchema = z.object({
-  version: z.number().int().positive(),
-  preview: PreviewSchema,
+  version: z.number().int().positive().optional(),
+  /** Whether the video shows Captions. */
+  captions: z.boolean().optional(),
+  preview: PreviewSchema.optional(),
   /** Present when this open re-checked the units after a frame major update and some failed. */
   frameUpdate: FrameUpdateSchema.optional(),
 });
@@ -817,8 +824,27 @@ export const coreContract = {
     /** How long, and on an API key what, generating the video will take with the default models. */
     estimate: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(GenerationEstimateSchema),
     /**
-     * Generates the video from the Project's Transcript in its Style Preset: a Storyboard, then each unit's
-     * Scene code, checked and retried, saved as Version 1. Only ever starts when the creator presses Generate.
+     * Turns the video's Captions on or off and saves the choice with the video; a video not generated yet is then
+     * generated with it. Re-renders with no agent run and answers with the video as it plays now, as `open` does.
+     * The Style tab's switch, which also saves a Version, builds on this.
+     */
+    setCaptions: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+      })
+      .input(VideoRefSchema.extend({ captions: z.boolean() }))
+      .output(OpenedVideoSchema),
+    /**
+     * Generates the video from the Project's Transcript: a Storyboard, then each unit's Scene code, checked and
+     * retried, saved as Version 1. The Project's first video is drawn in its Style Preset; the other Format's
+     * copies the first video's current Preset snapshot and shares its Transcript. A Format is always a generation
+     * of its own, never a Revision of the other. Only ever starts when the creator presses Generate.
      */
     generate: oc
       .errors({
@@ -835,16 +861,16 @@ export const coreContract = {
     /** Streams the video's generation now and after every change, until the window stops listening. */
     generation: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(GenerationStatusSchema)),
     /**
-     * Opens a saved video to play its newest Version. After an app update that changed the frame's major version,
-     * its units are first checked again (lint, check and the contract; no agent). Units that fail become flagged
-     * fallbacks in a new Version, and nothing is regenerated until the creator asks.
+     * Opens the video of a Format for the player: its newest Version with the Project's current Transcript, word
+     * fixes and all, and the video's Captions choice. A Format without a video yet answers with no Version, for its
+     * Generate empty state. After an app update that changed the frame's major version, its units are first checked
+     * again (lint, check and the contract; no agent). Units that fail become flagged fallbacks in a new Version, and
+     * nothing is regenerated until the creator asks.
      */
     open: oc
       .errors({
         UNKNOWN_PROJECT,
         TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
-        /** The Project has no video in this Format yet. */
-        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
         /** A Version or unit file in the Project can't be read as one. */
         INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
         INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },

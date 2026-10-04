@@ -51,7 +51,7 @@ export async function openStoredVideo(project: Project): Promise<"opened" | "no-
   const video = { projectId: project.id, format: project.format };
   const { data: opened, error } = await openVideo(video);
 
-  if (isDefinedError(error) && (error.code === "NO_VIDEO" || error.code === "TRANSCRIPT_NOT_READY")) {
+  if (isDefinedError(error) && error.code === "TRANSCRIPT_NOT_READY") {
     return "no-video";
   }
 
@@ -62,7 +62,11 @@ export async function openStoredVideo(project: Project): Promise<"opened" | "no-
     return "failed";
   }
 
-  useGeneration.getState().follow(project, video, opened.preview);
+  if (opened.version === undefined) {
+    return "no-video";
+  }
+
+  useGeneration.getState().follow(project, video, opened);
   useFrameUpdate.setState({ notice: noticeOf(video, opened.frameUpdate), retryError: undefined });
   useNavigation.getState().openEditor();
 
@@ -86,7 +90,6 @@ const CLOSED = () => "This Project was closed. Go back to Home and start again."
 const OPEN_MESSAGES = {
   UNKNOWN_PROJECT: CLOSED,
   TRANSCRIPT_NOT_READY: CLOSED,
-  NO_VIDEO: CLOSED,
   VOICEOVER_MISSING: () => "The Project's Voiceover file is missing, so its video can't play. Put the Voiceover back in the Project folder.",
   INVALID_VERSION: DAMAGED,
   INVALID_STORYBOARD: DAMAGED,
@@ -97,6 +100,7 @@ const OPEN_MESSAGES = {
 /** One sentence per error code `video.retry` answers with. */
 const RETRY_MESSAGES = {
   ...OPEN_MESSAGES,
+  NO_VIDEO: CLOSED,
   GENERATING: () => "Scenes of this video are already being written. Retry once they're done.",
   NOT_FLAGGED: () => "Those Scenes aren't flagged any more.",
 } satisfies Record<Extract<RetryError, { defined: true }>["code"], (data: ErrorData) => string>;

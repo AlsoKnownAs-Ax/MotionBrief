@@ -16,7 +16,7 @@ import type {
   UnitWork,
   VideoRef,
 } from "../../contract";
-import { StylePresetSchema } from "../../contract";
+import { FormatSchema, StylePresetSchema } from "../../contract";
 import { planUnits, type Unit } from "../assembler";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
@@ -27,10 +27,12 @@ import {
   type Flag,
   type Projects,
   type ProjectsError,
+  type ProjectVideo,
   type StoredVideo,
   type Version,
   type VersionError,
   type VideoContent,
+  type VideoDocumentError,
 } from "../projects";
 import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules, type PresetBrief } from "../style";
@@ -43,6 +45,9 @@ import { reviewUnit } from "./review";
 export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5", review: "claude-sonnet-5-5" };
 
 export type Models = typeof DEFAULT_MODELS;
+
+/** Captions are on by default in vertical and off in horizontal, until the creator chooses for the video. */
+const CAPTIONS_BY_DEFAULT = { vertical: true, horizontal: false } satisfies Record<Format, boolean>;
 
 /** Scene-code subagents running at once. */
 const PARALLEL_UNITS = 4;
@@ -181,6 +186,8 @@ export function createGeneration({ connector, checker, previews, stills, project
     }
 
     const { key, store } = storeOf(ref);
+    const { data: preset, error: presetError } = await presetFor(video, format);
+    const { data: choice, error: choiceError } = await projects.captionsChoice(projectId, format);
 
     if (runs.has(key)) {
       return { data: null, error: { code: "GENERATING", projectId } };
@@ -194,10 +201,12 @@ export function createGeneration({ connector, checker, previews, stills, project
       return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
     }
 
-    const listed = listPresets().find(({ id }) => id === video.project.stylePreset);
+    if (presetError) {
+      return { data: null, error: presetError };
+    }
 
-    if (!listed) {
-      return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
     }
 
     // Synchronous from here on, so a close of the Project either stops this run or refuses it.
@@ -207,16 +216,55 @@ export function createGeneration({ connector, checker, previews, stills, project
 
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
-    begin(key, store, (run) => generate({ run, ref, transcript, preset: StylePresetSchema.parse(listed), store }));
+    const captions = choice ?? CAPTIONS_BY_DEFAULT[format];
+    begin(key, store, (run) => generate({ run, ref, transcript, preset, captions, store }));
 
     return { data: null, error: null };
   }
 
-  type GenerateRun = { run: Run; ref: VideoRef; transcript: Transcript; preset: StylePreset; store: StatusStore };
+  /**
+   * The Style Preset a video is generated in. The Project's other Format, once it has a video, passes on
+   * its current Preset snapshot, so both videos look alike; a Project's first video uses its Style Preset.
+   */
+  async function presetFor(video: ProjectVideo, format: Format): Promise<Result<StylePreset, GenerateError>> {
+    const sibling = FormatSchema.options.find((other) => other !== format) ?? format;
+    const { data: stored, error } = await projects.storedVideo(video.project.id, sibling);
 
-  async function generate({ run, ref, transcript, preset, store }: GenerateRun) {
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    if (stored) {
+      return { data: stored.version.preset, error: null };
+    }
+
+    const listed = listPresets().find(({ id }) => id === video.project.stylePreset);
+
+    if (!listed) {
+      return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
+    }
+
+    return { data: StylePresetSchema.parse(listed), error: null };
+  }
+
+  /**
+   * Turns the video's Captions on or off, saves the choice with the video and re-renders it, with no agent run.
+   * The Style tab (#45) adds a Version per change on top of this.
+   */
+  async function setCaptions(ref: VideoRef, captions: boolean): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { error } = await projects.chooseCaptions(ref.projectId, ref.format, captions);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    return open(ref);
+  }
+
+  type GenerateRun = { run: Run; ref: VideoRef; transcript: Transcript; preset: StylePreset; captions: boolean; store: StatusStore };
+
+  async function generate({ run, ref, transcript, preset, captions, store }: GenerateRun) {
     const { projectId, format } = ref;
-    const captions = format === "vertical";
     const rules = storyboardRules(preset, { format, captions });
     const brief = presetBrief(preset, format);
     const { data: storyboard, error } = await writeStoryboard({
@@ -587,26 +635,40 @@ export function createGeneration({ connector, checker, previews, stills, project
   }
 
   /**
-   * Opens a saved video at its newest Version. Units written against an older frame major are checked again first,
-   * with no agent: those that fail become flagged fallbacks in a new Version, and none is regenerated.
+   * Opens a saved video at its newest Version, with the Project's current Transcript so word fixes made since show
+   * in it, and the video's Captions choice. Units written against an older frame major are checked again first,
+   * with no agent: those that fail become flagged fallbacks in a new Version, and none is regenerated. A Format
+   * without a video answers with no Version.
    */
   async function open(ref: VideoRef): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { data: choice, error: choiceError } = await projects.captionsChoice(ref.projectId, ref.format);
+
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
+    }
+
     const { data: checked, error } = await exclusive(storeOf(ref).key, () => openChecked(ref));
+
+    if (error?.code === "NO_VIDEO") {
+      return { data: { captions: choice }, error: null };
+    }
 
     if (error) {
       return { data: null, error };
     }
 
     const { transcript, voiceoverPath, version, code, frameUpdate } = checked;
+    const captions = choice ?? version.captions;
+    // The Storyboard is checked by the rules it was written to; Captions turned on since are only drawn.
     const rules = storyboardRules(version.preset, { format: ref.format, captions: version.captions });
-    const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, notes: reviewNotes(version.flags), voiceover: voiceoverPath };
+    const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, notes: reviewNotes(version.flags), voiceover: voiceoverPath, captions };
     const { data: preview, error: previewError } = await previews.open(source);
 
     if (previewError) {
       return { data: null, error: previewError };
     }
 
-    return { data: { version: version.version, preview, frameUpdate }, error: null };
+    return { data: { version: version.version, captions, preview, frameUpdate }, error: null };
   }
 
   /**
@@ -658,10 +720,6 @@ export function createGeneration({ connector, checker, previews, stills, project
       return { data: null, error: projectError(error) };
     }
 
-    if (!video.transcript) {
-      return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
-    }
-
     const { data: stored, error: storedError } = await projects.storedVideo(projectId, format);
 
     if (storedError) {
@@ -670,6 +728,10 @@ export function createGeneration({ connector, checker, previews, stills, project
 
     if (!stored) {
       return { data: null, error: { code: "NO_VIDEO", format } };
+    }
+
+    if (!video.transcript) {
+      return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
     }
 
     return { data: { transcript: video.transcript, voiceoverPath: video.voiceoverPath, stored }, error: null };
@@ -726,7 +788,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     };
   }
 
-  return { estimate, start, stop, retry, watch, open };
+  return { estimate, start, stop, retry, watch, open, setCaptions };
 }
 
 type Publish = (change: Partial<GenerationStatus>, unit?: GenerationUnit) => Promise<void>;
@@ -879,7 +941,7 @@ function fileErrorOf(error: ProjectsError): FileFailure {
   return { path: "", message: error.code };
 }
 
-function projectError(error: ProjectsError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
+function projectError(error: ProjectsError | VideoDocumentError | VersionError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
   if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
     return error;
   }

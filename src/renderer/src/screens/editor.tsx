@@ -1,4 +1,5 @@
 import { CircleAlertIcon, CirclePauseIcon, HouseIcon, LoaderCircleIcon, SquareIcon } from "lucide-react";
+import { RadioGroup } from "radix-ui";
 import { useEffect, useState } from "react";
 import { ConnectClaude } from "@renderer/claude/connect-claude";
 import { Badge } from "@renderer/components/ui/badge";
@@ -9,6 +10,7 @@ import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, stopHeadline, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
+import { MissingFormat } from "@renderer/editor/missing-format";
 import { useOpenVideo } from "@renderer/editor/open-video";
 import { usePlayback } from "@renderer/editor/playback";
 import { Player, Transport } from "@renderer/editor/player";
@@ -16,12 +18,11 @@ import { SidePanel } from "@renderer/editor/side-panel";
 import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
 import { useNavigation } from "@renderer/navigation";
-import type { GenerationStatus, GenerationStop } from "../../../contract";
+import type { Format, GenerationStatus, GenerationStop } from "../../../contract";
 
-/** The editor's part of the title bar: back to Home, the Project's name, the video's Format and its generation. */
+/** The editor's part of the title bar: back to Home, the Project's name, its Formats and the video's generation. */
 export function EditorToolbar() {
   const projectName = useOpenVideo((state) => state.projectName);
-  const format = useOpenVideo((state) => state.preview?.timeline.format);
   const openHome = useNavigation((state) => state.openHome);
   const leave = useGeneration((state) => state.leave);
 
@@ -37,11 +38,43 @@ export function EditorToolbar() {
         <HouseIcon />
       </Button>
       <h1 className="min-w-0 truncate text-app-body font-medium">{projectName}</h1>
-      {format && <span className="shrink-0 rounded-sm bg-surface-2 px-[7px] py-0.5 text-app-xs font-medium text-[#cfcfcf]">{FORMAT_LABELS[format]}</span>}
+      <FormatTabs />
       <GenerationBadge />
     </div>
   );
 }
+
+/** A Project has at most one video in each Format: the tabs switch between them, or to the Generate empty state. */
+function FormatTabs() {
+  const format = useGeneration((state) => state.video?.format);
+  const showFormat = useGeneration((state) => state.showFormat);
+
+  if (!format) {
+    return null;
+  }
+
+  return (
+    <RadioGroup.Root
+      aria-label="Format"
+      value={format}
+      onValueChange={(value) => showFormat(value as Format)}
+      orientation="horizontal"
+      className="no-drag-region flex shrink-0 gap-0.5 rounded-pill border border-hairline-soft bg-surface-1 p-[3px]"
+    >
+      {FORMATS.map((option) => (
+        <RadioGroup.Item
+          key={option}
+          value={option}
+          className="h-[24px] rounded-pill px-2.5 text-app-xs font-medium text-ink-muted tabular-nums outline-none transition-colors hover:text-ink focus-visible:shadow-[0_0_0_1px_var(--brand)] data-[state=checked]:bg-surface-3 data-[state=checked]:text-ink"
+        >
+          {FORMAT_LABELS[option]}
+        </RadioGroup.Item>
+      ))}
+    </RadioGroup.Root>
+  );
+}
+
+const FORMATS = ["horizontal", "vertical"] as const satisfies Format[];
 
 /** The job status: the run's progress and Stop while it runs, and its failure. The Scenes carry their own badges. */
 function GenerationBadge() {
@@ -198,9 +231,14 @@ export function Editor() {
   );
 }
 
-/** Where the player goes while the Storyboard is planned, or why the generation stopped before there was a video. */
+/**
+ * Where the player goes while the Storyboard is planned, or why the generation stopped before there was a video;
+ * in a Format without a video, its empty state.
+ */
 function GenerationStage() {
   const status = useGeneration((state) => state.status);
+  const stored = useGeneration((state) => state.stored);
+  const video = useGeneration((state) => state.video);
   const lostError = useGeneration((state) => state.lostError);
   const backToProject = useGeneration((state) => state.backToProject);
 
@@ -218,6 +256,23 @@ function GenerationStage() {
           </p>
           <Button onClick={backToProject}>Back to the Project</Button>
         </div>
+      </main>
+    );
+  }
+
+  const isIdle = !status || status.state === "idle";
+
+  if (video && stored && isIdle && !stored.isLoading && !stored.version && !stored.error) {
+    return <MissingFormat video={video} captions={stored.captions} />;
+  }
+
+  if (stored?.error && isIdle) {
+    return (
+      <main className="flex flex-1 items-center justify-center p-10">
+        <p role="alert" className="flex max-w-[60ch] items-start gap-2 text-app-body text-status-fallback-ink">
+          <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          {stored.error}
+        </p>
       </main>
     );
   }
@@ -243,7 +298,8 @@ function GenerationStage() {
     );
   }
 
-  if (!status) {
+  // Not generating: still finding out whether the Format has a video, or about to show it.
+  if (isIdle) {
     return null;
   }
 

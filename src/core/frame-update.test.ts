@@ -142,7 +142,7 @@ async function versionFile(path: string, number: number) {
 }
 
 function sceneStatuses(opened: OpenedVideo) {
-  return Object.fromEntries(opened.preview.timeline.scenes.map(({ id, status }) => [id, status]));
+  return Object.fromEntries((opened.preview?.timeline.scenes ?? []).map(({ id, status }) => [id, status]));
 }
 
 function sha256(text: string) {
@@ -323,7 +323,7 @@ describe("opening a Project recorded against this frame major", { timeout: TIMEO
 });
 
 describe("opening a Project with no video yet", () => {
-  it("fails with NO_VIDEO", async () => {
+  it("answers with no Version", async () => {
     const { core, dir } = await connect();
     await mkdir(join(dir, "user"), { recursive: true });
     const project = await core.project.create({ voiceoverPath: await voiceover(join(dir, "user"), "Caching.wav", [{ tone: 33.6 }]), format: "horizontal" });
@@ -334,6 +334,6 @@ describe("opening a Project with no video yet", () => {
       }
     }
 
-    await expect(core.video.open({ projectId: project.id, format: "horizontal" })).rejects.toMatchObject({ code: "NO_VIDEO" });
+    await expect(core.video.open({ projectId: project.id, format: "horizontal" })).resolves.toEqual({});
   }, TIMEOUT_MS);
 });
