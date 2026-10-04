@@ -305,6 +305,8 @@ export const ConnectorErrorSchema = z.object({
     "MODEL_UNAVAILABLE",
     "SERVICE_ERROR",
     "AGENT_UNAVAILABLE",
+    /** The run reached the creator's "Stop a run above $X" cap; it stops as Stop does. */
+    "COST_CAP",
   ]),
   message: z.string(),
   resetsAt: z.number().optional(),
@@ -452,12 +454,94 @@ export const TranscriptionStatusSchema = z.object({
   error: TranscriptionErrorSchema.optional(),
 });
 
-/** What a first generation will take with the default models, before the creator presses Generate. */
+const CostRangeSchema = z.object({ low: z.number().nonnegative(), high: z.number().nonnegative() });
+
+/** What a first generation will take, before the creator presses Generate. */
 export const GenerationEstimateSchema = z.object({
   /** Wall-clock minutes. */
   minutes: z.object({ low: z.number().nonnegative(), high: z.number().nonnegative() }),
-  /** US dollars; only on an API key, since a subscription isn't billed per run. */
-  costUsd: z.object({ low: z.number().nonnegative(), high: z.number().nonnegative() }).optional(),
+  /** US dollars, from the running cost per Voiceover minute; only on an API key, since a subscription isn't billed per run. */
+  costUsd: CostRangeSchema.optional(),
+  /** API key with "Approve cost before running" on: Generate needs the creator's approval of `costUsd`. */
+  needsApproval: z.boolean(),
+});
+
+/** The agent roles, each running on the model Settings choose for it. Retry runs on the Scene code model. */
+export const ModelRoleSchema = z.enum(["storyboard", "sceneCode", "visualReview", "revision"]);
+
+/** The models Settings offer for an agent role. */
+export const MODEL_CHOICES = [
+  { id: "claude-opus-5-5", label: "Opus 5.5" },
+  { id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+  { id: "claude-haiku-4-5-20251001", label: "Haiku 4.5" },
+] as const;
+
+export const ModelIdSchema = z.enum(MODEL_CHOICES.map(({ id }) => id) as [string, ...string[]]);
+
+export const RoleModelsSchema = z.object({
+  storyboard: ModelIdSchema,
+  sceneCode: ModelIdSchema,
+  visualReview: ModelIdSchema,
+  revision: ModelIdSchema,
+});
+
+/** The creator's app settings. Changes apply to the next run, except the cap, which a running run follows too. */
+export const SettingsSchema = z.object({
+  models: RoleModelsSchema,
+  /** API key only: an estimate to approve before a first generation, and before any Revision that regenerates Scenes. */
+  approveCost: z.boolean(),
+  /** API key only: a run stops, as Stop does, once its agent runs together have cost this many US dollars. */
+  costCapUsd: z.number().positive().optional(),
+});
+
+export const SettingsChangesSchema = z.object({
+  models: RoleModelsSchema.partial().optional(),
+  approveCost: z.boolean().optional(),
+  /** `null` removes the cap. */
+  costCapUsd: z.number().positive().nullable().optional(),
+});
+
+/** Tokens and, on an API key, US dollars. A subscription isn't billed per run, so it never shows dollars. */
+export const UsageTotalsSchema = z.object({
+  inputTokens: z.number().nonnegative(),
+  outputTokens: z.number().nonnegative(),
+  cacheReadTokens: z.number().nonnegative(),
+  cacheWriteTokens: z.number().nonnegative(),
+  costUsd: z.number().nonnegative().optional(),
+});
+
+/** What one agent role used in a run, on the model it ran on. */
+export const RoleUsageSchema = UsageTotalsSchema.extend({ role: ModelRoleSchema, model: z.string() });
+
+/** A subscription plan's usage window, from Claude's rate-limit reports. */
+export const PlanWindowSchema = z.object({
+  window: z.enum(["five-hour", "seven-day"]),
+  /** 0-1, when Claude reports it. */
+  utilization: z.number().min(0).max(1).optional(),
+  /** Epoch ms. */
+  resetsAt: z.number().optional(),
+  /** The window's limit is reached: runs are refused until it resets. */
+  isRejected: z.boolean(),
+});
+
+export const UsageStatusSchema = z.object({
+  method: AuthMethodSchema.optional(),
+  /** The video's latest run, summed across its parallel agent runs: running, finished, or stopped at the cap. */
+  run: z
+    .object({
+      state: z.enum(["running", "finished", "capped"]),
+      roles: z.array(RoleUsageSchema),
+      total: UsageTotalsSchema,
+      /** API key only: the cap it runs under. */
+      capUsd: z.number().optional(),
+    })
+    .optional(),
+  /** Everything the video's runs have used, stored with the video. */
+  video: UsageTotalsSchema.optional(),
+  /** Every run today, on this computer. */
+  today: UsageTotalsSchema,
+  /** Subscription only: the plan's windows as last reported. */
+  plan: z.array(PlanWindowSchema),
 });
 
 /** Why a generation ended without a video. */
@@ -771,7 +855,7 @@ export const coreContract = {
     close: oc.input(ProjectIdInput),
   },
   video: {
-    /** How long, and on an API key what, generating the video will take with the default models. */
+    /** How long, and on an API key what, generating the video will take, and whether Generate needs approving. */
     estimate: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(GenerationEstimateSchema),
     /**
      * Generates the video from the Project's Transcript in its Style Preset: a Storyboard, then each unit's
@@ -786,11 +870,33 @@ export const coreContract = {
         /** The video exists; it changes through Revisions and the Style tab. */
         ALREADY_GENERATED: { data: z.object({ version: z.number().int().positive() }) },
         UNKNOWN_STYLE_PRESET: { data: z.object({ stylePreset: z.string() }) },
+        /** API key with "Approve cost before running" on: generate again with `approved` once the creator approves the estimate. */
+        APPROVAL_REQUIRED: { data: z.object({ costUsd: CostRangeSchema }) },
         FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
       })
-      .input(VideoRefSchema),
+      .input(
+        VideoRefSchema.extend({
+          /** The creator approved the estimate. Ignored on a subscription, which never asks. */
+          approved: z.boolean().optional(),
+        }),
+      ),
     /** Streams the video's generation now and after every change, until the window stops listening. */
     generation: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(GenerationStatusSchema)),
+  },
+  usage: {
+    /**
+     * Streams what runs are using now and after every change: the video's latest run per model role, its stored
+     * totals and today's, live while agents run in parallel. Plan windows on a subscription, which shows no dollars.
+     */
+    watch: oc.errors({ UNKNOWN_PROJECT }).input(z.object({ video: VideoRefSchema.optional() })).output(eventIterator(UsageStatusSchema)),
+  },
+  settings: {
+    get: oc.output(SettingsSchema),
+    /** Saves the changes; models apply from the next run. */
+    update: oc
+      .errors({ FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) } })
+      .input(SettingsChangesSchema)
+      .output(SettingsSchema),
   },
   cache: {
     status: oc.output(CacheStatusSchema),
@@ -856,6 +962,15 @@ export type TranscriptionStatus = z.infer<typeof TranscriptionStatusSchema>;
 export type CacheStatus = z.infer<typeof CacheStatusSchema>;
 export type UnitWork = z.infer<typeof UnitWorkSchema>;
 export type GenerationEstimate = z.infer<typeof GenerationEstimateSchema>;
+export type CostRange = z.infer<typeof CostRangeSchema>;
+export type ModelRole = z.infer<typeof ModelRoleSchema>;
+export type RoleModels = z.infer<typeof RoleModelsSchema>;
+export type Settings = z.infer<typeof SettingsSchema>;
+export type SettingsChanges = z.infer<typeof SettingsChangesSchema>;
+export type UsageTotals = z.infer<typeof UsageTotalsSchema>;
+export type RoleUsage = z.infer<typeof RoleUsageSchema>;
+export type PlanWindow = z.infer<typeof PlanWindowSchema>;
+export type UsageStatus = z.infer<typeof UsageStatusSchema>;
 export type GenerationError = z.infer<typeof GenerationErrorSchema>;
 export type GenerationUnit = z.infer<typeof GenerationUnitSchema>;
 export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;

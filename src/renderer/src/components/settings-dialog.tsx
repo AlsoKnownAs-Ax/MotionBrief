@@ -10,6 +10,7 @@ import { useNavigation } from "@renderer/navigation";
 import { sizeLabel } from "@renderer/new-project/labels";
 import { PresetEditorDialog } from "@renderer/style/preset-editor";
 import { PresetSettings } from "@renderer/style/preset-settings";
+import { CostSettings, ModelSettings } from "@renderer/usage/usage-settings";
 import type { CacheStatus, ConnectionStatus } from "../../../contract";
 
 export const useSettingsDialog = create<{ isOpen: boolean; setIsOpen: (isOpen: boolean) => void }>((set) => ({
@@ -40,6 +41,8 @@ export function SettingsDialog() {
             <DialogDescription>Changes apply to the next run.</DialogDescription>
           </DialogHeader>
           <ClaudeSettings onOpenSetup={() => setIsOpen(false)} />
+          <ModelSettings />
+          <CostSettings />
           <PresetSettings />
           <StorageSettings />
         </DialogContent>

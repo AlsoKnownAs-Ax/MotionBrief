@@ -7,6 +7,8 @@ import { useOpenVideo } from "./open-video";
 type GenerationStore = {
   /** The open video's generation; absent for a video that wasn't generated in this window. */
   status?: GenerationStatus;
+  /** The video followed, from Generate until the creator leaves it. */
+  video?: VideoRef;
   /** Why the window stopped hearing about the generation, such as the core going away. */
   lostError?: string;
   /** Opens the video in the editor and follows its generation: the preview updates as units finish. */
@@ -52,7 +54,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
   return {
     follow: (project, video) => {
       useOpenVideo.getState().open({ ...project, isStored: true });
-      set({ status: undefined });
+      set({ status: undefined, video });
       listen(video);
     },
     reconnect: () => {
@@ -65,7 +67,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       controller = undefined;
       followed = undefined;
       const { projectId, isStored } = useOpenVideo.getState();
-      set({ status: undefined, lostError: undefined });
+      set({ status: undefined, video: undefined, lostError: undefined });
   
       if (isStored) {
         void safe(core.project.close({ projectId }));

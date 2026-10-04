@@ -1,9 +1,11 @@
 import type {
   CheckFinding,
+  CostRange,
   GenerationEstimate,
   GenerationPreviewError,
   GenerationStatus,
   GenerationUnit,
+  RoleModels,
   StylePreset,
   Transcript,
   UnitCode,
@@ -17,22 +19,22 @@ import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
 import type { PreviewError, Previews } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type VideoContent } from "../projects";
+import { DEFAULT_MODELS } from "../settings";
 import type { Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
 import type { Clock } from "../system";
+import type { Usage, UsageRun } from "../usage";
 import { writeStoryboard, writeUnitCode } from "./agents";
 
-/** The model each agent role runs on until Settings choose others (Storyboard and Scene code: Opus). */
-export const DEFAULT_MODELS = { storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5" };
+export { DEFAULT_MODELS };
 
-export type Models = typeof DEFAULT_MODELS;
+export type Models = RoleModels;
 
 /** Scene-code subagents running at once. */
 const PARALLEL_UNITS = 4;
 
-/** Spike numbers per minute of Voiceover with the default models (#7): 7-9 minutes of work, $3-5. */
+/** Spike numbers per minute of Voiceover with the default models (#7): 7-9 minutes of work. Usage prices it. */
 const MINUTES_PER_MINUTE = { low: 7, high: 9 };
-const COST_PER_MINUTE = { low: 3, high: 5 };
 
 export type GenerationOptions = {
   connector: Connector;
@@ -42,7 +44,10 @@ export type GenerationOptions = {
   clock: Clock;
   /** Where agent sessions get their workspace folders. */
   workDir: string;
-  models?: Models;
+  /** Counts what a run's agents use, prices the next one and stops one at the creator's cap. */
+  usage: Usage;
+  /** The model per agent role Settings choose; read as a run starts, so a change applies to the next run. */
+  models?: () => Promise<Models>;
 };
 
 export type GenerateError =
@@ -50,7 +55,8 @@ export type GenerateError =
   | { code: "TRANSCRIPT_NOT_READY"; projectId: string }
   | { code: "GENERATING"; projectId: string }
   | { code: "ALREADY_GENERATED"; version: number }
-  | { code: "UNKNOWN_STYLE_PRESET"; stylePreset: string };
+  | { code: "UNKNOWN_STYLE_PRESET"; stylePreset: string }
+  | { code: "APPROVAL_REQUIRED"; costUsd: CostRange };
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
@@ -65,7 +71,7 @@ const IDLE: GenerationStatus = { state: "idle", units: [] };
  * Every finished unit is stored at once and the video plays as they finish. There is no approval
  * between the Storyboard and the Scenes, and nothing starts until Generate is pressed.
  */
-export function createGeneration({ connector, checker, previews, projects, clock, workDir, models = DEFAULT_MODELS }: GenerationOptions) {
+export function createGeneration({ connector, checker, previews, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS }: GenerationOptions) {
   const videos = new Map<string, ReturnType<typeof createStatusStore<GenerationStatus>>>();
   const running = new Set<string>();
 
@@ -84,19 +90,23 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: projectError(error) };
     }
 
-    const minutes = video.project.voiceover.duration / 60;
+    const { duration } = video.project.voiceover;
+    const minutes = duration / 60;
     const low = Math.max(1, Math.round(minutes * MINUTES_PER_MINUTE.low));
     const span = { low, high: Math.max(low, Math.ceil(minutes * MINUTES_PER_MINUTE.high)) };
 
     if ((await connector.status()).method !== "api-key") {
-      return { data: { minutes: span }, error: null };
+      return { data: { minutes: span, needsApproval: false }, error: null };
     }
 
-    return { data: { minutes: span, costUsd: { low: cents(minutes * COST_PER_MINUTE.low), high: cents(minutes * COST_PER_MINUTE.high) } }, error: null };
+    return { data: { minutes: span, costUsd: await usage.estimateCost(duration), needsApproval: await usage.needsApproval() }, error: null };
   }
 
-  /** Starts generating the video; its progress streams through `watch`. */
-  async function start(ref: VideoRef): Promise<Result<null, GenerateError>> {
+  /**
+   * Starts generating the video; its progress streams through `watch`. On an API key with approval on, it starts only
+   * once the creator `approved` the estimate.
+   */
+  async function start({ approved = false, ...ref }: VideoRef & { approved?: boolean }): Promise<Result<null, GenerateError>> {
     const { projectId, format } = ref;
     const { data: video, error } = await projects.video(projectId, format);
 
@@ -124,25 +134,48 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
     }
 
+    const { duration } = video.project.voiceover;
+
+    if (!approved && (await usage.needsApproval())) {
+      return { data: null, error: { code: "APPROVAL_REQUIRED", costUsd: await usage.estimateCost(duration) } };
+    }
+
+    // Checked again: Generate may have been pressed twice while the approval was looked up.
+    if (running.has(key)) {
+      return { data: null, error: { code: "GENERATING", projectId } };
+    }
+
     running.add(key);
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
-    void generate({ ref, transcript, preset: StylePresetSchema.parse(listed), store })
+    const run = usage.startRun(ref, { voiceoverSeconds: duration });
+    void models()
+      .then((chosen) => generate({ ref, transcript, preset: StylePresetSchema.parse(listed), store, run, models: chosen }))
       .catch((cause: unknown) => store.update({ state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
-      .finally(() => running.delete(key));
+      .finally(() => {
+        running.delete(key);
+        void run.finish({ completed: store.get().state === "done" });
+      });
 
     return { data: null, error: null };
   }
 
-  type Run = { ref: VideoRef; transcript: Transcript; preset: StylePreset; store: ReturnType<typeof createStatusStore<GenerationStatus>> };
+  type Run = {
+    ref: VideoRef;
+    transcript: Transcript;
+    preset: StylePreset;
+    store: ReturnType<typeof createStatusStore<GenerationStatus>>;
+    /** Its agents start their sessions through it, so what they use is counted and the cap can stop them. */
+    run: UsageRun;
+    models: Models;
+  };
 
-  async function generate({ ref, transcript, preset, store }: Run) {
+  async function generate({ ref, transcript, preset, store, run, models }: Run) {
     const { projectId, format } = ref;
     const captions = format === "vertical";
     const rules = storyboardRules(preset, { format, captions });
     const brief = presetBrief(preset, format);
-    const agent = { connector, workDir };
-    const { data: storyboard, error } = await writeStoryboard({ ...agent, model: models.storyboard, transcript, rules, brief });
+    const { data: storyboard, error } = await writeStoryboard({ connector: run.connector("storyboard"), workDir, model: models.storyboard, transcript, rules, brief });
 
     if (error) {
       store.set({ state: "failed", units: [], error });
@@ -170,7 +203,8 @@ export function createGeneration({ connector, checker, previews, projects, clock
 
     const results = await inParallel(units, PARALLEL_UNITS, async (unit): Promise<FileFailure | undefined> => {
       const outcome = await writeUnitCode({
-        ...agent,
+        connector: run.connector("sceneCode"),
+        workDir,
         model: models.sceneCode,
         checker,
         storyboard,
@@ -328,10 +362,6 @@ function previewErrorOf(error: PreviewError): GenerationPreviewError {
     case "UNKNOWN_UNIT":
       return { code: error.code, message: `The Storyboard has no unit ${error.unit}.` };
   }
-}
-
-function cents(dollars: number): number {
-  return Math.round(dollars * 100) / 100;
 }
 
 

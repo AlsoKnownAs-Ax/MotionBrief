@@ -2,6 +2,7 @@ import { CircleAlertIcon, HouseIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { ExportControl } from "@renderer/editor/export-control";
 import { generationErrorMessage, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
@@ -12,6 +13,7 @@ import { SidePanel } from "@renderer/editor/side-panel";
 import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
 import { useNavigation } from "@renderer/navigation";
+import { UsageControl } from "@renderer/usage/usage-control";
 
 /** The editor's part of the title bar: back to Home, the Project's name, the video's Format and its generation. */
 export function EditorToolbar() {
@@ -35,6 +37,22 @@ export function EditorToolbar() {
       {format && <span className="shrink-0 rounded-sm bg-surface-2 px-[7px] py-0.5 text-app-xs font-medium text-[#cfcfcf]">{FORMAT_LABELS[format]}</span>}
       <GenerationBadge />
     </div>
+  );
+}
+
+/** The editor's actions on the right of the title bar: the open video's usage, then Export MP4. */
+export function EditorActions() {
+  const followed = useGeneration((state) => state.video);
+  const projectId = useOpenVideo((state) => (state.isStored ? state.projectId : undefined));
+  const format = useOpenVideo((state) => state.preview?.timeline.format);
+  // The fixture Project isn't open in the Project store, so it has no usage of its own.
+  const video = followed ?? (projectId && format ? { projectId, format } : undefined);
+
+  return (
+    <>
+      <UsageControl video={video} />
+      <ExportControl />
+    </>
   );
 }
 

@@ -179,7 +179,7 @@ describe("first generation", () => {
     const generation = await watch(core, video);
     statuses = generation.statuses;
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
 
     // Every subagent is held: four start, the fifth waits for one of them to finish.
     const busy = await generation.until((status) => status.units.filter((unit) => unit.status === "writing").length === 4);
@@ -207,7 +207,7 @@ describe("first generation", () => {
 
   it("shows how long it will take first, and on an API key what it will cost", async () => {
     // 33.6 s of Voiceover at 7-9 minutes and $3-5 per minute of video.
-    expect(await core.video.estimate(video)).toEqual({ minutes: { low: 4, high: 6 }, costUsd: { low: 1.68, high: 2.8 } });
+    expect(await core.video.estimate(video)).toEqual({ minutes: { low: 4, high: 6 }, costUsd: { low: 1.68, high: 2.8 }, needsApproval: true });
   });
 
   it("plans a Storyboard and retries it with the validator's issues, with no approval before the Scenes are written", () => {
@@ -302,7 +302,7 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
       const video: VideoRef = { projectId: project.id, format: "horizontal" };
       const generation = await watch(core, video);
 
-      await core.video.generate(video);
+      await core.video.generate({ ...video, approved: true });
       const failed = await generation.until(({ state }) => state === "done" || state === "failed");
       generation.stop();
 
@@ -321,7 +321,7 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     const video: VideoRef = { projectId: project.id, format: "horizontal" };
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     const failed = await generation.until(({ state }) => state === "failed");
     generation.stop();
 
@@ -338,7 +338,7 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     await rm(join(project.path, copy.file));
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     const done = await generation.until(({ state }) => state === "done" || state === "failed");
     generation.stop();
 
@@ -362,7 +362,7 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     const { core, dir } = await connect({ script: {}, status: { isConnected: true, method: "subscription" } });
     const project = await newProject(core, dir);
 
-    expect(await core.video.estimate({ projectId: project.id, format: "horizontal" })).toEqual({ minutes: { low: 4, high: 6 } });
+    expect(await core.video.estimate({ projectId: project.id, format: "horizontal" })).toEqual({ minutes: { low: 4, high: 6 }, needsApproval: false });
     await core.project.close({ projectId: project.id });
   });
 
