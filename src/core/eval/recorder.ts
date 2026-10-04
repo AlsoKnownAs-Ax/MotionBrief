@@ -1,17 +1,16 @@
-import type { AgentEvent, Connector, ModelUsage, PlanUsage, Session } from "../../modules/connector";
+import type { AgentEvent, Connector, PlanUsage, Session } from "../../modules/connector";
 
 export type RecordedTurn = { message: string; events: AgentEvent[] };
 
-/** One agent session as the eval saw it: what it ran for, on which model, every turn, and what it cost. */
+/** One agent session as the eval saw it: what it ran for, on which model, and every turn. */
 export type RecordedSession = {
   label: string;
   model: string;
   turns: RecordedTurn[];
-  /** The session's usage so far: Claude reports session totals, so the last report is the session's. */
-  usage: ModelUsage[];
-  costUsd: number;
-  planUsage: PlanUsage[];
 };
+
+/** Where a recording is at: `since` and `planSince` answer with what came after it. */
+export type RecordingMark = { sessions: number; plan: number };
 
 /** The host tools agents hand their work in through, named as the connector mounts them (`mcp__<server>__<tool>`). */
 export const SUBMIT_TOOLS = {
@@ -27,6 +26,8 @@ export const SUBMIT_TOOLS = {
  */
 export function createRecorder(connector: Connector) {
   const sessions: RecordedSession[] = [];
+  /** Every plan-usage report, in the order they came across all sessions, so a window's use can be followed over time. */
+  const plan: PlanUsage[] = [];
 
   const recording: Connector = {
     ...connector,
@@ -37,46 +38,43 @@ export function createRecorder(connector: Connector) {
         return { data: null, error };
       }
 
-      const recorded: RecordedSession = { label: options.label ?? "", model: options.model, turns: [], usage: [], costUsd: 0, planUsage: [] };
+      const recorded: RecordedSession = { label: options.label ?? "", model: options.model, turns: [] };
       sessions.push(recorded);
 
-      return { data: recordedSession(session, recorded), error: null };
+      return { data: recordedSession(session, recorded, plan), error: null };
     },
   };
 
   return {
     connector: recording,
-    /** Where the recording is now; `since` gives the sessions started after it. */
-    mark: () => sessions.length,
-    since: (mark: number) => sessions.slice(mark),
+    mark: (): RecordingMark => ({ sessions: sessions.length, plan: plan.length }),
+    /** The sessions started after `mark`. */
+    since: (mark: RecordingMark) => sessions.slice(mark.sessions),
+    /** The plan-usage reports that came after `mark`, in order. */
+    planSince: (mark: RecordingMark) => plan.slice(mark.plan),
   };
 }
 
 export type Recorder = ReturnType<typeof createRecorder>;
 
-function recordedSession(session: Session, recorded: RecordedSession): Session {
+function recordedSession(session: Session, recorded: RecordedSession, plan: PlanUsage[]): Session {
   return {
     id: () => session.id(),
-    sendTurn: (message) => recordedTurn(session.sendTurn(message), message, recorded),
+    sendTurn: (message) => recordedTurn(session.sendTurn(message), message, recorded, plan),
     interrupt: () => session.interrupt(),
     close: () => session.close(),
   };
 }
 
-async function* recordedTurn(events: AsyncIterable<AgentEvent>, message: string, recorded: RecordedSession): AsyncIterable<AgentEvent> {
+async function* recordedTurn(events: AsyncIterable<AgentEvent>, message: string, recorded: RecordedSession, plan: PlanUsage[]): AsyncIterable<AgentEvent> {
   const turn: RecordedTurn = { message, events: [] };
   recorded.turns.push(turn);
 
   for await (const event of events) {
     turn.events.push(event);
 
-    if (event.type === "usage") {
-      recorded.usage = event.usage;
-      recorded.costUsd = event.costUsd;
-    }
-
     if (event.type === "plan-usage") {
-      recorded.planUsage.push(event.planUsage);
+      plan.push(event.planUsage);
     }
 
     yield event;

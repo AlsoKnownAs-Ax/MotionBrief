@@ -1,5 +1,5 @@
-import type { Format, GenerationError, RevisionError, RevisionStatus, SceneStatus, StoryboardIssue } from "../../contract";
-import type { ModelUsage, PlanUsage } from "../../modules/connector";
+import type { Format, GenerationError, PlanWindow, RevisionError, RevisionStatus, SceneStatus, StoryboardIssue, UsageTotals } from "../../contract";
+import type { PlanUsage } from "../../modules/connector";
 import type { BundledPresetId, ScriptedRevision } from "./release-set";
 
 /** A stable release is blocked above this share of units ending as fallback Scenes. */
@@ -50,13 +50,58 @@ export type RevisionResult = ScriptedRevision & {
 };
 
 export type UsageResult = {
-  costUsd: number;
-  costUsdPerMinute: number;
-  /** Tokens per model, summed over the case's sessions. */
-  models: ModelUsage[];
-  /** On a subscription: how much of each plan window the case used, per Voiceover minute, from the first and last report. */
-  plan: { window: PlanUsage["window"]; utilizationPerMinute: number; resetsAt?: number }[];
+  /** Everything the video's runs used, as the usage module stores it with the video: tokens and, on an API key, dollars. */
+  total?: UsageTotals;
+  /** API key only: dollars per Voiceover minute. */
+  costUsdPerMinute?: number;
+  /** Subscription only: how much of each plan window the case used. */
+  plan: PlanQuota[];
 };
+
+/** A plan window's share used per Voiceover minute, or `unavailable` when the reports can't say. */
+export type PlanQuota = { window: PlanWindow["window"]; utilizationPerMinute: number | "unavailable"; resetsAt?: number };
+
+/** A plan window's utilization at one moment: the usage module's last report before the case, or a report during it. */
+type PlanReport = { window: PlanUsage["window"]; utilization?: number; resetsAt?: number };
+
+const PLAN_WINDOWS: PlanWindow["window"][] = ["five-hour", "seven-day"];
+
+/**
+ * How much of each plan window a case used, from the window's last report before the case (the baseline) through
+ * every report during it. A window counts from zero again once its reset time changes. Without a baseline or a report
+ * during the case, the use can't be told apart from what came before, so it is `unavailable`.
+ */
+export function planQuota(baseline: PlanReport[], reports: PlanReport[], minutes: number): PlanQuota[] {
+  return PLAN_WINDOWS.map((window) => {
+    const start = baseline.find((report) => report.window === window && report.utilization !== undefined);
+    const during = reports.filter((report) => report.window === window && report.utilization !== undefined);
+    const resetsAt = during.at(-1)?.resetsAt ?? start?.resetsAt;
+
+    if (!start || during.length === 0) {
+      return { window, utilizationPerMinute: "unavailable", resetsAt };
+    }
+
+    const series = [start, ...during];
+    const used = sum(series.slice(1).map((report, index) => usedSince(series[index] ?? start, report)));
+
+    return { window, utilizationPerMinute: used / minutes, resetsAt };
+  });
+}
+
+/** What a window gained from one report to the next: all of the later one's use when the window reset in between. */
+function usedSince(previous: PlanReport, report: PlanReport): number {
+  const hasReset = previous.resetsAt !== undefined && report.resetsAt !== undefined && report.resetsAt !== previous.resetsAt;
+
+  if (hasReset) {
+    return report.utilization ?? 0;
+  }
+
+  return Math.max(0, (report.utilization ?? 0) - (previous.utilization ?? 0));
+}
+
+function sum(values: number[]): number {
+  return values.reduce((total, value) => total + value, 0);
+}
 
 export type CaseResult = {
   id: string;

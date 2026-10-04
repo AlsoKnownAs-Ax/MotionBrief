@@ -7,7 +7,7 @@ import { main } from "./eval/cli";
 import { addToCorpus, saveResults } from "./eval/corpus";
 import { createRecorder, type Recorder } from "./eval/recorder";
 import { SCRIPTED_REVISIONS } from "./eval/release-set";
-import { blockReasons, type CaseResult, type EvalResult } from "./eval/results";
+import { blockReasons, planQuota, type CaseResult, type EvalResult } from "./eval/results";
 import { runEval, type CaseOutput } from "./eval/run";
 import { connect, storyboard, submitsCode, submitsStoryboard, unitCode } from "./test-support/generation";
 import { voiceover } from "./test-support/media";
@@ -33,9 +33,9 @@ function withTransition(id: string, type: string): Scene {
   return { ...scene!, transition: { type } };
 }
 
-function submitsPatch(scenes: Scene[], summary: string): AgentEvent[] {
+function submitsPatch(scenes: Scene[], summary: string, instructions: { scene: string; text: string }[] = []): AgentEvent[] {
   return [
-    { type: "tool-call", toolUseId: "toolu_patch", name: "mcp__motionbrief__submit_patch", input: { scenes, remove: [], instructions: [], summary } },
+    { type: "tool-call", toolUseId: "toolu_patch", name: "mcp__motionbrief__submit_patch", input: { scenes, remove: [], instructions, summary } },
     { type: "turn-completed", status: "completed", text: summary },
   ];
 }
@@ -51,7 +51,8 @@ afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 /**
  * The paid eval through the core API with the replay connector standing in for Claude: no agent turn is paid for. The
  * replayed agent writes a too-long Storyboard first, s03 with a raw color first, and s05 failing its checks every
- * time; the Scene-scoped Revision's first patch touches a Scene outside its scope, and the whole-video one is answered.
+ * time; the Scene-scoped Revision's first patch instructs a Scene that doesn't exist, its second touches a Scene
+ * outside its scope, and the whole-video one is answered.
  */
 describe("the paid eval", () => {
   let result: EvalResult;
@@ -73,6 +74,7 @@ describe("the paid eval", () => {
         "scene-code s04": [submitsCode(await good("s04"))],
         "scene-code s05": Array.from({ length: 3 }, () => submitsCode(missingElement)),
         revision: [
+          submitsPatch([withTransition("s03", "cut")], "Cut out of the stat", [{ scene: "s99", text: "Make the number bigger" }]),
           submitsPatch([withTransition("s01", "cut")], "Cut into the load balancer"),
           submitsPatch([withTransition("s03", "cut")], "Cut out of the stat"),
           [{ type: "turn-completed", status: "completed", text: "Which labels should get shorter?" }],
@@ -122,16 +124,20 @@ describe("the paid eval", () => {
     const [evalCase] = result.cases;
 
     expect(evalCase!.models).toMatchObject({ storyboard: "claude-opus-5-5", sceneCode: "claude-opus-5-5", revision: "claude-opus-5-5" });
-    expect(evalCase!.usage.costUsd).toBe(0.5);
+    expect(evalCase!.usage.total).toMatchObject({ costUsd: 0.5, inputTokens: 1000, outputTokens: 200 });
     expect(evalCase!.usage.costUsdPerMinute).toBeCloseTo(0.5 / (33.6 / 60), 1);
-    expect(evalCase!.usage.models).toEqual([expect.objectContaining({ model: "claude-opus-5-5", inputTokens: 1000, outputTokens: 200 })]);
   });
 
-  it("measures each scripted Revision's patch validity and scope violations", () => {
+  it("says plan use is unavailable where no plan window was reported, as on an API key", () => {
+    expect(result.cases[0]!.usage.plan.map(({ utilizationPerMinute }) => utilizationPerMinute)).toEqual(["unavailable", "unavailable"]);
+  });
+
+  it("measures each scripted Revision's patch validity and scope violations, as the Revision agent checks a patch", () => {
     const [scoped, wholeVideo] = result.cases[0]!.revisions;
 
-    expect(scoped).toMatchObject({ scope: "scene", sceneIds: ["s03"], state: "done", version: 2, firstPatchValid: false, scopeViolations: 1 });
-    expect(scoped!.patches.map(({ issues }) => issues.map(({ code }) => code))).toEqual([["SCOPE"], []]);
+    expect(scoped).toMatchObject({ scope: "scene", sceneIds: ["s03"], state: "done", version: 2, firstPatchValid: false, scopeViolations: 2 });
+    // The first patch instructs s99, which no Scene is: unknown, and outside the selected s03 too.
+    expect(scoped!.patches.map(({ issues }) => issues.map(({ code }) => code))).toEqual([["REFERENCE", "SCOPE"], ["SCOPE"], []]);
     expect(scoped!.units.every(({ rebuild }) => rebuild === "rerender")).toBe(true);
     expect(wholeVideo).toMatchObject({ scope: "whole-video", sceneIds: [], state: "answered", reply: "Which labels should get shorter?", patches: [] });
   });
@@ -163,7 +169,7 @@ describe("the paid eval", () => {
     expect(await readFile(join(fixturesDir, `${first!.units.s03}.css`), "utf8")).toBe((await unitCode("good", "s03")).css);
     expect(JSON.parse(await readFile(join(fixturesDir, first!.storyboard), "utf8"))).toEqual(storyboard);
     expect(replay.storyboard).toHaveLength(2);
-    expect(replay.revision).toHaveLength(3);
+    expect(replay.revision).toHaveLength(4);
   });
 });
 
@@ -176,6 +182,42 @@ describe("npm run eval", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+});
+
+describe("plan use per Voiceover minute", () => {
+  const HOUR = 3_600_000;
+
+  it("is the window's growth from the baseline through the case's last report", () => {
+    const baseline = [{ window: "five-hour" as const, utilization: 0.2, resetsAt: HOUR }];
+    const reports = [
+      { window: "five-hour" as const, utilization: 0.3, resetsAt: HOUR },
+      { window: "five-hour" as const, utilization: 0.5, resetsAt: HOUR },
+    ];
+
+    expect(planQuota(baseline, reports, 2)[0]).toEqual({ window: "five-hour", utilizationPerMinute: 0.15, resetsAt: HOUR });
+  });
+
+  it("counts a single report against the baseline", () => {
+    expect(planQuota([{ window: "seven-day", utilization: 0.1 }], [{ window: "seven-day", utilization: 0.13 }], 1)[1]?.utilizationPerMinute).toBeCloseTo(0.03);
+  });
+
+  it("counts the window from zero again once it resets", () => {
+    const baseline = [{ window: "five-hour" as const, utilization: 0.9, resetsAt: HOUR }];
+    const reports = [
+      { window: "five-hour" as const, utilization: 0.95, resetsAt: HOUR },
+      { window: "five-hour" as const, utilization: 0.1, resetsAt: 6 * HOUR },
+      { window: "five-hour" as const, utilization: 0.2, resetsAt: 6 * HOUR },
+    ];
+
+    expect(planQuota(baseline, reports, 1)[0]?.utilizationPerMinute).toBeCloseTo(0.05 + 0.1 + 0.1);
+  });
+
+  it("is unavailable without a baseline or a report during the case", () => {
+    const report = [{ window: "five-hour" as const, utilization: 0.4, resetsAt: HOUR }];
+
+    expect(planQuota([], report, 1)[0]?.utilizationPerMinute).toBe("unavailable");
+    expect(planQuota(report, [], 1)[0]?.utilizationPerMinute).toBe("unavailable");
   });
 });
 

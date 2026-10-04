@@ -4,8 +4,7 @@ import { createInterface } from "node:readline/promises";
 import { createRouterClient } from "@orpc/server";
 import type { CoreClient } from "../../contract";
 import { createClaudeConnector, memoryConnectionStore } from "../../modules/claude";
-import { DEFAULT_MODELS } from "../../modules/generation";
-import { DEFAULT_REVISION_MODELS } from "../../modules/revision";
+import { DEFAULT_MODELS } from "../../modules/settings";
 import { bundledClaudePath } from "../claude-binary";
 import { createCore } from "../composition-root";
 import { addToCorpus, saveResults } from "./corpus";
@@ -146,10 +145,9 @@ async function packageVersion(): Promise<string> {
 }
 
 function printPlan(cases: EvalCase[], rotation: number) {
-  const models = { ...DEFAULT_MODELS, ...DEFAULT_REVISION_MODELS };
   console.log(`Release set (rotation ${rotation % ROTATION.length + 1} of ${ROTATION.length}):`);
   cases.forEach(({ id, voiceover, revisions }) => console.log(`- ${id}: ${voiceover}, then ${revisions.map(({ scope }) => scope).join(" and ")} Revisions`));
-  console.log(`Models: ${Object.entries(models).map(([role, model]) => `${role} ${model}`).join(", ")}`);
+  console.log(`Models: ${Object.entries(DEFAULT_MODELS).map(([role, model]) => `${role} ${model}`).join(", ")}`);
 }
 
 async function confirmed(cases: EvalCase[]): Promise<boolean> {

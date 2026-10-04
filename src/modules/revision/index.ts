@@ -2,4 +2,4 @@ export { createRevisions, type ReviseError, type RevisionModels, type Revisions,
 export { wordFixOffer } from "./word-fix";
 export { planRebuild, type Rebuild, type UnitRebuild } from "./rebuild";
 export { applyPatch, PatchSchema, type Patch } from "./patch";
-export { scopeIssues } from "./scope";
+export { validatePatch, type PatchCheck } from "./validate";

@@ -4,6 +4,7 @@ import {
   UnitCodeSchema,
   type CoreClient,
   type GenerationStatus,
+  type PlanWindow,
   type Project,
   type RevisionStatus,
   type StoryboardIssue,
@@ -11,13 +12,14 @@ import {
   type StoryboardTranscript,
   type Transcript,
   type UnitCode,
+  type UsageStatus,
   type VideoRef,
 } from "../../contract";
-import type { AgentEvent } from "../../modules/connector";
+import type { AgentEvent, PlanUsage } from "../../modules/connector";
 import { FRAME_CONTRACT_VERSION } from "../../modules/frame";
 import { readVersion, type StoredVersion } from "../../modules/projects";
-import { applyPatch, PatchSchema, scopeIssues } from "../../modules/revision";
-import { StoryboardSchema, validateStoryboard, type Storyboard } from "../../modules/storyboard";
+import { PatchSchema, validatePatch } from "../../modules/revision";
+import { StoryboardSchema, type Storyboard } from "../../modules/storyboard";
 import { storyboardRules } from "../../modules/style";
 import { handedIn, replayScript, sessionsOf, SUBMIT_TOOLS, type RecordedSession, type Recorder } from "./recorder";
 import type { BundledPresetId, EvalCase, ScriptedRevision } from "./release-set";
@@ -25,6 +27,7 @@ import {
   blockReasons,
   fallbackRate,
   firstTryTokenLintRate,
+  planQuota,
   type CaseResult,
   type EvalResult,
   type GenerationResult,
@@ -118,6 +121,7 @@ async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ resu
   const { core, recorder, projectsDir, log = () => undefined, now = Date.now } = options;
   const started = now();
   const mark = recorder.mark();
+  const baseline = await planWindows(core);
   log(`${evalCase.id}: transcribing ${evalCase.voiceover}`);
   const project = await core.project.create({
     voiceoverPath: evalCase.voiceover,
@@ -134,6 +138,7 @@ async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ resu
     const { revisions, versions } = await revised(run, stored);
     const exportPath = await exported(run);
     const sessions = recorder.since(mark);
+    const usage = await usageOf(run, baseline, recorder.planSince(mark));
 
     return {
       result: {
@@ -145,7 +150,7 @@ async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ resu
         models: versions.at(-1)?.version.models ?? {},
         generation,
         revisions,
-        usage: usageOf(sessions, project.voiceover.duration),
+        usage,
         exportPath,
         wallSeconds: seconds(now() - started),
       },
@@ -199,7 +204,8 @@ async function generated(run: CaseRun): Promise<{ generation: GenerationResult; 
   const listening = new AbortController();
   const statuses = await core.video.generation(ref, { signal: listening.signal });
   await statuses.next();
-  await core.video.generate(ref);
+  // The maintainer approved the whole eval's cost before it started.
+  await core.video.generate({ ...ref, approved: true });
   const status = await settled(statuses, ({ state }) => state === "done" || state === "failed", listening);
   const sessions = recorder.since(mark);
   const stored = await storedVersion(project, ref, status.version);
@@ -268,7 +274,7 @@ async function revisedBy(run: CaseRun, current: StoredVersion, scripted: Scripte
   const statuses = await core.video.revision(ref, { signal: listening.signal });
   await statuses.next();
   await core.video.revise({ ...ref, message: scripted.message, scope: sceneIds });
-  const status = await settled(statuses, ({ state }) => REVISION_SETTLED.has(state), listening);
+  const status = await revisionSettled(core, ref, statuses, listening);
   const sessions = recorder.since(mark);
   const patches = sessionsOf(sessions, "revision")
     .flatMap((session) => handedIn(session, SUBMIT_TOOLS.patch))
@@ -298,6 +304,28 @@ async function revisedBy(run: CaseRun, current: StoredVersion, scripted: Scripte
   };
 }
 
+/**
+ * Reads a Revision's statuses until it settles, approving its regenerated Scenes' cost when it waits for that: the
+ * maintainer approved the whole eval's cost before it started.
+ */
+async function revisionSettled(core: CoreClient, ref: VideoRef, statuses: AsyncIterable<RevisionStatus>, listening: AbortController): Promise<RevisionStatus> {
+  try {
+    for await (const status of statuses) {
+      if (status.state === "approval") {
+        await core.video.approveRevision(ref);
+      }
+
+      if (REVISION_SETTLED.has(status.state)) {
+        return status;
+      }
+    }
+  } finally {
+    listening.abort();
+  }
+
+  throw new Error("The Revision's status stream ended");
+}
+
 /** A Scene-scoped Revision selects the middle Scene of the current Version; a whole-video one selects none. */
 function scopeOf({ scope }: ScriptedRevision, storyboard: Storyboard | undefined): string[] {
   if (scope === "whole-video" || !storyboard) {
@@ -307,7 +335,7 @@ function scopeOf({ scope }: ScriptedRevision, storyboard: Storyboard | undefined
   return optional(storyboard.scenes[Math.floor(storyboard.scenes.length / 2)]?.id);
 }
 
-/** What the Revision agent's patch had wrong as handed in: the validator's issues, or those of its scope. */
+/** What the Revision agent's patch had wrong as handed in, checked as the Revision agent checks it. */
 function patchIssues({ evalCase, transcript }: CaseRun, { version }: StoredVersion, storyboard: Storyboard | undefined, raw: unknown, scope: string[]): StoryboardIssue[] {
   const { success, data: patch, error } = z.object(PatchSchema).safeParse(raw);
 
@@ -319,14 +347,10 @@ function patchIssues({ evalCase, transcript }: CaseRun, { version }: StoredVersi
     return [];
   }
 
-  const rules = storyboardRules(version.preset, { format: evalCase.format, captions: patch.captions ?? version.captions });
-  const { data: revised, error: invalid } = validateStoryboard(applyPatch(storyboard, patch), transcript, rules);
+  const rulesFor = (captions: boolean) => storyboardRules(version.preset, { format: evalCase.format, captions });
+  const { error: issues } = validatePatch({ current: storyboard, patch, transcript, rulesFor, writtenFor: version.captions, scope });
 
-  if (invalid) {
-    return invalid.issues;
-  }
-
-  return scopeIssues(storyboard, revised, patch, scope);
+  return issues ?? [];
 }
 
 async function storedVersion(project: Project, { format }: VideoRef, version: number | undefined): Promise<StoredVersion | undefined> {
@@ -396,9 +420,12 @@ async function firstTryTokenLint({ options, evalCase, transcript }: CaseRun, ses
 
 function firstCode(sessions: RecordedSession[], unit: string): UnitCode | undefined {
   const [first] = sessionsOf(sessions, `scene-code ${unit}`);
-  const code = first ? handedIn(first, SUBMIT_TOOLS.sceneCode).find((input) => input !== undefined) : undefined;
 
-  return UnitCodeSchema.safeParse(code).data;
+  if (!first) {
+    return undefined;
+  }
+
+  return UnitCodeSchema.safeParse(handedIn(first, SUBMIT_TOOLS.sceneCode).find((input) => input !== undefined)).data;
 }
 
 /** Exports the video as it now is, for the maintainer to watch before giving a verdict. */
@@ -443,45 +470,32 @@ function versionOutput(evalCase: EvalCase, { version, code }: StoredVersion): Ve
   };
 }
 
-/** A case's cost, tokens per model and plan usage, per minute of its Voiceover. */
-function usageOf(sessions: RecordedSession[], voiceoverSeconds: number): UsageResult {
-  const minutes = Math.max(voiceoverSeconds, 1) / 60;
-  const costUsd = sum(sessions.map((session) => session.costUsd));
-  const byModel = Map.groupBy(
-    sessions.flatMap(({ usage }) => usage),
-    ({ model }) => model,
-  );
-  const byWindow = Map.groupBy(
-    sessions.flatMap(({ planUsage }) => planUsage),
-    ({ window }) => window,
-  );
+/** The usage module's first answer for `video`, or for no video. */
+async function usageNow(core: CoreClient, video?: VideoRef): Promise<UsageStatus> {
+  const listening = new AbortController();
 
-  return {
-    costUsd,
-    costUsdPerMinute: costUsd / minutes,
-    models: [...byModel].map(([model, usages]) => ({
-      model,
-      inputTokens: sum(usages.map(({ inputTokens }) => inputTokens)),
-      outputTokens: sum(usages.map(({ outputTokens }) => outputTokens)),
-      cacheReadTokens: sum(usages.map(({ cacheReadTokens }) => cacheReadTokens)),
-      cacheWriteTokens: sum(usages.map(({ cacheWriteTokens }) => cacheWriteTokens)),
-      costUsd: sum(usages.map((usage) => usage.costUsd)),
-    })),
-    plan: [...byWindow].map(([window, reports]) => ({
-      window,
-      utilizationPerMinute: spread(reports.flatMap(({ utilization }) => optional(utilization))) / minutes,
-      resetsAt: reports.at(-1)?.resetsAt,
-    })),
-  };
+  return settled(await core.usage.watch({ video }, { signal: listening.signal }), () => true, listening);
 }
 
-/** A plan window's use only grows until it resets, so a case used the spread between its lowest and highest report. */
-function spread(values: number[]): number {
-  if (values.length === 0) {
-    return 0;
+/** The plan windows as last reported before a case: the baseline its plan use is measured from. */
+async function planWindows(core: CoreClient): Promise<PlanWindow[]> {
+  return (await usageNow(core)).plan;
+}
+
+/**
+ * A case's usage per minute of its Voiceover: dollars from the usage module's totals for the video on an API key, and
+ * on a subscription each plan window's use from the baseline through every report during the case.
+ */
+async function usageOf({ options, ref, project }: CaseRun, baseline: PlanWindow[], reports: PlanUsage[]): Promise<UsageResult> {
+  const { method, video } = await usageNow(options.core, ref);
+  const minutes = Math.max(project.voiceover.duration, 1) / 60;
+  const plan = planQuota(baseline, reports, minutes);
+
+  if (method !== "api-key" || video?.costUsd === undefined) {
+    return { total: video, plan };
   }
 
-  return Math.max(...values) - Math.min(...values);
+  return { total: video, costUsdPerMinute: video.costUsd / minutes, plan };
 }
 
 function sum(values: number[]): number {
