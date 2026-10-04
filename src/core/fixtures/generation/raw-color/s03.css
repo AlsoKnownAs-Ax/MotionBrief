@@ -1,0 +1,3 @@
+/* The agent's first try: the number in a color of its own, which the token lint rejects. */
+.stat { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 34px; text-align: center; }
+.number { font-size: 200px; color: #ff7a3d; }

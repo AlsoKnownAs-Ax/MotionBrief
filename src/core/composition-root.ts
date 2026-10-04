@@ -5,6 +5,7 @@ import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
 import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
+import { createGeneration } from "../modules/generation";
 import { createMedia } from "../modules/media";
 import { createPreviews } from "../modules/preview";
 import { createProjects } from "../modules/projects";
@@ -53,6 +54,9 @@ export type CoreOptions = {
 /** The cache folder's subfolder of assembled preview pages. */
 const PREVIEW_DIR = "preview";
 
+/** The app data subfolder agent sessions get their workspaces in; each is deleted when its session ends. */
+const AGENT_DIR = "agent";
+
 /** The one place that picks implementations and wires the modules into the core API. */
 export function createCore({
   appVersion,
@@ -81,9 +85,10 @@ export function createCore({
   const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
+  const generation = createGeneration({ connector, checker, previews, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample, projects, cache }) };
+  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample, projects, cache, generation }) };
 }
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */

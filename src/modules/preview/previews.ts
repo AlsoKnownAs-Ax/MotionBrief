@@ -74,13 +74,23 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
       return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code) };
     });
     const { origin } = await (server ??= startPreviewServer(rootDir));
+    // Units still being generated don't change the page, only how the timeline shows them.
+    const timeline = timelineOf(storyboard, source.transcript, page.page, source.code, source.pending);
 
-    return { data: { id, url: `${origin}/${id}/index.html`, timeline: page.timeline }, error: null };
+    return { data: { id, url: `${origin}/${id}/index.html`, timeline }, error: null };
   }
 
-  /** One build per page at a time; a page asked for again while it builds waits for that build. */
+  /**
+   * One build per page: a page already built is served as it is, so a player showing it never sees it
+   * rewritten, and a page asked for again while it builds waits for that build.
+   */
   async function build(id: string, write: (dir: string) => Promise<OpenPage>): Promise<OpenPage> {
+    const built = pages.get(id);
     const pending = building.get(id);
+
+    if (built) {
+      return built;
+    }
 
     if (pending) {
       return pending;

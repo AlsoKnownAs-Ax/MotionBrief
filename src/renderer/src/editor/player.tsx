@@ -79,6 +79,9 @@ export function Player({ preview }: { preview: Preview }) {
 const SEGMENT_COLORS = {
   ready: "bg-[#3a3a3a]",
   fallback: "bg-status-fallback",
+  queued: "bg-status-working-tint",
+  writing: "bg-status-working",
+  checking: "bg-status-working",
 } satisfies Record<SceneStatus, string>;
 
 /** Play / pause, the time, and a scrubber colored by each Scene's status. */

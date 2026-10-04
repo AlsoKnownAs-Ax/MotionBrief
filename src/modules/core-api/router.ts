@@ -2,6 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
+import type { GenerateError, Generation } from "../generation";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Previews, ThumbnailsError } from "../preview";
@@ -22,12 +23,13 @@ export type CoreRouterDeps = {
   sample?: SampleProject;
   projects: Projects;
   cache: Cache;
+  generation: Generation;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample, projects, cache }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample, projects, cache, generation }: CoreRouterDeps) {
   const api = implement(coreContract);
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -145,6 +147,13 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
       }),
       close: api.project.close.handler(({ input }) => projects.close(input.projectId)),
     },
+    video: {
+      estimate: api.video.estimate.handler(async ({ input }) => dataOrThrow(await generation.estimate(input))),
+      generate: api.video.generate.handler(async ({ input }) => {
+        dataOrThrow(await generation.start(input));
+      }),
+      generation: api.video.generation.handler(async ({ input, signal }) => dataOrThrow(await generation.watch(input, signal))),
+    },
     cache: {
       status: api.cache.status.handler(() => cache.status()),
       clear: api.cache.clear.handler(() => cache.clear()),
@@ -152,17 +161,17 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
   });
 }
 
-/** A Project store result as the core API answers it: the data, or the error as the contract defines it. */
-function dataOrThrow<T>({ data, error }: ProjectsResult<T>): T {
-  if (error) {
-    const { code, ...details } = error;
+/** A module's result as the core API answers it: the data, or the error as the contract defines it. */
+function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null }>["data"] {
+  if (result.error) {
+    const { code, ...details } = result.error;
     throw new ORPCError(code, { data: details });
   }
 
-  return data;
+  return result.data;
 }
 
-type ProjectsResult<T> = { data: T; error: null } | { data: null; error: ProjectsError };
+type CodedResult = { data: unknown; error: null } | { data: null; error: ProjectsError | GenerateError };
 
 function unavailable(
   error: Exclude<CheckerError, { code: "INVALID_STORYBOARD" | "UNKNOWN_UNIT" }> | Exclude<ThumbnailsError, { code: "PREVIEW_NOT_FOUND" }>,

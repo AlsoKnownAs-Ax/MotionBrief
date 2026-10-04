@@ -36,11 +36,17 @@ export const TRANSITIONS = {
   camera: { label: "Camera move", icon: VideoIcon },
 } satisfies Record<TransitionType, { label: string; icon: LucideIcon }>;
 
-/** How a Scene's status reads: a badge for anything but a Scene playing its own code. */
+/**
+ * How a Scene's status reads: a badge for anything but a Scene playing its own code. While a generation
+ * works on a Scene, it plays as the Storyboard animatic.
+ */
 export const SCENE_STATUS = {
   ready: { label: "Ready", badge: undefined, badgeLabel: undefined },
   fallback: { label: "Fallback Scene", badge: "fallback", badgeLabel: "Fallback" },
-} satisfies Record<SceneStatus, { label: string; badge?: "fallback"; badgeLabel?: string }>;
+  queued: { label: "Storyboard animatic, waiting to be written", badge: "working", badgeLabel: "Queued" },
+  writing: { label: "Storyboard animatic, being written", badge: "working", badgeLabel: "Writing" },
+  checking: { label: "Storyboard animatic, being checked", badge: "working", badgeLabel: "Checking" },
+} satisfies Record<SceneStatus, { label: string; badge?: "fallback" | "working"; badgeLabel?: string }>;
 
 export const FORMAT_LABELS = { horizontal: "16:9", vertical: "9:16" } satisfies Record<Format, string>;
 

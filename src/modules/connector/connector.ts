@@ -40,6 +40,8 @@ export type ConnectorCapabilities = {
 };
 
 export type SessionOptions = {
+  /** What the run is for, such as `scene-code s03`; names it in logs and replays. */
+  label?: string;
   /** The only folder the agent may write to; also its working directory. */
   workspaceDir: string;
   model: string;

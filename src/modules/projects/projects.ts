@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import type { Format, NewProjectDefaults, Project, TranscriptionStatus } from "../../contract";
+import type { Format, NewProjectDefaults, Project, Transcript, TranscriptionStatus, UnitCode } from "../../contract";
 import type { Clock } from "../system";
 import type { Media } from "../media";
 import type { Transcriber } from "../transcriber";
@@ -10,6 +10,7 @@ import { LOCK_FILE, saveDocument, SCHEMA_VERSION, writeLock, type ProjectDocumen
 import { copyHashed, fileStep, renameRetrying, type FileError, type Result } from "./files";
 import { candidateName, nameFromFile, validName } from "./names";
 import { createStatusStore } from "./status";
+import { latestVersion, saveGeneration, saveVersion, writeUnit, type GenerationRecord, type Version } from "./videos";
 
 export type ProjectsOptions = {
   /** Where new Projects go by default: Documents/MotionBrief. */
@@ -37,6 +38,15 @@ export type NewProject = {
   stylePreset?: string;
   language?: string;
   folder?: string;
+};
+
+export type ProjectVideo = {
+  project: Project;
+  /** `null` until transcription finishes. */
+  transcript: Transcript | null;
+  voiceoverPath: string;
+  /** The video's newest Version; absent until its first generation is saved. */
+  version?: number;
 };
 
 export type ProjectChanges = {
@@ -317,6 +327,37 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     return { data: null, error: null };
   }
 
+  /** What a video of an open Project is generated from: the Project, its Transcript once done, its Voiceover and its newest Version. */
+  async function video(projectId: string, format: Format): Promise<Result<ProjectVideo, ProjectsError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    // Read once the folder's earlier changes are done, so a rename in progress has finished.
+    return enqueue(project, async () => ({
+      data: {
+        project: toProject(project),
+        transcript: project.document.transcript,
+        voiceoverPath: join(project.dir, project.document.voiceover.file),
+        version: await latestVersion(project.dir, format),
+      },
+      error: null,
+    }));
+  }
+
+  /** Runs a write in the Project folder after its earlier changes, wherever the folder is by then. */
+  function write<T>(projectId: string, step: (dir: string) => Promise<Result<T, FileError>>): Promise<Result<T, ProjectsError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
+    }
+
+    return enqueue(project, () => step(project.dir));
+  }
+
   /** Stops the Project's work, waits for its last write, and releases the lock. */
   async function close(projectId: string) {
     const project = open.get(projectId);
@@ -330,7 +371,21 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     await enqueue(project, () => fileStep(project.dir, () => rm(join(project.dir, LOCK_FILE), { force: true })));
   }
 
-  return { defaults, create, update, watchTranscription, retryTranscription, close };
+  return {
+    defaults,
+    create,
+    update,
+    watchTranscription,
+    retryTranscription,
+    video,
+    /** Stores a unit's Scene code in the video's content-addressed store; resolves to its hash. */
+    writeUnit: (projectId: string, format: Format, code: UnitCode) => write(projectId, (dir) => writeUnit(dir, format, code)),
+    /** Saves the first generation in progress, so its finished units outlive a crash. */
+    saveGeneration: (projectId: string, format: Format, record: GenerationRecord) => write(projectId, (dir) => saveGeneration(dir, format, record)),
+    /** Saves the video's next Version; resolves to its number. */
+    saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
+    close,
+  };
 }
 
 function keptTranscript(document: ProjectDocument, isNewLanguage: boolean) {
