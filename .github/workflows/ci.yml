@@ -31,6 +31,9 @@ jobs:
       # run proves the pins still match upstream on both platforms. Jobs that need no binaries
       # can set MOTIONBRIEF_SKIP_DEPS=1.
       - run: pnpm install --frozen-lockfile
+        env:
+          # The producer's Puppeteer never fetches a Chrome; exports run the pinned chrome-headless-shell.
+          PUPPETEER_SKIP_DOWNLOAD: "1"
 
       - run: pnpm lint
 

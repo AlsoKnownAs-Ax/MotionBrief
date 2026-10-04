@@ -236,6 +236,31 @@ export const PreviewSchema = z.object({
 /** A Scene's still, as a data URL, for its card in the Scene timeline. */
 export const SceneThumbnailSchema = z.object({ sceneId: z.string(), image: z.string() });
 
+/** One video of a Project: a Project has at most one video in each Format. */
+export const VideoRefSchema = z.object({ projectId: z.string(), format: FormatSchema });
+
+/** Why an export saved nothing. */
+export const ExportErrorSchema = z.discriminatedUnion("code", [
+  z.object({ code: z.literal("CHROME_MISSING"), path: z.string() }),
+  z.object({ code: z.literal("FFMPEG_MISSING"), path: z.string() }),
+  /** The render itself failed; `message` is the producer's. */
+  z.object({ code: z.literal("RENDER_FAILED"), message: z.string() }),
+  /** The chosen folder isn't there, or the MP4 couldn't be moved into it. */
+  z.object({ code: z.literal("SAVE_FAILED"), path: z.string(), message: z.string() }),
+]);
+
+/** Where an export stands: rendering through its stages, then saved or failed. */
+export const ExportStatusSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("rendering"),
+    stage: z.enum(["preparing", "capturing", "encoding", "finishing"]),
+    /** 0 to 1, across every stage. */
+    progress: z.number().min(0).max(1),
+  }),
+  z.object({ state: z.literal("done"), path: z.string() }),
+  z.object({ state: z.literal("failed"), error: ExportErrorSchema }),
+]);
+
 export const AuthMethodSchema = z.enum(["subscription", "api-key"]);
 
 /** The normalized error taxonomy of a connector; UI copy maps the codes to messages. */
@@ -467,7 +492,20 @@ export const coreContract = {
      * Opens the fixture Project's video, until Projects open from disk. Only development builds
      * have it; elsewhere this fails with SAMPLE_UNAVAILABLE.
      */
-    openSample: oc.errors({ SAMPLE_UNAVAILABLE: {} }).output(z.object({ name: z.string(), preview: PreviewSchema })),
+    openSample: oc.errors({ SAMPLE_UNAVAILABLE: {} }).output(z.object({ projectId: z.string(), name: z.string(), preview: PreviewSchema })),
+  },
+  export: {
+    /**
+     * Renders an open preview's video to an MP4 with the engine the player uses, then saves it at
+     * `path` and remembers that path for the video. Streams its status; abort the call to cancel,
+     * and nothing is saved.
+     */
+    mp4: oc
+      .errors({ PREVIEW_NOT_FOUND: { data: z.object({ id: z.string() }) } })
+      .input(z.object({ previewId: z.string(), path: z.string(), video: VideoRefSchema }))
+      .output(eventIterator(ExportStatusSchema)),
+    /** Where the video was last exported to; absent before its first export. */
+    lastPath: oc.input(VideoRefSchema).output(z.object({ path: z.string().optional() })),
   },
   connection: {
     /** Checks the connection with `claude auth status`; spends no tokens. */
@@ -571,6 +609,9 @@ export type TimelineScene = VideoTimeline["scenes"][number];
 export type TimelineWord = VideoTimeline["words"][number];
 export type Preview = z.infer<typeof PreviewSchema>;
 export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
+export type VideoRef = z.infer<typeof VideoRefSchema>;
+export type ExportError = z.infer<typeof ExportErrorSchema>;
+export type ExportStatus = z.infer<typeof ExportStatusSchema>;
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 export type ConnectorError = z.infer<typeof ConnectorErrorSchema>;
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;

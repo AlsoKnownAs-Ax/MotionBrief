@@ -162,6 +162,10 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  puppeteer: 25.12.0
+  puppeteer-core: 25.12.0
+
 importers:
 
   .:

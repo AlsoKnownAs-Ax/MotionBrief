@@ -36,7 +36,7 @@ const THUMBNAIL_SIZE = 180;
 /** A thumbnail shows its Scene just before it ends, with every element in. */
 const THUMBNAIL_BEFORE_END = 0.15;
 
-type OpenPage = { dir: string; page: AssembledPage; timeline: VideoTimeline };
+type OpenPage = { dir: string; page: AssembledPage; timeline: VideoTimeline; source: VideoSource };
 
 /**
  * Previews of videos: each is assembled into its own folder, named by a hash of its source so the
@@ -71,7 +71,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
     const page = await build(id, async (dir) => {
       const assembled = await assemble({ dir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code, voiceover: source.voiceover });
 
-      return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code) };
+      return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source };
     });
     const { origin } = await (server ??= startPreviewServer(rootDir));
 
@@ -171,11 +171,16 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
     }
   }
 
+  /** What an open page was assembled from, so an export builds the same video; `undefined` if it isn't open. */
+  function source(id: string): VideoSource | undefined {
+    return pages.get(id)?.source;
+  }
+
   async function close() {
     await (await server)?.close();
   }
 
-  return { open, thumbnails, close };
+  return { open, thumbnails, source, close };
 }
 
 /** Same source, same id: the Storyboard, Transcript, Style Preset, code and Voiceover, and the frame they are built in. */
