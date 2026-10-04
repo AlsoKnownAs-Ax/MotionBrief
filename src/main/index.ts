@@ -39,6 +39,8 @@ function start() {
     entry: coreEntry,
     appVersion: app.getVersion(),
     appDataDir: app.getPath("userData"),
+    projectsDir: join(app.getPath("documents"), "MotionBrief"),
+    cacheDir: cacheDir(),
     sampleDir: devOnly(join(app.getAppPath(), "src", "core", "fixtures")),
     onExit: () => broadcast(IPC.coreExited),
     onRestart: () => broadcast(IPC.coreRestarted),
@@ -126,6 +128,15 @@ function focusOrCreateWindow() {
   }
 
   window.focus();
+}
+
+/** The OS's place for regenerable files: never roamed or backed up, unlike app data. */
+function cacheDir() {
+  if (process.platform === "darwin") {
+    return join(app.getPath("home"), "Library", "Caches", "MotionBrief");
+  }
+
+  return join(process.env.LOCALAPPDATA ?? app.getPath("temp"), "MotionBrief", "Cache");
 }
 
 function devOnly<T>(value: T) {

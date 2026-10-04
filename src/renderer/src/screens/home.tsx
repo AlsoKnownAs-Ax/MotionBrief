@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { FlaskConicalIcon } from "lucide-react";
+import { AudioLinesIcon, FlaskConicalIcon, PlusIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ShortcutKeys } from "@renderer/components/shortcut-keys";
 import { Button } from "@renderer/components/ui/button";
 import { orpc } from "@renderer/core/connection";
 import { useOpenFixtureProject } from "@renderer/editor/open-video";
+import { cn } from "@renderer/lib/utils";
+import { useNavigation } from "@renderer/navigation";
+import { chooseVoiceover, useFileDrop } from "@renderer/new-project/voiceover-file";
 import { SetupChecklist } from "@renderer/setup/checklist";
 import { SHORTCUTS } from "../../../shared/shortcuts";
 
@@ -44,19 +47,63 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-/** Placeholder Home: proves the window reaches the core API, including a live stream. */
+/** Where a first Project starts: drop a Voiceover, or choose one. */
+function StartWithVoiceover() {
+  const openNewProject = useNavigation((state) => state.openNewProject);
+
+  async function choose() {
+    const path = await chooseVoiceover();
+
+    if (path) {
+      openNewProject(path);
+    }
+  }
+
+  return (
+    <section className="flex w-full max-w-3xl flex-col items-center gap-3 rounded-lg border border-dashed border-hairline bg-surface-1 px-8 py-10 text-center">
+      <AudioLinesIcon aria-hidden="true" className="size-6 text-ink-muted" />
+      <h2 className="text-app-title">Start with a Voiceover</h2>
+      <p className="max-w-[52ch] text-app-sm text-ink-muted">
+        Drop a recording anywhere on this window, or choose one. MotionBrief transcribes it on this computer and turns it into a
+        motion-graphics video you revise by asking.
+      </p>
+      <Button variant="primary" className="mt-1" onClick={() => void choose()}>
+        <PlusIcon />
+        New Project
+      </Button>
+    </section>
+  );
+}
+
+/** Covers the window while a file is dragged over it. */
+function DropOverlay({ isOver }: { isOver: boolean }) {
+  return (
+    <div
+      aria-hidden="true"
+      className={cn(
+        "pointer-events-none absolute inset-3 flex items-center justify-center rounded-xl border border-dashed border-primary bg-canvas/85 opacity-0 transition-opacity duration-150",
+        isOver && "opacity-100",
+      )}
+    >
+      <span className="flex items-center gap-2.5 text-app-title">
+        <AudioLinesIcon className="size-6 text-primary" />
+        Drop to start a new Project
+      </span>
+    </div>
+  );
+}
+
+/** Home: the setup checklist and the way into a new Project. Recent Projects come with the Project lifecycle. */
 export function Home() {
   const info = useQuery(orpc.system.info.queryOptions());
   const heartbeat = useQuery(orpc.system.heartbeat.experimental_liveOptions());
+  const openNewProject = useNavigation((state) => state.openNewProject);
+  const drop = useFileDrop(openNewProject);
 
   return (
-    <main className="flex flex-1 flex-col items-center justify-center gap-8 overflow-y-auto p-10">
+    <main className="relative flex flex-1 flex-col items-center justify-center gap-8 overflow-y-auto p-10" {...drop.handlers}>
       <SetupChecklist />
-
-      <div className="flex max-w-md flex-col items-center gap-3 text-center">
-        <h1 className="text-app-display">MotionBrief</h1>
-        <p className="text-app-body text-ink-muted">The app is running. Projects and generation come next.</p>
-      </div>
+      <StartWithVoiceover />
 
       <section aria-label="Core" className="w-full max-w-sm rounded-lg bg-surface-1 px-3 py-1">
         <dl className="flex flex-col">
@@ -73,6 +120,7 @@ export function Home() {
         <ShortcutKeys shortcut={SHORTCUTS.showShortcuts} />
         Keyboard shortcuts
       </p>
+      <DropOverlay isOver={drop.isOver} />
     </main>
   );
 }

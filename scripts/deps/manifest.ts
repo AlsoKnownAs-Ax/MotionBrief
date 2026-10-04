@@ -18,6 +18,14 @@ export const ARCHIVE_NAMES = ["chrome-headless-shell", "ffmpeg", "whisper-cli"] 
 
 export type ArchiveName = (typeof ARCHIVE_NAMES)[number];
 
+/** Single files postinstall fetches as they are, the same for every platform. */
+export const FILE_NAMES = ["whisper-vad-model"] as const satisfies readonly DepName[];
+
+export type FileName = (typeof FILE_NAMES)[number];
+
+/** What a file dependency is saved as inside vendor/<name>/. */
+export const VENDORED_FILE = "model.bin";
+
 export type ManifestError = FileError | { code: "MANIFEST_INVALID"; path: string; issues: z.core.$ZodIssue[] };
 
 /** The manifest's file name in the repo root. */

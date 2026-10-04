@@ -6,6 +6,7 @@ import { TitleBar } from "@renderer/components/title-bar";
 import { useNavigation, type Screen } from "@renderer/navigation";
 import { Editor, EditorToolbar } from "@renderer/screens/editor";
 import { Home } from "@renderer/screens/home";
+import { NewProject } from "@renderer/screens/new-project";
 import { Setup } from "@renderer/screens/setup";
 import { useStartTranscriptionModel } from "@renderer/setup/transcription-model-step";
 
@@ -13,6 +14,7 @@ import { useStartTranscriptionModel } from "@renderer/setup/transcription-model-
 const SCREENS = {
   home: { Screen: Home },
   setup: { Screen: Setup },
+  "new-project": { Screen: NewProject },
   editor: { Screen: Editor, Toolbar: EditorToolbar },
 } satisfies Record<Screen, { Screen: ComponentType; Toolbar?: ComponentType }>;
 

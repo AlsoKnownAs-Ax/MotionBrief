@@ -25,6 +25,12 @@ export const CORE_APP_VERSION_FLAG = "--app-version=";
 /** Command-line flag main passes the app's per-user data folder to the core process with. */
 export const CORE_APP_DATA_FLAG = "--app-data=";
 
+/** Command-line flag main passes the default Projects folder (Documents/MotionBrief) with. */
+export const CORE_PROJECTS_DIR_FLAG = "--projects-dir=";
+
+/** Command-line flag main passes the app's cache folder with: local, never roaming. */
+export const CORE_CACHE_DIR_FLAG = "--cache-dir=";
+
 /** Command-line flag a development build passes the source tree's fixtures folder with, for the fixture Project. */
 export const CORE_SAMPLE_FLAG = "--sample-project=";
 

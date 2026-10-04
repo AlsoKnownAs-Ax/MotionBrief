@@ -1,0 +1,163 @@
+import { safe } from "@orpc/client";
+import { useMutation, useQuery } from "@tanstack/react-query";
+import { ArrowLeftIcon, AudioLinesIcon, CircleAlertIcon, LoaderCircleIcon } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Button } from "@renderer/components/ui/button";
+import { core, orpc } from "@renderer/core/connection";
+import { cn } from "@renderer/lib/utils";
+import { useNavigation } from "@renderer/navigation";
+import { projectErrorMessage } from "@renderer/new-project/project-errors";
+import { ProjectForm, type ProjectChanges } from "@renderer/new-project/project-form";
+import { TranscriptPane } from "@renderer/new-project/transcript-pane";
+import { chooseVoiceover, useFileDrop } from "@renderer/new-project/voiceover-file";
+import type { Project } from "../../../contract";
+
+/**
+ * New Project: a Voiceover makes a Project folder and starts transcribing at once, while the creator names it and
+ * picks its Format, Style Preset and language. Every choice saves as it changes.
+ */
+export function NewProject() {
+  const droppedVoiceover = useNavigation((state) => state.droppedVoiceover);
+  const openHome = useNavigation((state) => state.openHome);
+  const [project, setProject] = useState<Project>();
+  const create = useMutation({ mutationFn: (voiceoverPath: string) => core.project.create({ voiceoverPath }), onSuccess: setProject });
+  const started = useRef<string>(undefined);
+
+  /** Each Voiceover makes one Project, even when React runs effects twice. */
+  function start(voiceoverPath: string) {
+    if (started.current === voiceoverPath) {
+      return;
+    }
+
+    started.current = voiceoverPath;
+    create.mutate(voiceoverPath);
+  }
+
+  useEffect(() => {
+    if (droppedVoiceover) {
+      start(droppedVoiceover);
+    }
+    // Only a new drop starts a Project.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [droppedVoiceover]);
+
+  useCloseOnLeave(project?.id);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-12 shrink-0 items-center gap-2 border-b border-hairline-soft px-3">
+        <Button variant="ghost" size="icon-sm" aria-label="Back to Home" onClick={openHome}>
+          <ArrowLeftIcon />
+        </Button>
+        <h1 className="text-app-body font-medium">New Project</h1>
+      </div>
+      {project ? <ProjectEditor project={project} onProject={setProject} /> : null}
+      {project ? null : <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} />}
+    </div>
+  );
+}
+
+/** Releases the Project's lock when the creator leaves the screen. */
+function useCloseOnLeave(projectId: string | undefined) {
+  useEffect(() => {
+    if (!projectId) {
+      return;
+    }
+
+    return () => {
+      void safe(core.project.close({ projectId }));
+    };
+  }, [projectId]);
+}
+
+type VoiceoverDropProps = { isCreating: boolean; error: unknown; onVoiceover: (path: string) => void };
+
+function VoiceoverDrop({ isCreating, error, onVoiceover }: VoiceoverDropProps) {
+  const drop = useFileDrop(onVoiceover);
+
+  async function choose() {
+    const path = await chooseVoiceover();
+
+    if (path) {
+      onVoiceover(path);
+    }
+  }
+
+  if (isCreating) {
+    return (
+      <div className="flex flex-1 items-center justify-center">
+        <p role="status" className="flex items-center gap-2.5 text-app-body text-ink-muted">
+          <LoaderCircleIcon aria-hidden="true" className="size-4 animate-spin" />
+          Copying the Voiceover into its Project folder…
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-1 items-center justify-center p-10" {...drop.handlers}>
+      <div
+        className={cn(
+          "flex w-full max-w-xl flex-col items-center gap-3 rounded-xl border border-dashed border-hairline bg-surface-1 px-10 py-12 text-center transition-colors",
+          drop.isOver && "border-primary bg-surface-2",
+        )}
+      >
+        <AudioLinesIcon aria-hidden="true" className="size-6 text-ink-muted" />
+        <h2 className="text-app-title">Drop a Voiceover</h2>
+        <p className="max-w-[48ch] text-app-sm text-ink-muted">
+          Any audio or video file FFmpeg can read, such as WAV, MP3, M4A or MP4. It’s copied into the Project folder; your original stays
+          where it is.
+        </p>
+        {error ? (
+          <p role="alert" className="flex items-start gap-2 text-left text-app-sm text-status-fallback-ink">
+            <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+            {projectErrorMessage(error)}
+          </p>
+        ) : null}
+        <Button variant="primary" className="mt-1" onClick={() => void choose()}>
+          Choose file…
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+type ProjectEditorProps = { project: Project; onProject: (project: Project) => void };
+
+function ProjectEditor({ project, onProject }: ProjectEditorProps) {
+  const { data: transcription } = useQuery(orpc.project.transcription.experimental_liveOptions({ input: { projectId: project.id } }));
+
+  /** Shows a choice at once, then whatever the core saved; a new name waits for its folder to be renamed. */
+  async function change(changes: ProjectChanges) {
+    onProject(withChoices(project, changes));
+    const { data: saved, error } = await safe(core.project.update({ projectId: project.id, ...changes }));
+
+    if (error) {
+      onProject(project);
+
+      return projectErrorMessage(error);
+    }
+
+    onProject(saved);
+
+    return undefined;
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 gap-5 p-5">
+      <div className="w-[360px] shrink-0 overflow-y-auto pr-1">
+        <ProjectForm project={project} transcription={transcription} onChange={change} />
+      </div>
+      <TranscriptPane transcription={transcription} onRetry={() => void safe(core.project.retryTranscription({ projectId: project.id }))} />
+    </div>
+  );
+}
+
+function withChoices(project: Project, { format, stylePreset, language }: ProjectChanges): Project {
+  return {
+    ...project,
+    format: format ?? project.format,
+    stylePreset: stylePreset ?? project.stylePreset,
+    language: language ?? project.language,
+  };
+}

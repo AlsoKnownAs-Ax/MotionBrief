@@ -296,6 +296,101 @@ export const TranscriptionModelStatusSchema = z.object({
   error: TranscriptionModelErrorSchema.optional(),
 });
 
+/** A Whisper language code, or `auto` to detect it from the Voiceover. */
+export const LanguageSchema = z.string().regex(/^(auto|[a-z]{2,3})$/, "auto, or a language code such as en");
+
+/** A Style Preset's id: one of the bundled Presets for now (blueprint, whiteboard, sketchbook, terminal). */
+export const StylePresetIdSchema = z.string().regex(/^[a-z0-9-]+$/);
+
+export const TranscriptWordSchema = z.object({
+  text: z.string(),
+  /** Seconds into the Voiceover. */
+  start: z.number().nonnegative(),
+  end: z.number().nonnegative(),
+});
+
+/** A Voiceover's words with the time each is spoken; Project-level, shared by every Format. */
+export const TranscriptSchema = z.object({
+  /** The language it was transcribed in: the detected one unless the creator chose another. */
+  language: z.string(),
+  duration: z.number().nonnegative(),
+  words: z.array(TranscriptWordSchema),
+});
+
+export const VoiceoverSchema = z.object({
+  /** The name of the file the creator added; the Project keeps its own copy. */
+  fileName: z.string(),
+  bytes: z.number().int().nonnegative(),
+  /** Seconds. */
+  duration: z.number().nonnegative(),
+  /** It came from a video file, so only its audio is used. */
+  isVideo: z.boolean(),
+  /** Over 20 minutes: allowed, but generating it will be long and costly. */
+  isLong: z.boolean(),
+});
+
+export const ProjectSchema = z.object({
+  id: z.string(),
+  /** Also the name of the Project folder. */
+  name: z.string(),
+  path: z.string(),
+  /** The Format and Style Preset its first video is generated in. */
+  format: FormatSchema,
+  stylePreset: StylePresetIdSchema,
+  /** The language the creator chose for the Transcript, or `auto`. */
+  language: LanguageSchema,
+  voiceover: VoiceoverSchema,
+});
+
+/** What a new Project starts with: the Format and Style Preset used last, and where Projects go. */
+export const NewProjectDefaultsSchema = z.object({
+  format: FormatSchema,
+  stylePreset: StylePresetIdSchema,
+  folder: z.string(),
+});
+
+export const TranscriptionErrorSchema = z.object({
+  code: z.enum(["VOICEOVER_UNREADABLE", "TRANSCRIBER_FAILED", "FILE_FAILED"]),
+  message: z.string(),
+});
+
+export const TranscriptionStatusSchema = z.object({
+  /** `waiting-for-model` until the transcription model is downloaded; `done` once the Transcript is saved. */
+  state: z.enum(["waiting-for-model", "transcribing", "done", "failed"]),
+  /** Seconds of the Voiceover transcribed so far, out of `duration`. */
+  transcribedSeconds: z.number().nonnegative(),
+  duration: z.number().nonnegative(),
+  /** The Transcript's language, once detected or chosen. */
+  language: z.string().optional(),
+  /** The words transcribed so far; the whole Transcript once `done`. */
+  words: z.array(TranscriptWordSchema),
+  error: TranscriptionErrorSchema.optional(),
+});
+
+/** The app's cache of things it can regenerate: resampled audio and raw Whisper output. */
+export const CacheStatusSchema = z.object({
+  usedBytes: z.number().int().nonnegative(),
+  capBytes: z.number().int().positive(),
+});
+
+const ProjectIdInput = z.object({ projectId: z.string() });
+
+const UNKNOWN_PROJECT = { data: z.object({ projectId: z.string() }) };
+
+/** Why creating or changing a Project failed; UI copy maps the codes to messages. */
+const PROJECT_ERRORS = {
+  /** FFmpeg can't read the file. */
+  VOICEOVER_UNREADABLE: { data: z.object({ path: z.string(), detail: z.string() }) },
+  /** A video without sound. */
+  NO_AUDIO: { data: z.object({ path: z.string() }) },
+  /** It can't be a folder name on every platform. */
+  INVALID_NAME: { data: z.object({ name: z.string() }) },
+  /** Another folder beside it has that name. */
+  NAME_TAKEN: { data: z.object({ name: z.string() }) },
+  UNKNOWN_PROJECT,
+  FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+};
+
 export const coreContract = {
   system: {
     info: oc.output(CoreInfoSchema),
@@ -398,6 +493,50 @@ export const coreContract = {
     /** Installs a copy of a model file the user already has, if it matches the pinned SHA-256. */
     import: oc.input(z.object({ path: z.string() })),
   },
+  project: {
+    defaults: oc.output(NewProjectDefaultsSchema),
+    /**
+     * Creates a Project folder from a Voiceover (any file FFmpeg can read) and starts transcribing it at once.
+     * Unset choices default to the last used, the name to the Voiceover's file name.
+     */
+    create: oc
+      .errors(PROJECT_ERRORS)
+      .input(
+        z.object({
+          voiceoverPath: z.string(),
+          name: z.string().optional(),
+          format: FormatSchema.optional(),
+          stylePreset: StylePresetIdSchema.optional(),
+          language: LanguageSchema.optional(),
+          /** Where the Project folder goes; the default Projects folder when absent. */
+          folder: z.string().optional(),
+        }),
+      )
+      .output(ProjectSchema),
+    /** Changes an open Project's choices. A new name renames its folder; a new language transcribes it again. */
+    update: oc
+      .errors(PROJECT_ERRORS)
+      .input(
+        ProjectIdInput.extend({
+          name: z.string().optional(),
+          format: FormatSchema.optional(),
+          stylePreset: StylePresetIdSchema.optional(),
+          language: LanguageSchema.optional(),
+        }),
+      )
+      .output(ProjectSchema),
+    /** Streams the Transcript as it is transcribed, then the saved Transcript. */
+    transcription: oc.errors({ UNKNOWN_PROJECT }).input(ProjectIdInput).output(eventIterator(TranscriptionStatusSchema)),
+    /** Transcribes again after a failure. */
+    retryTranscription: oc.errors({ UNKNOWN_PROJECT }).input(ProjectIdInput),
+    /** Stops working on the Project and releases its lock. */
+    close: oc.input(ProjectIdInput),
+  },
+  cache: {
+    status: oc.output(CacheStatusSchema),
+    /** Deletes everything in the cache that isn't in use right now. */
+    clear: oc.output(CacheStatusSchema),
+  },
 };
 
 export type CoreContract = typeof coreContract;
@@ -439,3 +578,11 @@ export type SetupError = z.infer<typeof SetupErrorSchema>;
 export type SetupResult = z.infer<typeof SetupResultSchema>;
 export type TranscriptionModelError = z.infer<typeof TranscriptionModelErrorSchema>;
 export type TranscriptionModelStatus = z.infer<typeof TranscriptionModelStatusSchema>;
+export type TranscriptWord = z.infer<typeof TranscriptWordSchema>;
+export type Transcript = z.infer<typeof TranscriptSchema>;
+export type Voiceover = z.infer<typeof VoiceoverSchema>;
+export type Project = z.infer<typeof ProjectSchema>;
+export type NewProjectDefaults = z.infer<typeof NewProjectDefaultsSchema>;
+export type TranscriptionError = z.infer<typeof TranscriptionErrorSchema>;
+export type TranscriptionStatus = z.infer<typeof TranscriptionStatusSchema>;
+export type CacheStatus = z.infer<typeof CacheStatusSchema>;

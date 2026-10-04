@@ -30,6 +30,26 @@ describe("postinstall", () => {
     expect(await vendorFile("whisper-cli/whisper-cli.txt")).toBe("whisper-cli for win");
   });
 
+  it("fetches the pinned VAD model into vendor/, for every platform alike", async () => {
+    await writeManifest(await servedManifest());
+
+    const { error } = await postinstall();
+
+    expect(error).toBeNull();
+    expect(await vendorFile("whisper-vad-model/model.bin")).toBe(VAD_MODEL);
+  });
+
+  it("refuses a VAD model whose hash doesn't match the manifest, leaving nothing of it behind", async () => {
+    const manifest = await servedManifest();
+    server.serve("/vad.bin", "tampered");
+    await writeManifest(manifest);
+
+    const { error } = await postinstall();
+
+    expect(error).toMatchObject({ code: "HASH_MISMATCH", name: "whisper-vad-model", expected: sha256(VAD_MODEL) });
+    expect(await vendorEntries()).not.toContainEqual(expect.stringContaining("whisper-vad-model"));
+  });
+
   it("refuses an archive whose hash doesn't match the manifest, leaving nothing of it behind", async () => {
     const manifest = await servedManifest();
     server.serve("/ffmpeg-win.zip", await packZip({ "ffmpeg.txt": "tampered" }));
@@ -116,7 +136,7 @@ describe("postinstall", () => {
 
     await postinstall();
 
-    expect(server.requests).toEqual(["/chrome-win.zip", "/ffmpeg-win.zip", "/whisper-win.zip"]);
+    expect(server.requests).toEqual(["/chrome-win.zip", "/ffmpeg-win.zip", "/whisper-win.zip", "/vad.bin"]);
   });
 
   it("fetches nothing again that is already installed at its pin", async () => {
@@ -176,6 +196,7 @@ async function servedManifest(): Promise<Manifest> {
     return { url: `${server.url}${path}`, sha256: sha256(body) };
   };
   server.serve("/model.bin", MODEL);
+  server.serve("/vad.bin", VAD_MODEL);
 
   return {
     "chrome-headless-shell": {
@@ -212,10 +233,17 @@ async function servedManifest(): Promise<Manifest> {
       sha256: sha256(MODEL),
       size: MODEL.length,
     },
+    "whisper-vad-model": {
+      version: "89abcdef0123456789abcdef0123456789abcdef",
+      url: `${server.url}/vad.bin`,
+      sha256: sha256(VAD_MODEL),
+    },
   };
 }
 
 const MODEL = "the model";
+
+const VAD_MODEL = "the VAD model";
 
 const CLAUDE_WIN = "claude for win";
 
