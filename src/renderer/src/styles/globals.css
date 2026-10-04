@@ -168,6 +168,28 @@
   }
 }
 
+/* While a pane divider drags, the cursor stays a resize cursor and the player's frame can't take the pointer. */
+body[data-resizing="x"],
+body[data-resizing="x"] * {
+  cursor: col-resize !important;
+  user-select: none;
+}
+
+body[data-resizing="y"],
+body[data-resizing="y"] * {
+  cursor: row-resize !important;
+  user-select: none;
+}
+
+body[data-resizing] hyperframes-player {
+  pointer-events: none;
+}
+
+.timeline-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #2e2e2e transparent;
+}
+
 @utility drag-region {
   -webkit-app-region: drag;
 }

@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 
-export type Screen = "home" | "setup";
+export type Screen = "home" | "setup" | "editor";
 
 type Navigation = {
   screen: Screen;
@@ -11,6 +11,7 @@ type Navigation = {
   hasLeftSetup: boolean;
   openSetup: (stepId?: string) => void;
   openHome: () => void;
+  openEditor: () => void;
 };
 
 export const useNavigation = create<Navigation>()(
@@ -20,6 +21,7 @@ export const useNavigation = create<Navigation>()(
       hasLeftSetup: false,
       openSetup: (stepId) => set({ screen: "setup", focusedStep: stepId }),
       openHome: () => set({ screen: "home", focusedStep: undefined, hasLeftSetup: true }),
+      openEditor: () => set({ screen: "editor", focusedStep: undefined }),
     }),
     {
       name: "motionbrief.navigation",

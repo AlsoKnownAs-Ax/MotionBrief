@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { FormatSchema } from "../../contract";
+import { FormatSchema, TransitionTypeSchema } from "../../contract";
 
 /**
  * The Storyboard the agent writes (ADR 0003): Scenes with a Transcript span, a Scene Type, content
@@ -120,18 +120,6 @@ const statChart = z.strictObject({
 });
 
 const outro = z.strictObject({ headline: element(50), cta: element(40).optional() });
-
-export const TransitionTypeSchema = z.enum([
-  "cut",
-  "crossfade",
-  "push-left",
-  "push-right",
-  "push-up",
-  "push-down",
-  "zoom-through",
-  "carry-over",
-  "camera",
-]);
 
 /** A carry-over names the element it morphs, so the Assembler never has to choose one. */
 const TransitionSchema = z.discriminatedUnion("type", [

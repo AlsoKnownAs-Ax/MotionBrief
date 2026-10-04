@@ -7,6 +7,7 @@ import { inlineIcons } from "../modules/frame";
 import type { Storyboard } from "../modules/storyboard";
 import storyboardJson from "./fixtures/checker/storyboard.json";
 import transcript from "./fixtures/checker/transcript.json";
+import horizontalJson from "./fixtures/storyboard/horizontal.json";
 import longTranscript from "./fixtures/storyboard/transcript.json";
 import verticalJson from "./fixtures/storyboard/vertical-captions.json";
 import { BLUEPRINT } from "./test-support/checker";
@@ -14,6 +15,7 @@ import { closeFrame, FRAME_TIMEOUT_MS as BROWSER_TIMEOUT_MS, openFrame as openPr
 
 const storyboard = storyboardJson as Storyboard;
 const vertical = verticalJson as Storyboard;
+const horizontal = horizontalJson as Storyboard;
 
 /** Assembles a Storyboard's units in the frame, in Blueprint, and opens the page; units without code are fallback Scenes. */
 function openFrame(board: Storyboard, words: StoryboardTranscript, code: Record<string, UnitCode>): Promise<OpenFrame> {
@@ -276,6 +278,77 @@ describe("the frame, in a headless browser", () => {
     });
   });
 
+  describe("Transitions", () => {
+    let frame: OpenFrame | undefined;
+
+    beforeAll(async () => {
+      frame = await openFrame(horizontal, longTranscript, {});
+    }, BROWSER_TIMEOUT_MS);
+
+    afterAll(() => closeFrame(frame));
+
+    const page = () => frame!.page;
+
+    // s01 cuts to s02, which starts 0.25 s before "That", spoken at 4.9 s.
+    it("cut: the next Scene replaces the last one at its start", async () => {
+      await page().seek(4.6);
+      const before = [await effectiveOpacity(page(), "#s01-headline"), await effectiveOpacity(page(), "#s02-bg")];
+      await page().seek(4.7);
+      const after = [await effectiveOpacity(page(), "#s01-headline"), await effectiveOpacity(page(), "#s02-bg")];
+
+      expect(before).toEqual([1, 0]);
+      expect(after).toEqual([0, 1]);
+    });
+
+    // s02 crossfades into the Canvas c1, which starts 0.25 s before "Your", spoken at 10.5 s, over 0.5 s.
+    it("crossfade: the two Scenes fade through each other over half a second from the next Scene's start", async () => {
+      await page().seek(10.2);
+      const before = [await effectiveOpacity(page(), "#s02-term"), await effectiveOpacity(page(), "#c1-bg")];
+      await page().seek(10.5);
+      const halfway = [await effectiveOpacity(page(), "#s02-term"), await effectiveOpacity(page(), "#c1-bg")];
+      await page().seek(10.8);
+      const after = [await effectiveOpacity(page(), "#s02-term"), await effectiveOpacity(page(), "#c1-bg")];
+
+      expect(before).toEqual([1, 0]);
+      expect(halfway[0]).toBeCloseTo(0.5, 1);
+      expect(halfway[1]).toBeCloseTo(0.5, 1);
+      expect(after).toEqual([0, 1]);
+    });
+
+    it("crossfade: plays back the same after seeking backwards", async () => {
+      await page().seek(11);
+      await page().seek(10.5);
+      const halfway = [await effectiveOpacity(page(), "#s02-term"), await effectiveOpacity(page(), "#c1-bg")];
+
+      expect(halfway[0]).toBeCloseTo(0.5, 1);
+      expect(halfway[1]).toBeCloseTo(0.5, 1);
+    });
+  });
+
+  describe("anchors after a Transcript change", () => {
+    let frame: OpenFrame | undefined;
+    // "browser" is now spoken 0.4 s later; the Scene code stays the same.
+    const later = { ...transcript, words: transcript.words.map((word, index) => (index === 1 ? { ...word, start: 0.95 } : word)) };
+
+    beforeAll(async () => {
+      frame = await openFrame(storyboard, later, { s01: await unitCode("s01"), s02: await unitCode("s02") });
+    }, BROWSER_TIMEOUT_MS);
+
+    afterAll(() => closeFrame(frame));
+
+    it("are injected into at(id) at assembly, so the same Scene code lands on the new word", async () => {
+      expect(await frame!.page.evaluate<number>(`MB.scene("s01").at("s01-browser")`)).toBe(0.95);
+
+      await frame!.page.seek(0.85);
+      const before = await opacityOf(frame!.page, "#s01-browser");
+      await frame!.page.seek(1.05);
+      const arriving = await opacityOf(frame!.page, "#s01-browser");
+
+      expect(before).toBe(0);
+      expect(arriving).toBeGreaterThanOrEqual(0.3);
+    });
+  });
+
   describe("in vertical", () => {
     let frame: OpenFrame | undefined;
 
@@ -292,6 +365,19 @@ describe("the frame, in a headless browser", () => {
     });
   });
 });
+
+/** An element's opacity as the viewer sees it: its own times every ancestor's, 0 when it isn't displayed. */
+function effectiveOpacity(page: FramePage, selector: string) {
+  return page.evaluate<number>(`(() => {
+    let opacity = 1;
+    for (let node = document.querySelector(${JSON.stringify(selector)}); node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") return 0;
+      opacity *= Number(style.opacity);
+    }
+    return Math.round(opacity * 1000) / 1000;
+  })()`);
+}
 
 /** The box of the `.mb-safe` container around an element. */
 function safeZoneOf(id: string): string {

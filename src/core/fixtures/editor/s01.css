@@ -1,0 +1,4 @@
+.hook { display: flex; flex-direction: column; justify-content: center; gap: 40px; }
+.headline { max-width: 13ch; }
+.kicker { display: flex; align-items: center; gap: 20px; }
+.kicker .mb-icon { font-size: 56px; color: var(--accent); }

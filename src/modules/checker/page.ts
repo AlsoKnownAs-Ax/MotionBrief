@@ -8,6 +8,8 @@ export type FramePageOptions = {
   chromePath: string;
   width: number;
   height: number;
+  /** Device pixels per frame pixel; below 1 for small stills. 1 by default. */
+  scale?: number;
 };
 
 export type FramePage = {
@@ -15,6 +17,8 @@ export type FramePage = {
   seek: (time: number) => Promise<void>;
   /** Evaluates a JavaScript expression in the page and returns its JSON-serializable value. */
   evaluate: <T>(expression: string) => Promise<T>;
+  /** A JPEG of the frame as it is now. */
+  screenshot: () => Promise<Uint8Array>;
   /** Uncaught errors the page threw. */
   errors: string[];
   close: () => Promise<void>;
@@ -29,7 +33,7 @@ const LOAD_TIMEOUT_MS = 60_000;
  * Opens an assembled page in the pinned chrome-headless-shell, served the way HyperFrames renders
  * it, and waits until its timeline is ready to seek.
  */
-export async function openFramePage({ dir, chromePath, width, height }: FramePageOptions) {
+export async function openFramePage({ dir, chromePath, width, height, scale = 1 }: FramePageOptions) {
   let server: FileServerHandle | undefined;
   let browser: Browser | undefined;
 
@@ -44,7 +48,7 @@ export async function openFramePage({ dir, chromePath, width, height }: FramePag
     const errors: string[] = [];
 
     page.on("pageerror", (error) => errors.push(String((error as Error).message ?? error)));
-    await page.setViewport({ width, height });
+    await page.setViewport({ width, height, deviceScaleFactor: scale });
     await page.goto(server.url, { waitUntil: "load", timeout: LOAD_TIMEOUT_MS });
     await page.waitForFunction("window.__hf && window.__hf.duration > 0", { timeout: LOAD_TIMEOUT_MS });
     await page.evaluate("document.fonts.ready");
@@ -58,6 +62,7 @@ export async function openFramePage({ dir, chromePath, width, height }: FramePag
       },
       // The caller states what its expression returns; the page can't be type-checked.
       evaluate: <T>(expression: string) => page.evaluate(expression) as Promise<T>,
+      screenshot: () => page.screenshot({ type: "jpeg", quality: 75 }),
       errors,
       close: async () => {
         await opened.browser.close();

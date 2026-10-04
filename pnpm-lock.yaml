@@ -227,6 +227,9 @@ importers:
       '@fontsource-variable/inter':
         specifier: 5.3.0
         version: 5.3.0
+      '@hyperframes/player':
+        specifier: 0.8.113
+        version: 0.8.113(@types/node@24.19.0)
       '@orpc/tanstack-query':
         specifier: 1.15.4
         version: 1.15.4(@orpc/client@1.15.4)(@tanstack/query-core@5.104.0)
@@ -950,6 +953,9 @@ packages:
 
   '@hyperframes/parsers@0.8.113':
     resolution: {integrity: sha512-+jXXh40Wo5ZAgi1JMxAbzhtZ6JVcP8ZMPePABhoMJBKGoYDiFx/RPewYFrEWzxeExHsZZeb4izWQfJciRLGjpA==}
+
+  '@hyperframes/player@0.8.113':
+    resolution: {integrity: sha512-MFovh925CL4LTRebVepNwnSk3jTduXD6UAtsUdoupalX8ATGaUqN1XhRdW5BNcztf84vCfS11NAz3ubAvzPbNQ==}
 
   '@hyperframes/producer@0.8.113':
     resolution: {integrity: sha512-wxZF1cjn62/c9eFCFjNdCkln9LI+YH365/40vel2rjt2F65IeEdUpVsfTRiE+nQWa6pnI8HwczEqxd89+bnJHA==}
@@ -4605,6 +4611,13 @@ snapshots:
       magic-string: 0.30.21
       recast: 0.23.21
     transitivePeerDependencies:
+      - canvas
+
+  '@hyperframes/player@0.8.113(@types/node@24.19.0)':
+    dependencies:
+      '@hyperframes/core': 0.8.113(@types/node@24.19.0)
+    transitivePeerDependencies:
+      - '@types/node'
       - canvas
 
   '@hyperframes/producer@0.8.113(@types/node@24.19.0)':

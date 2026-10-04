@@ -99,6 +99,32 @@ export const StylePresetSchema = z.object({
 /** A Style Preset as the app lists it: the bundled ones are read-only and are duplicated to edit. */
 export const ListedPresetSchema = StylePresetSchema.extend({ readOnly: z.boolean() });
 
+/** The 9 Scene Types. */
+export const SceneTypeSchema = z.enum([
+  "hook",
+  "key-term",
+  "architecture-diagram",
+  "flow",
+  "code",
+  "comparison",
+  "list",
+  "stat-chart",
+  "outro",
+]);
+
+/** The Transitions a Storyboard can name: a push has a direction, and a carry-over names the element it morphs. */
+export const TransitionTypeSchema = z.enum([
+  "cut",
+  "crossfade",
+  "push-left",
+  "push-right",
+  "push-up",
+  "push-down",
+  "zoom-through",
+  "carry-over",
+  "camera",
+]);
+
 /** What a Storyboard is checked against: its video's Format and Captions, and the Style Preset's choices. */
 export const StoryboardRulesSchema = z.object({
   format: FormatSchema,
@@ -158,6 +184,55 @@ export const CheckerUnavailableSchema = z.object({
   cause: z.enum(["CHROME_MISSING", "PAGE_FAILED", "BROWSER_FAILED", "HYPERFRAMES_FAILED"]),
   detail: z.string(),
 });
+
+/** What a video is assembled from: its Storyboard, Transcript and units' Scene code, and its Voiceover. */
+export const VideoSourceSchema = z.object({
+  storyboard: z.unknown(),
+  transcript: StoryboardTranscriptSchema,
+  rules: StoryboardRulesSchema,
+  /** Scene code per unit id; a unit without code plays as its fallback Scene. */
+  code: z.record(z.string(), UnitCodeSchema),
+  /** The Voiceover file, played as the video's audio track. Absent, the video plays silent. */
+  voiceover: z.string().optional(),
+});
+
+/** How a Scene plays: from its Scene code, or as its fallback Scene. */
+export const SceneStatusSchema = z.enum(["ready", "fallback"]);
+
+/** A video laid out in time, as the editor's player and Scene timeline show it. Times are seconds. */
+export const VideoTimelineSchema = z.object({
+  format: FormatSchema,
+  width: z.number().int().positive(),
+  height: z.number().int().positive(),
+  duration: z.number().nonnegative(),
+  scenes: z.array(
+    z.object({
+      id: z.string(),
+      /** The Scene's place in the video, counted from 1. */
+      number: z.number().int().positive(),
+      type: SceneTypeSchema,
+      /** The unit the Scene's code belongs to: the Scene's own id, or its Canvas. */
+      unit: z.string(),
+      start: z.number().nonnegative(),
+      end: z.number().nonnegative(),
+      status: SceneStatusSchema,
+      /** The Transition from the Scene before into this one; the first Scene has none. */
+      transitionIn: TransitionTypeSchema.optional(),
+    }),
+  ),
+  /** The Transcript's words, each until the next one starts. */
+  words: z.array(z.object({ text: z.string(), start: z.number().nonnegative(), end: z.number().nonnegative() })),
+});
+
+/** An assembled video the player can load: `url` serves its root composition on this computer. */
+export const PreviewSchema = z.object({
+  id: z.string(),
+  url: z.string(),
+  timeline: VideoTimelineSchema,
+});
+
+/** A Scene's still, as a data URL, for its card in the Scene timeline. */
+export const SceneThumbnailSchema = z.object({ sceneId: z.string(), image: z.string() });
 
 export const AuthMethodSchema = z.enum(["subscription", "api-key"]);
 
@@ -269,6 +344,34 @@ export const coreContract = {
     /** The bundled OFL font pairings a Preset copies its typography from. */
     typography: oc.output(z.array(TypographySchema)),
   },
+  preview: {
+    /**
+     * Assembles a video and serves it for the player: Scene timing from the word anchors, the
+     * Transitions, fallback Scenes for units without code, and the Voiceover track. The same source
+     * always builds the same page, under the same id.
+     */
+    open: oc
+      .errors({
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+      })
+      .input(VideoSourceSchema)
+      .output(PreviewSchema),
+    /** Renders a still of each Scene of an open preview, streaming each as it is ready. */
+    thumbnails: oc
+      .errors({
+        PREVIEW_NOT_FOUND: { data: z.object({ id: z.string() }) },
+        CHECKER_UNAVAILABLE: { data: CheckerUnavailableSchema },
+      })
+      .input(z.object({ id: z.string() }))
+      .output(eventIterator(SceneThumbnailSchema)),
+    /**
+     * Opens the fixture Project's video, until Projects open from disk. Only development builds
+     * have it; elsewhere this fails with SAMPLE_UNAVAILABLE.
+     */
+    openSample: oc.errors({ SAMPLE_UNAVAILABLE: {} }).output(z.object({ name: z.string(), preview: PreviewSchema })),
+  },
   connection: {
     /** Checks the connection with `claude auth status`; spends no tokens. */
     status: oc.output(ConnectionStatusSchema),
@@ -318,6 +421,15 @@ export type StoryboardIssue = z.infer<typeof StoryboardIssueSchema>;
 export type UnitCode = z.infer<typeof UnitCodeSchema>;
 export type CheckFinding = z.infer<typeof CheckFindingSchema>;
 export type CheckerUnavailable = z.infer<typeof CheckerUnavailableSchema>;
+export type SceneType = z.infer<typeof SceneTypeSchema>;
+export type TransitionType = z.infer<typeof TransitionTypeSchema>;
+export type VideoSource = z.infer<typeof VideoSourceSchema>;
+export type SceneStatus = z.infer<typeof SceneStatusSchema>;
+export type VideoTimeline = z.infer<typeof VideoTimelineSchema>;
+export type TimelineScene = VideoTimeline["scenes"][number];
+export type TimelineWord = VideoTimeline["words"][number];
+export type Preview = z.infer<typeof PreviewSchema>;
+export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 export type ConnectorError = z.infer<typeof ConnectorErrorSchema>;
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;

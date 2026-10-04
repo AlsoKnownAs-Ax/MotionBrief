@@ -1,0 +1,3 @@
+.stat { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 28px; text-align: center; }
+.number { font-size: 200px; color: var(--accent); }
+.faster { padding: 16px 32px; border-radius: 999px; background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }

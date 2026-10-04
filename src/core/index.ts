@@ -2,7 +2,7 @@
  * Entry of the core utilityProcess: every module runs here. Main forwards each window's
  * MessagePort to this process, and the window talks to the core API over it directly.
  */
-import { CORE_APP_DATA_FLAG, CORE_APP_VERSION_FLAG } from "../shared/ipc";
+import { CORE_APP_DATA_FLAG, CORE_APP_VERSION_FLAG, CORE_SAMPLE_FLAG } from "../shared/ipc";
 import { createCore } from "./composition-root";
 import { parentPortConnectionStore } from "./connection-store";
 import { serveCore } from "./serve";
@@ -14,14 +14,19 @@ const { router } = createCore({
   appVersion,
   appDataDir,
   connectionStore: parentPortConnectionStore(process.parentPort),
+  sampleDir: optionalFlagValue(CORE_SAMPLE_FLAG),
 });
 
 process.parentPort.on("message", ({ ports }) => {
   ports.forEach((port) => serveCore(router, port));
 });
 
+function optionalFlagValue(flag: string) {
+  return process.argv.find((arg) => arg.startsWith(flag))?.slice(flag.length);
+}
+
 function flagValue(flag: string) {
-  const value = process.argv.find((arg) => arg.startsWith(flag))?.slice(flag.length);
+  const value = optionalFlagValue(flag);
 
   if (!value) {
     throw new Error(`The core needs ${flag}<value>`);
