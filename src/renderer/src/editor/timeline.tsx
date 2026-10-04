@@ -3,6 +3,7 @@ import { ZoomInIcon, ZoomOutIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react";
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
+import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
 import type { Preview, TimelineScene, TimelineWord, VideoTimeline } from "../../../contract";
@@ -38,6 +39,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const cardHeight = Math.max(40, area - RULER - WORD_LANE - 3 * GAP);
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
+  const fixError = useOpenVideo((state) => state.fixError);
 
   return (
     <section aria-label="Scene timeline" className="flex shrink-0 flex-col bg-[#0b0b0b]" style={{ height }}>
@@ -46,7 +48,13 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
           <span className="font-medium">{timeline.scenes.length} Scenes</span>
           <span className="text-ink-muted tabular-nums"> · {formatTime(timeline.duration)}</span>
         </span>
-        <span className="min-w-0 truncate text-app-xs text-ink-muted">Click a Scene or a word to go to it. Double-click a word to fix it.</span>
+        {fixError ? (
+          <span role="alert" title={fixError} className="min-w-0 truncate text-app-xs text-status-fallback-ink">
+            {fixError}
+          </span>
+        ) : (
+          <span className="min-w-0 truncate text-app-xs text-ink-muted">Click a Scene or a word to go to it. Double-click a word to fix it.</span>
+        )}
         <span className="flex-1" />
         <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
       </header>
@@ -329,7 +337,7 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
 
   function finishEditing(index: number, text: string | undefined) {
     if (text !== undefined && text.trim()) {
-      fixWord(index, text.trim());
+      void fixWord(index, text.trim());
     }
 
     returnFocusTo.current = index;
@@ -356,7 +364,7 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
               const text = wordFixes[wordIndex] ?? words[wordIndex]!.text;
 
               if (editing === wordIndex) {
-                return <WordEditor key={wordIndex} text={text} onDone={(fixed) => finishEditing(wordIndex, fixed)} />;
+                return <WordEditor key={wordIndex} text={text} className="h-[26px] text-app-xs" onDone={(fixed) => finishEditing(wordIndex, fixed)} />;
               }
 
               return (
@@ -404,46 +412,6 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
         );
       })}
     </div>
-  );
-}
-
-/** Edits a word in place: Enter or leaving the field saves, Escape cancels. */
-function WordEditor({ text, onDone }: { text: string; onDone: (text: string | undefined) => void }) {
-  const ref = useRef<HTMLInputElement>(null);
-  const done = useRef(false);
-  const finish = (value: string | undefined) => {
-    if (!done.current) {
-      done.current = true;
-      onDone(value);
-    }
-  };
-
-  useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
-  }, []);
-
-  return (
-    <input
-      ref={ref}
-      defaultValue={text}
-      aria-label="Fix this word"
-      className="h-[26px] shrink-0 rounded-sm border border-primary bg-surface-2 px-1.5 text-app-xs outline-none"
-      style={{ width: `${Math.max(6, text.length + 3)}ch` }}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") {
-          event.preventDefault();
-          finish(event.currentTarget.value);
-        }
-
-        if (event.key === "Escape") {
-          event.preventDefault();
-          event.stopPropagation();
-          finish(undefined);
-        }
-      }}
-      onBlur={(event) => finish(event.currentTarget.value)}
-    />
   );
 }
 

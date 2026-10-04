@@ -102,6 +102,13 @@ async function create(core: CoreClient, input: Parameters<CoreClient["project"][
   return project;
 }
 
+async function open(core: CoreClient, path: string) {
+  const project = await core.project.open({ path });
+  opened.set(core, [...(opened.get(core) ?? []), project.id]);
+
+  return project;
+}
+
 async function closeAll(core: CoreClient) {
   await Promise.all((opened.get(core) ?? []).map((projectId) => core.project.close({ projectId })));
 }
@@ -392,6 +399,97 @@ describe("new Project", { timeout: 30_000 }, () => {
 
       expect(await until(core, project.id, ({ state }) => state !== "transcribing")).toMatchObject({ state: "failed" });
       expect(failing.runs).toHaveLength(2);
+    });
+  });
+
+  describe("word fixes", () => {
+    /** "balancer," in "Every request starts at the load balancer, it picks…". */
+    const BALANCER = 6;
+
+    it("change a word's text in the Project's Transcript and keep its timing, without a Version", async () => {
+      const core = await readyCore({ whisper: await twoChunks() });
+      const project = await create(core, { voiceoverPath: await voiceover(userDir, "talk.wav", SPOKEN) });
+      const { words } = await transcribed(core, project.id);
+
+      const fixed = await core.project.fixWord({ projectId: project.id, index: BALANCER, text: "  Balancer, " });
+
+      const heard = words[BALANCER]!;
+      expect(heard.text).toBe("balancer,");
+      expect(fixed).toEqual({ text: "Balancer,", start: heard.start, end: heard.end, heard: "balancer," });
+      const { transcript } = await projectDocument(project.path);
+      expect(transcript?.words).toEqual(words.map((word, index) => (index === BALANCER ? fixed : word)));
+      expect(await until(core, project.id, ({ words: shown }) => shown[BALANCER]?.text === "Balancer,")).toMatchObject({ state: "done" });
+      // The Transcript is Project-level: nothing but the Project document changed.
+      expect((await readdir(project.path)).sort()).toEqual([".lock", "project.json", "voiceover.wav"]);
+    });
+
+    it("keep the stored Transcript's fixes when the Project is reopened", async () => {
+      const core = await readyCore({ whisper: await twoChunks() });
+      const project = await create(core, { voiceoverPath: await voiceover(userDir, "talk.wav", SPOKEN) });
+      await transcribed(core, project.id);
+      await core.project.fixWord({ projectId: project.id, index: BALANCER, text: "Balancer," });
+      const stored = (await projectDocument(project.path)).transcript;
+      await core.project.close({ projectId: project.id });
+
+      const whisper = await twoChunks();
+      const restarted = connect({ whisper });
+      const reopened = await open(restarted, project.path);
+
+      expect(reopened).toMatchObject({ id: project.id, name: project.name, path: project.path });
+      expect((await projectDocument(project.path)).transcript).toEqual(stored);
+      const status = await until(restarted, project.id, () => true);
+      expect(status).toMatchObject({ state: "done", language: "en" });
+      expect(status.words).toEqual(stored?.words);
+      expect(status.words[BALANCER]).toMatchObject({ text: "Balancer,", heard: "balancer," });
+      // A saved Transcript is never transcribed again.
+      expect(whisper.runs).toHaveLength(0);
+    });
+
+    it("drop the fix when a word is set back to what was heard", async () => {
+      const core = await readyCore({ whisper: await twoChunks() });
+      const project = await create(core, { voiceoverPath: await voiceover(userDir, "talk.wav", SPOKEN) });
+      const { words } = await transcribed(core, project.id);
+      await core.project.fixWord({ projectId: project.id, index: BALANCER, text: "Balancer," });
+
+      const restored = await core.project.fixWord({ projectId: project.id, index: BALANCER, text: "balancer," });
+
+      expect(restored).toEqual(words[BALANCER]);
+      expect((await projectDocument(project.path)).transcript?.words).toEqual(words);
+    });
+
+    it("survive a choice changed right after them", async () => {
+      const core = await readyCore({ whisper: await twoChunks() });
+      const project = await create(core, { voiceoverPath: await voiceover(userDir, "talk.wav", SPOKEN) });
+      await transcribed(core, project.id);
+
+      await Promise.all([
+        core.project.fixWord({ projectId: project.id, index: BALANCER, text: "Balancer," }),
+        core.project.update({ projectId: project.id, format: "vertical" }),
+      ]);
+
+      const document = await projectDocument(project.path);
+      expect(document.format).toBe("vertical");
+      expect(document.transcript?.words[BALANCER]?.text).toBe("Balancer,");
+    });
+
+    it("are refused before the Transcript is saved, when empty, or for a word that isn't there", async () => {
+      const whisper = await twoChunks();
+      const core = await readyCore({ whisper });
+      whisper.holdFrom(1);
+      const project = await create(core, { voiceoverPath: await voiceover(userDir, "talk.wav", SPOKEN) });
+      await until(core, project.id, ({ words }) => words.length > 0);
+
+      await expect(core.project.fixWord({ projectId: project.id, index: 0, text: "Each" })).rejects.toMatchObject({ code: "TRANSCRIPT_NOT_READY" });
+
+      whisper.release();
+      const { words } = await transcribed(core, project.id);
+
+      await expect(core.project.fixWord({ projectId: project.id, index: 0, text: " " })).rejects.toMatchObject({ code: "INVALID_WORD" });
+      await expect(core.project.fixWord({ projectId: project.id, index: words.length, text: "Each" })).rejects.toMatchObject({
+        code: "UNKNOWN_WORD",
+        data: { index: words.length, words: words.length },
+      });
+      expect((await projectDocument(project.path)).transcript?.words).toEqual(words);
     });
   });
 
