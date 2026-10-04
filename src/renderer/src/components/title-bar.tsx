@@ -28,9 +28,9 @@ function TitleBarStart() {
 /**
  * The app's own title bar. The whole bar drags the window; macOS keeps its traffic lights
  * on the left, Windows its caption buttons on the right (Window Controls Overlay). A screen
- * can add its own toolbar after the brand.
+ * can add its own toolbar after the brand, and its own actions on the right.
  */
-export function TitleBar({ children }: { children?: ReactNode }) {
+export function TitleBar({ children, actions }: { children?: ReactNode; actions?: ReactNode }) {
   return (
     <header className="drag-region flex h-title-bar shrink-0 items-center gap-3 border-b border-hairline-soft pr-[calc(100vw-env(titlebar-area-x,0px)-env(titlebar-area-width,100vw)+12px)]">
       <TitleBarStart />
@@ -40,6 +40,7 @@ export function TitleBar({ children }: { children?: ReactNode }) {
       </span>
       {children}
       <span className="flex-1" />
+      {actions}
       <CoreStatus />
       <Button
         variant="ghost"

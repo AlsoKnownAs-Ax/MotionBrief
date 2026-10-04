@@ -13,3 +13,19 @@ const CHROME_HEADLESS_SHELL: Partial<Record<NodeJS.Platform, string>> = {
 export function chromeHeadlessShellPath(platform: NodeJS.Platform = process.platform): string {
   return join(ROOT, "vendor", "chrome-headless-shell", CHROME_HEADLESS_SHELL[platform] ?? "chrome-headless-shell");
 }
+
+export function ffmpegPath() {
+  return join(ROOT, "vendor", "ffmpeg", executable("ffmpeg"));
+}
+
+export function ffprobePath() {
+  return join(ROOT, "vendor", "ffmpeg", executable("ffprobe"));
+}
+
+function executable(name: string) {
+  if (process.platform === "win32") {
+    return `${name}.exe`;
+  }
+
+  return name;
+}

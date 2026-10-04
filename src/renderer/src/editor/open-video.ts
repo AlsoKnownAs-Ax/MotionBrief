@@ -5,7 +5,8 @@ import { useNavigation } from "@renderer/navigation";
 import type { Preview } from "../../../contract";
 
 type OpenVideo = {
-  /** The open Project's name. */
+  /** The open Project's id and name. */
+  projectId: string;
   projectName: string;
   preview?: Preview;
   /**
@@ -13,15 +14,16 @@ type OpenVideo = {
    * Project stores its Transcript.
    */
   wordFixes: Record<number, string>;
-  open: (projectName: string, preview: Preview) => void;
+  open: (project: { id: string; name: string }, preview: Preview) => void;
   fixWord: (index: number, text: string) => void;
 };
 
 /** The video the editor shows: one per window. */
 export const useOpenVideo = create<OpenVideo>((set) => ({
+  projectId: "",
   projectName: "",
   wordFixes: {},
-  open: (projectName, preview) => set({ projectName, preview, wordFixes: {} }),
+  open: (project, preview) => set({ projectId: project.id, projectName: project.name, preview, wordFixes: {} }),
   fixWord: (index, text) =>
     set(({ wordFixes, preview }) => {
       const spoken = preview?.timeline.words[index]?.text;
@@ -39,8 +41,8 @@ export const useOpenVideo = create<OpenVideo>((set) => ({
 export function useOpenFixtureProject() {
   return useMutation({
     mutationFn: () => core.preview.openSample(),
-    onSuccess: ({ name, preview }) => {
-      useOpenVideo.getState().open(name, preview);
+    onSuccess: ({ projectId, name, preview }) => {
+      useOpenVideo.getState().open({ id: projectId, name }, preview);
       useNavigation.getState().openEditor();
     },
   });

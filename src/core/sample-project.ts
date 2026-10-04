@@ -19,6 +19,7 @@ const RULES: StoryboardRules = {
  */
 export function sampleProject(fixturesDir: string): SampleProject {
   return {
+    id: "fixture-project",
     name: "Fixture Project",
     source: async () => ({
       storyboard: await readJson(join(fixturesDir, "storyboard", "horizontal.json")),

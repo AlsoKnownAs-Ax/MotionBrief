@@ -14,6 +14,10 @@ export const IPC = {
   showContextMenu: "menu:show-context",
   /** renderer → main (invoke): show the native open-file dialog, resolving to the chosen path or null. */
   chooseFile: "dialog:choose-file",
+  /** renderer → main (invoke): show the native Save dialog, resolving to the chosen path or null. */
+  chooseSavePath: "dialog:choose-save-path",
+  /** renderer → main: reveal a file in Explorer or Finder. */
+  showInFolder: "shell:show-in-folder",
 } as const;
 
 /** window.postMessage tag the renderer uses to hand its core port to the preload. */
@@ -73,4 +77,10 @@ export type ContextMenuItem = {
 export type ChooseFileOptions = {
   title: string;
   filters: { name: string; extensions: string[] }[];
+};
+
+/** What the native Save dialog asks for. */
+export type ChooseSavePathOptions = ChooseFileOptions & {
+  /** A full path to start from, or a file name to suggest in the user's Videos folder. */
+  defaultPath: string;
 };

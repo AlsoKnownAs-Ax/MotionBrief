@@ -2,11 +2,11 @@
  * Main process: windows, menus, OS integration, the single-instance lock and the core
  * process lifecycle. Product logic lives in the core, never here.
  */
-import { join } from "node:path";
-import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { isAbsolute, join } from "node:path";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
-import { IPC, type ChooseFileOptions, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
+import { IPC, type ChooseFileOptions, type ChooseSavePathOptions, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
 import { handleConnectionStoreMessage } from "./connection-store";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
@@ -21,6 +21,7 @@ const ChooseFileOptionsSchema = z.object({
   title: z.string(),
   filters: z.array(z.object({ name: z.string(), extensions: z.array(z.string()) })),
 }) satisfies z.ZodType<ChooseFileOptions>;
+const ChooseSavePathOptionsSchema = ChooseFileOptionsSchema.extend({ defaultPath: z.string() }) satisfies z.ZodType<ChooseSavePathOptions>;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -94,6 +95,32 @@ function handleIpc(core: CoreProcess) {
     }
 
     return filePaths[0] ?? null;
+  });
+
+  ipcMain.handle(IPC.chooseSavePath, async (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: options } = ChooseSavePathOptionsSchema.safeParse(payload);
+
+    if (!window || !success) {
+      return null;
+    }
+
+    const defaultPath = isAbsolute(options.defaultPath) ? options.defaultPath : join(app.getPath("videos"), options.defaultPath);
+    const { canceled, filePath } = await dialog.showSaveDialog(window, { ...options, defaultPath, properties: ["showOverwriteConfirmation", "createDirectory"] });
+
+    if (canceled || !filePath) {
+      return null;
+    }
+
+    return filePath;
+  });
+
+  ipcMain.on(IPC.showInFolder, (_event, payload: unknown) => {
+    const { success, data: path } = z.string().safeParse(payload);
+
+    if (success && isAbsolute(path)) {
+      shell.showItemInFolder(path);
+    }
   });
 }
 

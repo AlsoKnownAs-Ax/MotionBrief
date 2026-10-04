@@ -4,12 +4,13 @@ import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
 import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
+import { createExporter, memoryExportLocations } from "../modules/exporter";
 import { createPreviews } from "../modules/preview";
 import { createSystem, realClock, realDisk, type Clock, type Disk } from "../modules/system";
 import { createTranscriptionModel } from "../modules/transcription-model";
 import { ModelDepSchema, type ModelDep } from "../shared/deps-manifest";
 import { bundledClaudePath } from "./claude-binary";
-import { chromeHeadlessShellPath } from "./native";
+import { chromeHeadlessShellPath, ffmpegPath as pinnedFfmpegPath, ffprobePath as pinnedFfprobePath } from "./native";
 import { sampleProject } from "./sample-project";
 
 /**
@@ -35,6 +36,9 @@ export type CoreOptions = {
   adapters?: Partial<Adapters>;
   /** The chrome-headless-shell the frame runs in; the pinned one in vendor/ by default. */
   chromePath?: string;
+  /** The FFmpeg and FFprobe exports encode with; the pinned ones in vendor/ by default. */
+  ffmpegPath?: string;
+  ffprobePath?: string;
   /** The source tree's fixtures folder: development builds open the fixture Project from it. */
   sampleDir?: string;
 };
@@ -47,6 +51,8 @@ export function createCore({
   connectionStore,
   adapters,
   chromePath = chromeHeadlessShellPath(),
+  ffmpegPath = pinnedFfmpegPath(),
+  ffprobePath = pinnedFfprobePath(),
   sampleDir,
 }: CoreOptions) {
   const clock = adapters?.clock ?? realClock;
@@ -59,9 +65,11 @@ export function createCore({
   const transcriptionModel = createTranscriptionModel({ appDataDir, pin: modelPin, disk });
   // Assembled pages are a cache: any of them can be built again from its source.
   const previews = createPreviews({ rootDir: join(appDataDir, "cache", "preview"), chromePath });
+  // Replaced by the Project store's record of each video's last export path once Projects open from disk.
+  const exporter = createExporter({ workDir: join(appDataDir, "cache", "export"), chromePath, ffmpegPath, ffprobePath, locations: memoryExportLocations() });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample }) };
+  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample }) };
 }
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */

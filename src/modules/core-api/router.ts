@@ -2,6 +2,7 @@ import { implement } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Checker, CheckerError } from "../checker";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
+import type { Exporter } from "../exporter";
 import type { Previews, ThumbnailsError } from "../preview";
 import { validateStoryboard } from "../storyboard";
 import { BUNDLED_PALETTES, FONT_PAIRINGS, listPresets } from "../style";
@@ -9,7 +10,7 @@ import type { System } from "../system";
 import type { TranscriptionModel } from "../transcription-model";
 
 /** The fixture Project development builds open from Home, until Projects open from disk. */
-export type SampleProject = { name: string; source: () => Promise<VideoSource> };
+export type SampleProject = { id: string; name: string; source: () => Promise<VideoSource> };
 
 export type CoreRouterDeps = {
   system: System;
@@ -17,13 +18,14 @@ export type CoreRouterDeps = {
   connector: Connector;
   transcriptionModel: TranscriptionModel;
   previews: Previews;
+  exporter: Exporter;
   sample?: SampleProject;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample }: CoreRouterDeps) {
   const api = implement(coreContract);
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -113,8 +115,20 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
           throw new Error(`The fixture Project doesn't open: ${JSON.stringify(error)}`);
         }
 
-        return { name: sample.name, preview };
+        return { projectId: sample.id, name: sample.name, preview };
       }),
+    },
+    export: {
+      mp4: api.export.mp4.handler(async function* ({ input, errors, signal }) {
+        const source = previews.source(input.previewId);
+
+        if (!source) {
+          throw errors.PREVIEW_NOT_FOUND({ data: { id: input.previewId } });
+        }
+
+        yield* exporter.mp4({ source, path: input.path, video: input.video, signal });
+      }),
+      lastPath: api.export.lastPath.handler(async ({ input }) => ({ path: await exporter.lastPath(input) })),
     },
     connection: {
       status: api.connection.status.handler(() => connector.status()),
