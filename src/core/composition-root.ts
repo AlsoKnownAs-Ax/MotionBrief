@@ -1,13 +1,16 @@
+import { join } from "node:path";
 import deps from "../../deps.json";
 import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
 import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
+import { createPreviews } from "../modules/preview";
 import { createSystem, realClock, realDisk, type Clock, type Disk } from "../modules/system";
 import { createTranscriptionModel } from "../modules/transcription-model";
 import { ModelDepSchema, type ModelDep } from "../shared/deps-manifest";
 import { bundledClaudePath } from "./claude-binary";
 import { chromeHeadlessShellPath } from "./native";
+import { sampleProject } from "./sample-project";
 
 /**
  * The implementations behind swappable boundaries. Tests replace these; nothing else does.
@@ -32,6 +35,8 @@ export type CoreOptions = {
   adapters?: Partial<Adapters>;
   /** The chrome-headless-shell the frame runs in; the pinned one in vendor/ by default. */
   chromePath?: string;
+  /** The source tree's fixtures folder: development builds open the fixture Project from it. */
+  sampleDir?: string;
 };
 
 /** The one place that picks implementations and wires the modules into the core API. */
@@ -42,6 +47,7 @@ export function createCore({
   connectionStore,
   adapters,
   chromePath = chromeHeadlessShellPath(),
+  sampleDir,
 }: CoreOptions) {
   const clock = adapters?.clock ?? realClock;
   const disk = adapters?.disk ?? realDisk;
@@ -51,8 +57,11 @@ export function createCore({
   const system = createSystem({ clock, appVersion, pid: process.pid });
   const checker = createChecker({ chromePath });
   const transcriptionModel = createTranscriptionModel({ appDataDir, pin: modelPin, disk });
+  // Assembled pages are a cache: any of them can be built again from its source.
+  const previews = createPreviews({ rootDir: join(appDataDir, "cache", "preview"), chromePath });
+  const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel }) };
+  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample }) };
 }
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */

@@ -1,4 +1,4 @@
-import type { StoryboardTranscript } from "../../contract";
+import type { StoryboardTranscript, TransitionType } from "../../contract";
 import type { UnitTiming } from "../frame";
 import { elementsOf, sceneTimings, type Scene, type SceneTiming, type Storyboard } from "../storyboard";
 
@@ -7,7 +7,15 @@ export type Unit = UnitTiming & {
   /** When the unit starts on the Voiceover, in seconds. */
   start: number;
   scenes: Scene[];
+  /** The Transition from the unit before into this one; the first unit has none. */
+  transitionIn?: TransitionType;
 };
+
+/**
+ * How long each Transition the Assembler draws overlaps the two units, in seconds. The incoming
+ * unit starts on time; the outgoing one plays on underneath it until the Transition is over.
+ */
+export const TRANSITION_SECONDS: Partial<Record<TransitionType, number>> = { crossfade: 0.5 };
 
 /**
  * Groups Scenes into units and times them from the Transcript. A unit is named after its Scene,
@@ -28,18 +36,20 @@ export function planUnits(storyboard: Storyboard, transcript: StoryboardTranscri
     return [...groups, [timing]];
   }, []);
 
-  return runs.map((run) => unitOf(run, transcript));
+  return runs.map((run, index) => unitOf(run, runs[index - 1], runs[index + 1], transcript));
 }
 
-function unitOf(run: SceneTiming[], transcript: StoryboardTranscript): Unit {
+function unitOf(run: SceneTiming[], previous: SceneTiming[] | undefined, next: SceneTiming[] | undefined, transcript: StoryboardTranscript): Unit {
   const first = run[0]!;
   const start = first.start;
+  const end = run.at(-1)?.end ?? start;
 
   return {
     id: first.scene.canvas ?? first.scene.id,
     start: seconds(start),
-    duration: seconds((run.at(-1)?.end ?? start) - start),
+    duration: seconds(end - start + overlapOf(transitionInto(next, run))),
     scenes: run.map(({ scene }) => scene),
+    transitionIn: transitionInto(run, previous),
     sceneStarts: Object.fromEntries(run.map(({ scene, start: sceneStart }) => [scene.id, seconds(sceneStart - start)])),
     anchors: Object.fromEntries(
       run.flatMap(({ scene }) =>
@@ -47,6 +57,23 @@ function unitOf(run: SceneTiming[], transcript: StoryboardTranscript): Unit {
       ),
     ),
   };
+}
+
+/** The Transition into a run: the one the Scene before it names. */
+function transitionInto(run: SceneTiming[] | undefined, previous: SceneTiming[] | undefined): TransitionType | undefined {
+  if (!run || !previous) {
+    return undefined;
+  }
+
+  return previous.at(-1)?.scene.transition?.type;
+}
+
+function overlapOf(transition: TransitionType | undefined): number {
+  if (!transition) {
+    return 0;
+  }
+
+  return TRANSITION_SECONDS[transition] ?? 0;
 }
 
 /** Times are kept to the millisecond, so pages built from the same Storyboard are byte for byte the same. */

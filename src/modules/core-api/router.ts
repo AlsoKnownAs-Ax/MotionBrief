@@ -1,23 +1,29 @@
 import { implement } from "@orpc/server";
-import { coreContract, type CheckerUnavailable, type SetupResult } from "../../contract";
+import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Checker, CheckerError } from "../checker";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import { BLUEPRINT } from "../frame";
+import type { Previews, ThumbnailsError } from "../preview";
 import { validateStoryboard } from "../storyboard";
 import type { System } from "../system";
 import type { TranscriptionModel } from "../transcription-model";
+
+/** The fixture Project development builds open from Home, until Projects open from disk. */
+export type SampleProject = { name: string; source: () => Promise<VideoSource> };
 
 export type CoreRouterDeps = {
   system: System;
   checker: Checker;
   connector: Connector;
   transcriptionModel: TranscriptionModel;
+  previews: Previews;
+  sample?: SampleProject;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample }: CoreRouterDeps) {
   const api = implement(coreContract);
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -61,6 +67,51 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
         return report;
       }),
     },
+    preview: {
+      open: api.preview.open.handler(async ({ input, errors }) => {
+        const { data: preview, error } = await previews.open(input);
+
+        if (error?.code === "INVALID_STORYBOARD") {
+          throw errors.INVALID_STORYBOARD({ data: { issues: error.issues } });
+        }
+
+        if (error?.code === "UNKNOWN_UNIT") {
+          throw errors.UNKNOWN_UNIT({ data: { unit: error.unit, units: error.units } });
+        }
+
+        if (error) {
+          throw errors.VOICEOVER_MISSING({ data: { path: error.path } });
+        }
+
+        return preview;
+      }),
+      thumbnails: api.preview.thumbnails.handler(async function* ({ input, errors }) {
+        const { data: thumbnails, error } = await previews.thumbnails(input.id);
+
+        if (error?.code === "PREVIEW_NOT_FOUND") {
+          throw errors.PREVIEW_NOT_FOUND({ data: { id: error.id } });
+        }
+
+        if (error) {
+          throw errors.CHECKER_UNAVAILABLE({ data: unavailable(error) });
+        }
+
+        yield* thumbnails;
+      }),
+      openSample: api.preview.openSample.handler(async ({ errors }) => {
+        if (!sample) {
+          throw errors.SAMPLE_UNAVAILABLE();
+        }
+
+        const { data: preview, error } = await previews.open(await sample.source());
+
+        if (error) {
+          throw new Error(`The fixture Project doesn't open: ${JSON.stringify(error)}`);
+        }
+
+        return { name: sample.name, preview };
+      }),
+    },
     connection: {
       status: api.connection.status.handler(() => connector.status()),
       useLogin: api.connection.useLogin.handler(async () => setupResult(await connector.setup.useLogin())),
@@ -79,7 +130,9 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
   });
 }
 
-function unavailable(error: Exclude<CheckerError, { code: "INVALID_STORYBOARD" | "UNKNOWN_UNIT" }>): CheckerUnavailable {
+function unavailable(
+  error: Exclude<CheckerError, { code: "INVALID_STORYBOARD" | "UNKNOWN_UNIT" }> | Exclude<ThumbnailsError, { code: "PREVIEW_NOT_FOUND" }>,
+): CheckerUnavailable {
   if (error.code === "CHROME_MISSING") {
     return { cause: error.code, detail: error.path };
   }
