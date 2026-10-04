@@ -66,8 +66,11 @@ export const UnitCodeSchema = z.object({ css: z.string(), html: z.string(), js: 
 export const CheckFindingSchema = z.object({
   /** The unit at fault, named after its Scene or Canvas; absent when the finding is about the page as a whole. */
   unit: z.string().optional(),
-  /** `hyperframes lint`, `hyperframes check`, the anchor contract, the token lint, or icon inlining. */
-  source: z.enum(["lint", "check", "contract", "tokens", "icons"]),
+  /**
+   * `hyperframes lint`, `hyperframes check`, the anchor contract, the token lint, icon inlining, or
+   * the Checker's own rules (an icon or image over text, a texture overlay too opaque).
+   */
+  source: z.enum(["lint", "check", "contract", "tokens", "icons", "rules"]),
   code: z.string(),
   message: z.string(),
   selector: z.string().optional(),
@@ -162,8 +165,8 @@ export const coreContract = {
   checker: {
     /**
      * Assembles a Storyboard's units in the frame and checks them: `hyperframes lint` and `check`,
-     * the token lint, icons and the anchor contract. Units without code are drawn as their fallback
-     * Scene. No findings means every unit passes.
+     * the token lint, icons, the anchor contract and the Checker's own rules. Units without code are
+     * drawn as their fallback Scene. No findings means every unit passes.
      */
     check: oc
       .errors({
