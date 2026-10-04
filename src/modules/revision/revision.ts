@@ -124,12 +124,29 @@ export function createRevisions({ connector, checker, previews, stills, projects
     void revise(run)
       .catch((cause: unknown) => publish(run, { state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
       .finally(() => {
-        if (running.get(key) === job) {
-          running.delete(key);
+        // A stopped Revision already said it ended.
+        if (running.get(key) !== job) {
+          return;
         }
+
+        running.delete(key);
+        ended.forEach((listener) => listener(ref, store.get()));
       });
 
     return { data: null, error: null };
+  }
+
+  /** Told whenever a video's Revision ends, with its last status. */
+  const ended: ((ref: VideoRef, status: RevisionStatus) => void)[] = [];
+
+  /** Calls `listener` whenever a video's Revision ends: answered, done, failed or stopped. */
+  function whenEnded(listener: (ref: VideoRef, status: RevisionStatus) => void) {
+    ended.push(listener);
+  }
+
+  /** Whether a Revision of the video is running. */
+  function isRunning(ref: VideoRef) {
+    return running.has(storeOf(ref).key);
   }
 
   /** Everything a Revision starts from: the video's Transcript, Voiceover and current Version, and a scope it has. */
@@ -183,6 +200,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
     running.delete(key);
     job.controller.abort();
     store.update({ state: "stopped", affected: [] });
+    ended.forEach((listener) => listener(ref, store.get()));
   }
 
   /** The video's earlier Revisions, oldest first: what each asked for and what it did. */
@@ -495,7 +513,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
     return { data: storeOf(ref).store.watch(signal), error: null };
   }
 
-  return { start, stop, watch };
+  return { start, stop, watch, isRunning, whenEnded };
 }
 
 function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {

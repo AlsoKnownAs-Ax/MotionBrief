@@ -12,4 +12,5 @@ export {
 } from "./projects";
 export { createStatusStore } from "./status";
 export type { VideoDocumentError } from "./video";
+export type { ChatLine } from "./chat";
 export type { Flag, GenerationRecord, RevisionRecord, Version, VersionError, VideoContent } from "./videos";

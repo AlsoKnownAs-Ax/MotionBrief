@@ -27,10 +27,13 @@ import { createStatusStore } from "./status";
 import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocument, type VideoDocumentError } from "./video";
 import { FormatSchema } from "../../contract";
+import { appendChat, readChat, type ChatLine } from "./chat";
 import {
   latestVersion,
+  listVersions,
   readVersion,
   recoverGeneration,
+  restoreVersion,
   saveGeneration,
   saveVersion,
   writeUnit,
@@ -1013,6 +1016,15 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
     /** A saved Version of the video by number, with its units' Scene code. */
     readVersion: (projectId: string, format: Format, number: number) => read(projectId, (dir) => readVersion(dir, format, number)),
+    /** The video's Versions, newest first. */
+    versions: (projectId: string, format: Format) => read(projectId, (dir) => listVersions(dir, format)),
+    /** Saves a copy of an earlier Version as the newest; resolves to its number. */
+    restoreVersion: (projectId: string, format: Format, number: number) =>
+      read(projectId, (dir) => restoreVersion(dir, format, number, new Date(clock.now()).toISOString())),
+    /** Adds a line to the video's append-only chat log. */
+    appendChat: (projectId: string, format: Format, line: ChatLine) => write(projectId, (dir) => appendChat(dir, format, line)),
+    /** The video's chat entries, as its log adds up. */
+    readChat: (projectId: string, format: Format) => read(projectId, (dir) => readChat(dir, format)),
     whenClosing,
     admits,
     lastExportPath,

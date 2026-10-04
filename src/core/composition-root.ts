@@ -7,6 +7,7 @@ import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
 import { createExporter, projectExportLocations } from "../modules/exporter";
 import { createGeneration } from "../modules/generation";
+import { createHistory } from "../modules/history";
 import { createMedia } from "../modules/media";
 import { createPreviews, createStills } from "../modules/preview";
 import { createProjects, type Trash } from "../modules/projects";
@@ -114,10 +115,11 @@ export function createCore({
   });
   const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
   const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
+  const history = createHistory({ projects, revisions, generation, clock });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return {
-    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions }),
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, history }),
     /** A window's connection closed: its Project is closed and unlocked. */
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */

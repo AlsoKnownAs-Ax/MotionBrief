@@ -136,7 +136,8 @@ export function createGeneration({ connector, checker, previews, stills, project
   }
 
   /** Starts `work` as the video's run; a run that throws fails with the error. */
-  function begin(key: string, store: StatusStore, work: (run: Run) => Promise<void>) {
+  function begin(ref: VideoRef, store: StatusStore, work: (run: Run) => Promise<void>) {
+    const { key } = storeOf(ref);
     const run: Run = { id: randomUUID(), controller: new AbortController(), done: Promise.resolve() };
     runs.set(key, run);
     run.done = work(run)
@@ -145,7 +146,22 @@ export function createGeneration({ connector, checker, previews, stills, project
         if (runs.get(key) === run) {
           runs.delete(key);
         }
+
+        ended.forEach((listener) => listener(ref));
       });
+  }
+
+  /** Told whenever a video's run ends, however it ended. */
+  const ended: ((ref: VideoRef) => void)[] = [];
+
+  /** Calls `listener` whenever a video's first generation or Retry ends, such as to run what queued behind it. */
+  function whenEnded(listener: (ref: VideoRef) => void) {
+    ended.push(listener);
+  }
+
+  /** Whether a first generation or Retry of the video is running. */
+  function isRunning(ref: VideoRef) {
+    return runs.has(storeOf(ref).key);
   }
 
   /** Ends a run early: the turns running now are interrupted, and nothing else starts. The first stop wins. */
@@ -217,7 +233,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     store.set({ state: "planning", units: [] });
     const transcript = video.transcript;
     const captions = choice ?? CAPTIONS_BY_DEFAULT[format];
-    begin(key, store, (run) => generate({ run, ref, transcript, preset, captions, store }));
+    begin(ref, store, (run) => generate({ run, ref, transcript, preset, captions, store }));
 
     return { data: null, error: null };
   }
@@ -366,7 +382,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     }
 
     store.set({ state: "writing", units: [] });
-    begin(key, store, (run) => retryUnits({ run, ref, saved, storyboard, wanted, store }));
+    begin(ref, store, (run) => retryUnits({ run, ref, saved, storyboard, wanted, store }));
 
     return { data: null, error: null };
   }
@@ -788,7 +804,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     };
   }
 
-  return { estimate, start, stop, retry, watch, open, setCaptions };
+  return { estimate, start, stop, retry, watch, open, setCaptions, isRunning, whenEnded };
 }
 
 type Publish = (change: Partial<GenerationStatus>, unit?: GenerationUnit) => Promise<void>;
