@@ -39,6 +39,7 @@ HyperFrames, GSAP, the bundled icon sets (Lucide, Simple Icons) and the frame's 
 | `ffmpeg`, `whisper-cli` | a `native-deps-<n>` release tag      | our [native-deps](native-deps/README.md) GitHub Release                                            |
 | `claude`                | the Agent SDK version                | the SDK's per-platform npm package: pnpm installs it, and `postinstall` checks the binary's hash  |
 | `whisper-model`         | a Hugging Face commit of whisper.cpp | `ggml-large-v3-turbo-q5_0.bin`; the app downloads it during first-run setup, `postinstall` doesn't |
+| `whisper-vad-model`     | a Hugging Face commit of whisper-vad | `ggml-silero-v6.2.0.bin`, the VAD model whisper-cli needs; under 1 MB, so it ships with the app    |
 
 `pnpm deps:pin <name> <version>` downloads the dependency for every platform, hashes it and rewrites its entry. Pinning `claude` also sets the Agent SDK in `package.json` to that version; run `pnpm install` after it.
 

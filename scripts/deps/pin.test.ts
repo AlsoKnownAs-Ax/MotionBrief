@@ -109,6 +109,26 @@ describe("deps:pin", () => {
     expect(server.requests).toEqual([]);
   });
 
+  it("pins the VAD model to a Hugging Face commit", async () => {
+    server.serve(`/ggml-org/whisper-vad/resolve/${VAD_COMMIT}/ggml-silero-v6.2.0.bin`, "the VAD model");
+
+    const { error } = await pinDep("whisper-vad-model", VAD_COMMIT);
+
+    expect(error).toBeNull();
+    expect((await manifest())["whisper-vad-model"]).toEqual({
+      version: VAD_COMMIT,
+      url: `${server.url}/ggml-org/whisper-vad/resolve/${VAD_COMMIT}/ggml-silero-v6.2.0.bin`,
+      sha256: sha256("the VAD model"),
+    });
+  });
+
+  it("refuses a VAD model revision that can move", async () => {
+    const { error } = await pinDep("whisper-vad-model", "main");
+
+    expect(error).toMatchObject({ code: "INVALID_VERSION", name: "whisper-vad-model", version: "main" });
+    expect(server.requests).toEqual([]);
+  });
+
   it("pins the Claude Code binary from the Agent SDK's per-platform packages, and the SDK to the same version", async () => {
     await writeFile(join(rootDir, "package.json"), JSON.stringify(PACKAGE_JSON, null, 2));
     await serveClaudePackages("0.4.1");
@@ -163,6 +183,8 @@ describe("deps:pin", () => {
 });
 
 const MODEL_COMMIT = "5359861c739e955e79d9a303bcbc70fb988958b1";
+
+const VAD_COMMIT = "9ffd54a1e1ee413ddf265af9913beaf518d1639b";
 
 const PACKAGE_JSON = {
   name: "motionbrief",

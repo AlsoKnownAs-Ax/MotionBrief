@@ -29,12 +29,17 @@ const ClaudeDep = z.object({
 /** One file for every platform, fetched by the app's first-run setup, never by postinstall. */
 export const ModelDepSchema = z.object({ version: z.string(), url: z.url(), sha256: Sha256, size: z.int().positive() });
 
+/** One small file for every platform, fetched by postinstall into vendor/<name>/model.bin. */
+const FileDep = z.object({ version: z.string(), url: z.url(), sha256: Sha256 });
+
 export const ManifestSchema = z.object({
   "chrome-headless-shell": ArchiveDep,
   ffmpeg: ArchiveDep,
   "whisper-cli": ArchiveDep,
   claude: ClaudeDep,
   "whisper-model": ModelDepSchema,
+  /** The Silero model whisper-cli's VAD needs; under 1 MB, so it ships with the app. */
+  "whisper-vad-model": FileDep,
 });
 
 export type Manifest = z.infer<typeof ManifestSchema>;
