@@ -29,6 +29,26 @@ function replies(text: string): AgentEvent[] {
   return [{ type: "turn-completed", status: "completed", text }];
 }
 
+/** A turn in which the Revision agent hands in a patch with one changed Scene. */
+function submitsPatch(scene: unknown, summary: string): AgentEvent[] {
+  return [
+    { type: "tool-call", toolUseId: "toolu_patch", name: "mcp__motionbrief__submit_patch", input: { scenes: [scene], remove: [], instructions: [], summary } },
+    { type: "turn-completed", status: "completed", text: summary },
+  ];
+}
+
+/** Resolves once the video's Revision waits for cost approval. */
+async function untilApproval(core: CoreClient, video: VideoRef) {
+  const stop = new AbortController();
+
+  for await (const { state } of await core.video.revision(video, { signal: stop.signal })) {
+    if (state === "approval") {
+      stop.abort();
+      return;
+    }
+  }
+}
+
 const MODEL = randomBytes(1024);
 
 let root: string;
@@ -277,7 +297,7 @@ describe("the chat", () => {
   it("queues what is sent during the first generation, and runs it once the generation ends", async () => {
     const { core, replay, project, video } = await connect({ storyboard: [replies("Planning.")], revision: [replies("Sure.")] });
     replay.hold("storyboard");
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     const chat = await watchChat(core, video);
 
     const sent = await core.video.send({ ...video, message: "Make it punchier", scope: [] });
@@ -323,6 +343,42 @@ describe("the chat", () => {
     expect(settled).toMatchObject({ isPaused: false, entries: [{ state: "stopped" }, { state: "answered" }] });
     await core.project.close({ projectId: project.id });
   }, 60_000);
+
+  it("holds the queue while a Revision waits for cost approval, and keeps the approval and the Stop in the log", async () => {
+    const s03 = structuredClone((storyboard as { scenes: { id: string; content: { caption: { text: string } } }[] }).scenes.find(({ id }) => id === "s03")!);
+    s03.content.caption.text = "Instant";
+    const { core, replay, project, video } = await connect({ revision: [submitsPatch(s03, "Shortened the stat's caption."), replies("Second.")] });
+    await twoVersions(project);
+    await core.settings.update({ approveCost: true });
+    const asking = untilApproval(core, video);
+    const chat = await watchChat(core, video);
+
+    await core.video.send({ ...video, message: "Shorter caption on the stat", scope: ["s03"] });
+    await core.video.send({ ...video, message: "And the outro?", scope: [] });
+    await asking;
+    const waiting = await chat.until(({ entries }) => entries.length === 2);
+
+    expect(states(waiting)).toEqual([
+      ["Shorter caption on the stat", "running"],
+      ["And the outro?", "queued"],
+    ]);
+    await expect(core.video.restore({ ...video, version: 1 })).rejects.toMatchObject({ code: "BUSY" });
+
+    // Held, so the approved Revision is still regenerating s03 when it is stopped.
+    replay.hold("scene-code s03");
+    await core.video.approveRevision(video);
+    await chat.until(({ entries }) => entries[0]?.approvedUsd !== undefined);
+    await core.video.stopRevision(video);
+    const stopped = await chat.until(({ entries }) => entries[0]?.state === "stopped");
+    replay.release("scene-code s03");
+    chat.stop();
+
+    expect(stopped.isPaused).toBe(true);
+    expect(stopped.entries[0]?.approvedUsd?.high).toBeGreaterThan(0);
+    expect(states(stopped)[1]).toEqual(["And the outro?", "queued"]);
+    expect(replay.askedOf("revision")).toHaveLength(1);
+    await core.project.close({ projectId: project.id });
+  }, 120_000);
 
   it("keeps what is sent after a line a crash left half written", async () => {
     const { core, project, video } = await connect({ revision: [replies("Sure.")] });
