@@ -1,7 +1,10 @@
 import { useQuery } from "@tanstack/react-query";
+import { FlaskConicalIcon } from "lucide-react";
 import type { ReactNode } from "react";
 import { ShortcutKeys } from "@renderer/components/shortcut-keys";
+import { Button } from "@renderer/components/ui/button";
 import { orpc } from "@renderer/core/connection";
+import { useOpenFixtureProject } from "@renderer/editor/open-video";
 import { SetupChecklist } from "@renderer/setup/checklist";
 import { SHORTCUTS } from "../../../shared/shortcuts";
 
@@ -64,10 +67,31 @@ export function Home() {
         </dl>
       </section>
 
+      {import.meta.env.DEV && <OpenFixtureProject />}
+
       <p className="flex items-center gap-2 text-app-xs text-ink-muted">
         <ShortcutKeys shortcut={SHORTCUTS.showShortcuts} />
         Keyboard shortcuts
       </p>
     </main>
+  );
+}
+
+/** Development builds only: opens the fixture Project in the editor, until Projects open from disk. */
+function OpenFixtureProject() {
+  const openFixture = useOpenFixtureProject();
+
+  return (
+    <div className="flex flex-col items-center gap-2">
+      <Button variant="tertiary" disabled={openFixture.isPending} onClick={() => openFixture.mutate()}>
+        <FlaskConicalIcon />
+        {openFixture.isPending ? "Opening the fixture Project" : "Open the fixture Project"}
+      </Button>
+      {openFixture.error && (
+        <p role="alert" className="text-app-xs text-status-fallback-ink">
+          {openFixture.error.message}
+        </p>
+      )}
+    </div>
   );
 }

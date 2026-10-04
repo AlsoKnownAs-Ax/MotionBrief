@@ -25,6 +25,9 @@ export const CORE_APP_VERSION_FLAG = "--app-version=";
 /** Command-line flag main passes the app's per-user data folder to the core process with. */
 export const CORE_APP_DATA_FLAG = "--app-data=";
 
+/** Command-line flag a development build passes the source tree's fixtures folder with, for the fixture Project. */
+export const CORE_SAMPLE_FLAG = "--sample-project=";
+
 /**
  * core → main over the core's parent port: the Claude connection, which main keeps with
  * Electron safeStorage (the OS keychain), since the core can't use Electron. Main answers

@@ -2,6 +2,7 @@
  * Main process: windows, menus, OS integration, the single-instance lock and the core
  * process lifecycle. Product logic lives in the core, never here.
  */
+import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
@@ -38,6 +39,7 @@ function start() {
     entry: coreEntry,
     appVersion: app.getVersion(),
     appDataDir: app.getPath("userData"),
+    sampleDir: devOnly(join(app.getAppPath(), "src", "core", "fixtures")),
     onExit: () => broadcast(IPC.coreExited),
     onRestart: () => broadcast(IPC.coreRestarted),
     onRequest: handleConnectionStoreMessage,

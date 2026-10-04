@@ -1,5 +1,5 @@
 import { MenuIcon, SettingsIcon } from "lucide-react";
-import type { MouseEvent } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import { BrandMark } from "@renderer/components/brand-mark";
 import { CoreStatus } from "@renderer/components/core-status";
 import { useSettingsDialog } from "@renderer/components/settings-dialog";
@@ -27,16 +27,18 @@ function TitleBarStart() {
 
 /**
  * The app's own title bar. The whole bar drags the window; macOS keeps its traffic lights
- * on the left, Windows its caption buttons on the right (Window Controls Overlay).
+ * on the left, Windows its caption buttons on the right (Window Controls Overlay). A screen
+ * can add its own toolbar after the brand.
  */
-export function TitleBar() {
+export function TitleBar({ children }: { children?: ReactNode }) {
   return (
     <header className="drag-region flex h-title-bar shrink-0 items-center gap-3 border-b border-hairline-soft pr-[calc(100vw-env(titlebar-area-x,0px)-env(titlebar-area-width,100vw)+12px)]">
       <TitleBarStart />
-      <span className="flex items-center gap-[9px]">
+      <span className="flex shrink-0 items-center gap-[9px]">
         <BrandMark />
         <span className="text-app-sm font-semibold tracking-[-0.2px]">MotionBrief</span>
       </span>
+      {children}
       <span className="flex-1" />
       <CoreStatus />
       <Button
