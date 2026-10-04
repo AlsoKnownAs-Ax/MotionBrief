@@ -382,7 +382,7 @@ describe("a word fix that is also on screen", () => {
   afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
 
   it("offers a Revision scoped to the Scenes whose copy says the old word", () => {
-    expect(offer).toEqual({ from: "cache", to: "cash", scope: ["s02", "s04"], message: 'Carry my word fix into the on-screen copy: write "cash" where it says "cache".' });
+    expect(offer).toMatchObject({ from: ["cache"], to: "cash", scope: ["s02", "s04"] });
   });
 
   it("updates the Captions from the fixed Transcript with no agent run and no Version", () => {
@@ -399,8 +399,29 @@ describe("a word fix that is also on screen", () => {
     expect(regenerated(connected.replay)).toEqual(["s02", "s04"]);
     expect(saved.units.s01).toBe(v1Units.s01);
     expect(saved.units.s03).toBe(v1Units.s03);
+    expect(saved.storyboard.scenes[1]?.content).toMatchObject({ title: { text: "Cash first" } });
     expect(saved.storyboard.scenes[3]?.content.term).toMatchObject({ text: "Cash" });
   });
+
+  it("names every old spelling the Scenes still show after repeated fixes", async () => {
+    // s02 says the word as whisper-cli heard it; s04 was written after a first fix to "Cach".
+    const shown: Storyboard = structuredClone(storyboard);
+    (shown.scenes[3]!.content.term as { text: string }).text = "Cach";
+    const { core, project, video } = await connect({});
+    const code = Object.fromEntries(await Promise.all(["s01", "s02", "s03", "s04"].map(async (unit) => [unit, await unitCode("good", unit)] as const)));
+    await generated(project, shown, code, ["s05"]);
+    const index = (await transcriptWords(core, project)).findIndex(({ text }) => text === "cache");
+
+    await core.project.fixWord({ projectId: project.id, index, text: "cach" });
+    await core.project.fixWord({ projectId: project.id, index, text: "cash" });
+    const repeated = await core.video.wordFixOffer({ ...video, index, previous: "cach" });
+
+    expect(repeated).toMatchObject({ to: "cash", scope: ["s02", "s04"] });
+    expect(repeated?.from.toSorted()).toEqual(["cach", "cache"]);
+    // "cache" contains "cach", so each spelling is looked for as a whole word.
+    repeated?.from.forEach((spelling) => expect(repeated.message).toMatch(new RegExp(`\\b${spelling}\\b`)));
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
 });
 
 describe("a Revision", () => {

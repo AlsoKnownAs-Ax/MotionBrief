@@ -537,8 +537,11 @@ export const RevisionRequestSchema = z.object({
  * Scenes whose copy says it. Declined, nothing changes.
  */
 export const WordFixOfferSchema = RevisionRequestSchema.extend({
-  /** The word as the on-screen copy says it, and as the fix spells it, without the punctuation around them. */
-  from: z.string(),
+  /**
+   * Every spelling of the word the on-screen copy still says (its text before the fix, what whisper-cli heard), and
+   * the fixed word, without the punctuation around them.
+   */
+  from: z.array(z.string()).min(1),
   to: z.string(),
 });
 

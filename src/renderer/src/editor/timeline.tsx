@@ -63,7 +63,7 @@ function WordFixOfferNote({ offer, scenes }: { offer: WordFixOffer; scenes: Time
   const isRevisingNow = useRevision((state) => isRevising(state.status));
   const isGeneratingNow = useGeneration((state) => isGenerating(state.status));
   const names = offer.scope.map((sceneId) => nameOf(scenes, sceneId)).join(", ");
-  const text = `“${offer.from}” is still on screen in ${names}.`;
+  const text = `${offer.from.map((spelling) => `“${spelling}”`).join(" or ")} is still on screen in ${names}.`;
 
   return (
     <span role="status" className="flex min-w-0 items-center gap-2">

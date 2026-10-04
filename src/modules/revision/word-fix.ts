@@ -18,16 +18,17 @@ export function wordFixOffer(storyboard: Storyboard, spellings: string[], fixed:
     .filter((from) => from !== to)
     .map((from) => ({ from, scenes: storyboard.scenes.filter((scene) => isShowing(scene, from, to)).map(({ id }) => id) }))
     .filter(({ scenes }) => scenes.length > 0);
-  const [first] = found;
 
-  if (!first) {
+  if (found.length === 0) {
     return undefined;
   }
 
+  const from = found.map((spelling) => spelling.from);
   const affected = new Set(found.flatMap(({ scenes }) => scenes));
   const scope = storyboard.scenes.map(({ id }) => id).filter((id) => affected.has(id));
+  const says = from.map((spelling) => `"${spelling}"`).join(" or ");
 
-  return { from: first.from, to, scope, message: `Carry my word fix into the on-screen copy: write "${to}" where it says "${first.from}".` };
+  return { from, to, scope, message: `Carry my word fix into the on-screen copy: write "${to}" where it says ${says}.` };
 }
 
 /** Whether the Scene's copy says `from` as a whole word, whatever its case, anywhere it doesn't already say `to`. */

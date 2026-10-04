@@ -4,7 +4,7 @@ import { core } from "@renderer/core/connection";
 import type { RevisionError, RevisionStatus, TimelineScene, VideoRef, WordFixOffer } from "../../../contract";
 import { useGeneration } from "./generation";
 import { sceneName } from "./labels";
-import { useOpenVideo } from "./open-video";
+import { useOpenVideo, type SavedWordFix } from "./open-video";
 
 /** A line in the chat: what the creator asked (with the Scenes it was about), what the agent said, or what happened. */
 export type ChatMessage = {
@@ -98,11 +98,15 @@ export const useRevision = create<RevisionStore>((set, get) => {
     return true;
   }
 
-  /** Asks the core whether the followed video's copy still says the fixed word as it was; offers a Revision if so. */
-  async function offerFor(followed: VideoRef, { index, previous }: { index: number; previous: string }) {
-    const { data: offer } = await safe(core.video.wordFixOffer({ ...followed, index, previous }));
+  /**
+   * Asks the core whether the followed video's copy still says the fixed word as it was; offers a Revision if so.
+   * The previous offer is withdrawn at once, and only the answer for the latest fix is kept.
+   */
+  async function offerFor(followed: VideoRef, fix: SavedWordFix) {
+    set({ wordFixOffer: undefined });
+    const { data: offer } = await safe(core.video.wordFixOffer({ ...followed, index: fix.index, previous: fix.previous }));
 
-    if (video === followed) {
+    if (video === followed && useOpenVideo.getState().lastFix === fix) {
       set({ wordFixOffer: offer ?? undefined });
     }
   }
