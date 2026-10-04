@@ -4,6 +4,8 @@ allowBuilds:
   # Its postinstall downloads a Chrome; the frame runs the pinned chrome-headless-shell from deps.json.
   # package.json's "puppeteer" key (skipDownload) and CI's PUPPETEER_SKIP_DOWNLOAD=1 skip it too.
   puppeteer: false
+  # electron-builder's Squirrel.Windows target; MotionBrief builds NSIS installers, so its vendored tools aren't needed.
+  electron-winstaller: false
 
 # @hyperframes/producer asks for ^25 of Puppeteer; lock it to the version the pinned chrome-headless-shell is chosen for.
 overrides:
