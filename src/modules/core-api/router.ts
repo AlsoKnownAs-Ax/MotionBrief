@@ -30,9 +30,12 @@ export type CoreRouterDeps = {
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
+/** Who is calling: each window talks to the core over its own connection. */
+export type CoreContext = { connection?: string };
+
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
 export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }: CoreRouterDeps) {
-  const api = implement(coreContract);
+  const api = implement(coreContract).$context<CoreContext>();
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
   async function setupResult({ data: status, error }: Result<ConnectionStatus, SetupError>): Promise<SetupResult> {
@@ -169,9 +172,15 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
       import: api.transcriptionModel.import.handler(({ input }) => transcriptionModel.import(input.path)),
     },
     project: {
+      list: api.project.list.handler(() => projects.list()),
+      open: api.project.open.handler(async ({ input: { path, force }, context }) => dataOrThrow(await projects.open(path, { force }, context))),
+      rename: api.project.rename.handler(async ({ input: { path, name, force } }) => dataOrThrow(await projects.rename(path, name, { force }))),
+      duplicate: api.project.duplicate.handler(async ({ input }) => dataOrThrow(await projects.duplicate(input.path))),
+      delete: api.project.delete.handler(async ({ input: { path, force } }) => {
+        dataOrThrow(await projects.remove(path, { force }));
+      }),
       defaults: api.project.defaults.handler(() => projects.defaults()),
-      create: api.project.create.handler(async ({ input }) => dataOrThrow(await projects.create(input))),
-      open: api.project.open.handler(async ({ input }) => dataOrThrow(await projects.open(input.path))),
+      create: api.project.create.handler(async ({ input, context }) => dataOrThrow(await projects.create(input, context))),
       update: api.project.update.handler(async ({ input: { projectId, ...changes } }) => dataOrThrow(await projects.update(projectId, changes))),
       transcription: api.project.transcription.handler(({ input, signal }) => dataOrThrow(projects.watchTranscription(input.projectId, signal))),
       retryTranscription: api.project.retryTranscription.handler(({ input }) => {

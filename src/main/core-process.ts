@@ -1,5 +1,12 @@
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
-import { CORE_APP_DATA_FLAG, CORE_APP_VERSION_FLAG, CORE_CACHE_DIR_FLAG, CORE_PROJECTS_DIR_FLAG, CORE_SAMPLE_FLAG } from "../shared/ipc";
+import {
+  CORE_APP_DATA_FLAG,
+  CORE_APP_VERSION_FLAG,
+  CORE_CACHE_DIR_FLAG,
+  CORE_PROJECTS_DIR_FLAG,
+  CORE_SAMPLE_FLAG,
+  CORE_SHUTDOWN_MESSAGE,
+} from "../shared/ipc";
 
 type CoreProcessOptions = {
   entry: string;
@@ -20,6 +27,9 @@ type CoreProcessOptions = {
 /** Delay before each restart, by how many crashes happened within CRASH_WINDOW_MS. */
 const RESTART_DELAYS_MS = [0, 500, 2_000, 5_000];
 const CRASH_WINDOW_MS = 60_000;
+
+/** How long a quitting core gets to finish its last writes and release its locks. */
+const SHUTDOWN_TIMEOUT_MS = 3_000;
 
 /**
  * Owns the single core utilityProcess: forks it, hands it window ports, and restarts it
@@ -113,9 +123,22 @@ export function startCoreProcess({
     crash() {
       child.kill();
     },
+    /** Asks the core to release its Project locks and exit, and kills it if it hasn't within a few seconds. */
     stop() {
       isStopping = true;
-      child.kill();
+
+      if (!isRunning) {
+        return Promise.resolve();
+      }
+
+      return new Promise<void>((resolve) => {
+        const timer = setTimeout(() => child.kill(), SHUTDOWN_TIMEOUT_MS);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        child.postMessage(CORE_SHUTDOWN_MESSAGE);
+      });
     },
   };
 }

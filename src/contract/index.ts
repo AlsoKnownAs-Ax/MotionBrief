@@ -400,6 +400,32 @@ export const NewProjectDefaultsSchema = z.object({
   folder: z.string(),
 });
 
+/** A Project as Home lists it, open or not. */
+export const ProjectSummarySchema = z.object({
+  path: z.string(),
+  /** The folder's name. */
+  name: z.string(),
+  /** The Formats it has videos in; before its first video, the Format it will be generated in. */
+  formats: z.array(FormatSchema),
+  /** The Voiceover's length in seconds, when the document says. */
+  duration: z.number().nonnegative().optional(),
+  /** Versions across all its videos. */
+  versions: z.number().int().nonnegative(),
+  /** Everything in the folder. */
+  bytes: z.number().int().nonnegative(),
+  /** The newest change to any file in it, in ms since the epoch. */
+  modifiedAt: z.number().nonnegative(),
+  /** The folder it is in, when that isn't the default Projects folder. */
+  location: z.string().optional(),
+});
+
+/** An opened Project, and where its old files went if it was migrated to this app's schema. */
+export const OpenedProjectSchema = z.object({
+  project: ProjectSchema,
+  /** Relative to the Project folder. */
+  backupPath: z.string().optional(),
+});
+
 export const TranscriptionErrorSchema = z.object({
   code: z.enum(["VOICEOVER_UNREADABLE", "TRANSCRIBER_FAILED", "FILE_FAILED"]),
   message: z.string(),
@@ -440,8 +466,26 @@ const PROJECT_ERRORS = {
   NAME_TAKEN: { data: z.object({ name: z.string() }) },
   UNKNOWN_PROJECT,
   FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
-  /** The folder's `project.json` isn't a Project document this app reads. */
-  INVALID_DOCUMENT: { data: z.object({ path: z.string(), message: z.string() }) },
+  /** The folder has no Project document, or one MotionBrief can't read. */
+  NOT_A_PROJECT: { data: z.object({ path: z.string(), detail: z.string() }) },
+  /** A newer MotionBrief saved it; opening it here could damage it. Nothing was changed. */
+  PROJECT_TOO_NEW: { data: z.object({ path: z.string(), name: z.string(), appVersion: z.string().optional() }) },
+  /**
+   * Its `.lock` says it is open elsewhere. Stale when the holder is gone (a MotionBrief that quit unexpectedly) or on
+   * another computer; opening with `force` takes the lock either way.
+   */
+  PROJECT_LOCKED: {
+    data: z.object({
+      path: z.string(),
+      name: z.string(),
+      host: z.string(),
+      isThisComputer: z.boolean(),
+      isStale: z.boolean(),
+      lockedAt: z.number(),
+    }),
+  },
+  /** Another window has it open. */
+  ALREADY_OPEN: { data: z.object({ path: z.string() }) },
 };
 
 /** Why a word fix was refused. */
@@ -455,6 +499,13 @@ const WORD_FIX_ERRORS = {
   INVALID_WORD: { data: z.object({ text: z.string() }) },
   FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
 };
+
+const ProjectPathInput = z.object({ path: z.string() });
+
+const LockedPathInput = ProjectPathInput.extend({
+  /** Go ahead even though the lock says it is open elsewhere: "Open anyway" and the like. */
+  force: z.boolean().optional(),
+});
 
 export const coreContract = {
   system: {
@@ -608,6 +659,20 @@ export const coreContract = {
     import: oc.input(z.object({ path: z.string() })),
   },
   project: {
+    /** The recent Projects: those in the default folder and those opened from elsewhere, newest change first. */
+    list: oc.output(z.array(ProjectSummarySchema)),
+    /**
+     * Opens a Project folder from anywhere in this window, closing the window's other Project. Takes its lock, migrates
+     * an older schema forward after backing up its documents, and gives a copied folder its own id. A Project without
+     * a saved Transcript starts transcribing; one with a Transcript, word fixes and all, is never transcribed again.
+     */
+    open: oc.errors(PROJECT_ERRORS).input(LockedPathInput).output(OpenedProjectSchema),
+    /** Renames a closed Project, which renames its folder. A lock left by anyone else needs `force`, as open does. */
+    rename: oc.errors(PROJECT_ERRORS).input(LockedPathInput.extend({ name: z.string() })).output(ProjectSummarySchema),
+    /** Copies a Project's folder beside it. The copy keeps the id until it is first opened, which gives it its own. */
+    duplicate: oc.errors(PROJECT_ERRORS).input(ProjectPathInput).output(ProjectSummarySchema),
+    /** Moves a closed Project's folder to the Trash or Recycle Bin. A lock left by anyone else needs `force`. */
+    delete: oc.errors(PROJECT_ERRORS).input(LockedPathInput),
     defaults: oc.output(NewProjectDefaultsSchema),
     /**
      * Creates a Project folder from a Voiceover (any file FFmpeg can read) and starts transcribing it at once.
@@ -627,11 +692,6 @@ export const coreContract = {
         }),
       )
       .output(ProjectSchema),
-    /**
-     * Opens a Project folder and locks it. A Project without a saved Transcript starts transcribing; one with a
-     * Transcript, word fixes and all, is never transcribed again.
-     */
-    open: oc.errors(PROJECT_ERRORS).input(z.object({ path: z.string() })).output(ProjectSchema),
     /** Changes an open Project's choices. A new name renames its folder; a new language transcribes it again. */
     update: oc
       .errors(PROJECT_ERRORS)
@@ -716,6 +776,8 @@ export type Transcript = z.infer<typeof TranscriptSchema>;
 export type Voiceover = z.infer<typeof VoiceoverSchema>;
 export type Project = z.infer<typeof ProjectSchema>;
 export type NewProjectDefaults = z.infer<typeof NewProjectDefaultsSchema>;
+export type ProjectSummary = z.infer<typeof ProjectSummarySchema>;
+export type OpenedProject = z.infer<typeof OpenedProjectSchema>;
 export type TranscriptionError = z.infer<typeof TranscriptionErrorSchema>;
 export type TranscriptionStatus = z.infer<typeof TranscriptionStatusSchema>;
 export type CacheStatus = z.infer<typeof CacheStatusSchema>;

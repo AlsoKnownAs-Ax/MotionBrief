@@ -1,9 +1,9 @@
 import { safe } from "@orpc/client";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { ArrowLeftIcon, AudioLinesIcon, CircleAlertIcon, LoaderCircleIcon } from "lucide-react";
+import { ArrowLeftIcon, AudioLinesIcon, CheckIcon, CircleAlertIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@renderer/components/ui/button";
-import { core, orpc } from "@renderer/core/connection";
+import { core, orpc, queryClient } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
@@ -18,8 +18,10 @@ import type { Project } from "../../../contract";
  */
 export function NewProject() {
   const droppedVoiceover = useNavigation((state) => state.droppedVoiceover);
+  const openedProject = useNavigation((state) => state.openedProject);
   const openHome = useNavigation((state) => state.openHome);
-  const [project, setProject] = useState<Project>();
+  const [project, setProject] = useState<Project | undefined>(openedProject);
+  const [savesRunning, setSavesRunning] = useState(0);
   const create = useMutation({ mutationFn: (voiceoverPath: string) => core.project.create({ voiceoverPath }), onSuccess: setProject });
   const started = useRef<string>(undefined);
 
@@ -49,15 +51,22 @@ export function NewProject() {
         <Button variant="ghost" size="icon-sm" aria-label="Back to Home" onClick={openHome}>
           <ArrowLeftIcon />
         </Button>
-        <h1 className="text-app-body font-medium">New Project</h1>
+        <h1 className="min-w-0 truncate text-app-body font-medium">{openedProject ? project?.name : "New Project"}</h1>
+        {project ? <SavedStatus isSaving={savesRunning > 0} /> : null}
       </div>
-      {project ? <ProjectEditor project={project} onProject={setProject} /> : null}
+      {project ? (
+        <ProjectEditor
+          project={project}
+          onProject={setProject}
+          onSaving={(isSaving) => setSavesRunning((running) => running + (isSaving ? 1 : -1))}
+        />
+      ) : null}
       {project ? null : <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} />}
     </div>
   );
 }
 
-/** Releases the Project's lock when the creator leaves the screen. */
+/** Releases the Project's lock when the creator leaves the screen; Home then lists it as it was left. */
 function useCloseOnLeave(projectId: string | undefined) {
   useEffect(() => {
     if (!projectId) {
@@ -65,9 +74,28 @@ function useCloseOnLeave(projectId: string | undefined) {
     }
 
     return () => {
-      void safe(core.project.close({ projectId }));
+      void safe(core.project.close({ projectId })).then(() => queryClient.invalidateQueries({ queryKey: orpc.project.list.key() }));
     };
   }, [projectId]);
+}
+
+/** Every change saves as it is made, so the toolbar says so instead of offering a Save button. */
+function SavedStatus({ isSaving }: { isSaving: boolean }) {
+  if (isSaving) {
+    return (
+      <span role="status" className="flex shrink-0 items-center gap-1.5 text-app-xs text-ink-muted">
+        <LoaderCircleIcon aria-hidden="true" className="size-3.5 animate-spin" />
+        Saving
+      </span>
+    );
+  }
+
+  return (
+    <span role="status" className="flex shrink-0 items-center gap-1.5 text-app-xs text-ink-muted">
+      <CheckIcon aria-hidden="true" className="size-3.5" />
+      Saved
+    </span>
+  );
 }
 
 type VoiceoverDropProps = { isCreating: boolean; error: unknown; onVoiceover: (path: string) => void };
@@ -122,15 +150,17 @@ function VoiceoverDrop({ isCreating, error, onVoiceover }: VoiceoverDropProps) {
   );
 }
 
-type ProjectEditorProps = { project: Project; onProject: (project: Project) => void };
+type ProjectEditorProps = { project: Project; onProject: (project: Project) => void; onSaving: (isSaving: boolean) => void };
 
-function ProjectEditor({ project, onProject }: ProjectEditorProps) {
+function ProjectEditor({ project, onProject, onSaving }: ProjectEditorProps) {
   const { data: transcription } = useQuery(orpc.project.transcription.experimental_liveOptions({ input: { projectId: project.id } }));
 
   /** Shows a choice at once, then whatever the core saved; a new name waits for its folder to be renamed. */
   async function change(changes: ProjectChanges) {
     onProject(withChoices(project, changes));
+    onSaving(true);
     const { data: saved, error } = await safe(core.project.update({ projectId: project.id, ...changes }));
+    onSaving(false);
 
     if (error) {
       onProject(project);
@@ -145,7 +175,9 @@ function ProjectEditor({ project, onProject }: ProjectEditorProps) {
 
   /** The Transcript stream shows the fix too, once it is saved. */
   const fixWord: FixWord = async (index, text) => {
+    onSaving(true);
     const { data: saved, error } = await safe(core.project.fixWord({ projectId: project.id, index, text }));
+    onSaving(false);
 
     if (error) {
       return { error: projectErrorMessage(error) };

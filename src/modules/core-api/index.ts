@@ -1,1 +1,1 @@
-export { createCoreRouter, type CoreRouter, type CoreRouterDeps, type SampleProject } from "./router";
+export { createCoreRouter, type CoreContext, type CoreRouter, type CoreRouterDeps, type SampleProject } from "./router";

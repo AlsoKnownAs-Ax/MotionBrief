@@ -1,24 +1,35 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, stat } from "node:fs/promises";
-import { basename, dirname, extname, join } from "node:path";
-import type { Format, NewProjectDefaults, Project, TranscriptionStatus, TranscriptWord } from "../../contract";
+import { cp, mkdir, readdir, rm, stat, writeFile } from "node:fs/promises";
+import { basename, dirname, extname, join, relative, resolve } from "node:path";
+import type { Format, NewProjectDefaults, OpenedProject, Project, ProjectSummary, TranscriptionStatus, TranscriptWord } from "../../contract";
 import type { Clock } from "../system";
 import type { Media } from "../media";
 import type { Transcriber } from "../transcriber";
 import { createLastUsed } from "./defaults";
-import { LOCK_FILE, readDocument, saveDocument, SCHEMA_VERSION, writeLock, type DocumentError, type ProjectDocument } from "./document";
+import { currentDocument, readAnyDocument, saveDocument, SCHEMA_VERSION, type AnyDocument, type DocumentError, type ProjectDocument } from "./document";
 import { copyHashed, fileStep, renameRetrying, type FileError, type Result } from "./files";
+import { LOCK_FILE, readLock, removeLock, writeLock, type Lock } from "./locks";
+import { backUpDocuments, migrate } from "./migrations";
 import { candidateName, nameFromFile, validName } from "./names";
+import { folderKey, samePath } from "./paths";
+import { createRecents } from "./recents";
 import { createStatusStore } from "./status";
+import { summarize } from "./summary";
 import { readVideo, saveVideo, type VideoDocumentError } from "./video";
+
+/** Moves a file or folder to the OS Trash or Recycle Bin; only main can, so the core asks it. */
+export type Trash = (path: string) => Promise<void>;
 
 export type ProjectsOptions = {
   /** Where new Projects go by default: Documents/MotionBrief. */
   projectsDir: string;
   appDataDir: string;
+  /** Recorded in every Project it saves, so an older app can say which version to update to. */
+  appVersion: string;
   media: Media;
   transcriber: Transcriber;
   clock: Clock;
+  trash: Trash;
 };
 
 export type Projects = ReturnType<typeof createProjects>;
@@ -30,9 +41,15 @@ export type ProjectsError =
   | { code: "INVALID_NAME"; name: string }
   | { code: "NAME_TAKEN"; name: string }
   | { code: "UNKNOWN_PROJECT"; projectId: string }
+  | { code: "PROJECT_TOO_NEW"; path: string; name: string; appVersion?: string }
+  | { code: "PROJECT_LOCKED"; path: string; name: string; host: string; isThisComputer: boolean; isStale: boolean; lockedAt: number }
+  | { code: "ALREADY_OPEN"; path: string }
   | { code: "TRANSCRIPT_NOT_READY"; projectId: string }
   | { code: "UNKNOWN_WORD"; index: number; words: number }
   | { code: "INVALID_WORD"; text: string };
+
+/** The window asking, so each window has at most one open Project. Absent for callers that aren't windows. */
+export type Caller = { connection?: string };
 
 export type NewProject = {
   voiceoverPath: string;
@@ -56,12 +73,19 @@ const LONG_VOICEOVER_SECONDS = 20 * 60;
 /** Enough tries to step past any number of same-named Projects a creator plausibly has. */
 const MAX_NAME_ATTEMPTS = 1000;
 
+/** Marks a folder Duplicate made: its first open gives it its own id, even if the original was never opened here. */
+const DUPLICATE_FILE = ".duplicate";
+
 type TranscriptionStore = ReturnType<typeof createStatusStore<TranscriptionStatus>>;
 
 type OpenProject = {
   dir: string;
+  /** The real folder behind `dir` (see `folderKey`): how the store tells whether a folder is this open Project. */
+  key: string;
   document: ProjectDocument;
   transcription: TranscriptionStore;
+  /** The window it is open in. */
+  owner?: string;
   /** Aborts the running transcription. */
   job?: AbortController;
   /** Every change to the folder runs after the one before, so writes and renames never interleave. */
@@ -70,17 +94,21 @@ type OpenProject = {
 
 /**
  * The Project store: a Project is a plain folder named after it, holding `project.json`, a copy of its Voiceover and,
- * while it is open, a `.lock` (ADR 0004). Open Projects transcribe their Voiceover as soon as they have one.
+ * while it is open, a `.lock` (ADR 0004). Open Projects transcribe their Voiceover as soon as they have one. Recent
+ * Projects are tracked by path in app data.
  */
-export function createProjects({ projectsDir, appDataDir, media, transcriber, clock }: ProjectsOptions) {
+export function createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash }: ProjectsOptions) {
   const open = new Map<string, OpenProject>();
+  /** The last lifecycle step queued on each folder, by `folderKey`. */
+  const lifecycle = new Map<string, Promise<unknown>>();
   const lastUsed = createLastUsed(appDataDir);
+  const recents = createRecents(appDataDir);
 
   async function defaults(): Promise<NewProjectDefaults> {
     return { ...(await lastUsed.get()), folder: projectsDir };
   }
 
-  async function create(input: NewProject): Promise<Result<Project, ProjectsError>> {
+  async function create(input: NewProject, { connection }: Caller = {}): Promise<Result<Project, ProjectsError>> {
     const { voiceoverPath } = input;
     const { data: info, error } = await media.probe(voiceoverPath);
 
@@ -118,6 +146,7 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
 
     const document: ProjectDocument = {
       schemaVersion: SCHEMA_VERSION,
+      appVersion,
       id: randomUUID(),
       createdAt: new Date(clock.now()).toISOString(),
       voiceover: { file, fileName, sha256, bytes: stats?.size ?? 0, duration: info.duration, isVideo: info.isVideo },
@@ -134,51 +163,13 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     }
 
     await lastUsed.remember(choices);
+    const project = await adopt(dir, await folderKey(dir), document, connection);
+    startTranscription(project);
 
-    return { data: toProject(register(dir, document)), error: null };
+    return { data: toProject(project), error: null };
   }
 
-  /** Opens a Project folder. One already open in this app is answered as it is. */
-  async function openFolder(path: string): Promise<Result<Project, ProjectsError>> {
-    const { data: document, error } = await readDocument(path);
-
-    if (error) {
-      return { data: null, error };
-    }
-
-    const already = open.get(document.id);
-
-    if (already) {
-      return { data: toProject(already), error: null };
-    }
-
-    const { error: lockError } = await writeLock(path);
-
-    if (lockError) {
-      return { data: null, error: lockError };
-    }
-
-    return { data: toProject(register(path, document)), error: null };
-  }
-
-  /** Keeps a locked Project open, transcribing its Voiceover unless its Transcript is saved. */
-  function register(dir: string, document: ProjectDocument) {
-    const project: OpenProject = {
-      dir,
-      document,
-      transcription: createStatusStore<TranscriptionStatus>(initialStatus(document)),
-      queue: Promise.resolve(),
-    };
-    open.set(document.id, project);
-
-    if (!document.transcript) {
-      startTranscription(project);
-    }
-
-    return project;
-  }
-
-  /** Makes the Project folder, numbering the name while a folder of that name exists. */
+  /** Makes a Project folder, numbering the name while a folder of that name exists. */
   async function claimFolder(folder: string, name: string, attempt = 1): Promise<Result<string, ProjectsError>> {
     const dir = join(folder, candidateName(name, attempt));
     const { error } = await fileStep(dir, async () => {
@@ -197,6 +188,185 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     return claimFolder(folder, name, attempt + 1);
   }
 
+  /**
+   * Opens a Project folder for a window. Refuses a newer schema without touching anything, asks before taking a lock
+   * held elsewhere, migrates an older schema after backing up its documents, and gives a copied folder its own id.
+   */
+  async function openFolder(path: string, { force = false } = {}, caller: Caller = {}): Promise<Result<OpenedProject, ProjectsError>> {
+    const dir = resolve(path);
+    const key = await folderKey(dir);
+
+    return exclusive(key, () => openExclusively(dir, key, force, caller));
+  }
+
+  async function openExclusively(dir: string, key: string, force: boolean, { connection }: Caller): Promise<Result<OpenedProject, ProjectsError>> {
+    const current = openAt(key);
+
+    if (current && connection !== undefined && current.owner === connection) {
+      return { data: { project: toProject(current) }, error: null };
+    }
+
+    if (current) {
+      return { data: null, error: { code: "ALREADY_OPEN", path: dir } };
+    }
+
+    const { data: found, error } = await readAnyDocument(dir);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    if (found.schemaVersion > SCHEMA_VERSION) {
+      return { data: null, error: { code: "PROJECT_TOO_NEW", path: dir, name: basename(dir), appVersion: found.appVersion } };
+    }
+
+    const lock = await readLock(dir);
+
+    if (lock && !lock.isOurs && !force) {
+      return { data: null, error: lockedError(dir, lock) };
+    }
+
+    const { error: lockError } = await writeLock(dir);
+
+    if (lockError) {
+      return { data: null, error: lockError };
+    }
+
+    const { data: loaded, error: loadError } = await load(dir, key, found);
+
+    if (loadError) {
+      await removeLock(dir);
+
+      return { data: null, error: loadError };
+    }
+
+    const project = await adopt(dir, key, loaded.document, connection);
+
+    if (!project.document.transcript) {
+      startTranscription(project);
+    }
+
+    return { data: { project: toProject(project), backupPath: loaded.backupPath }, error: null };
+  }
+
+  /** The document brought up to this app's schema, under an id no other known Project folder owns. */
+  async function load(dir: string, key: string, found: AnyDocument): Promise<Result<{ document: ProjectDocument; backupPath?: string }, ProjectsError>> {
+    const { data: current, error } = await upToDate(dir, found);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const marker = join(dir, DUPLICATE_FILE);
+    const { data: isDuplicate } = await fileStep(marker, () => stat(marker));
+
+    if (!isDuplicate && !(await isCopy(key, current.document.id))) {
+      return { data: current, error: null };
+    }
+
+    const document = { ...current.document, id: randomUUID() };
+    const { error: saveError } = await firstError([() => saveDocument(dir, document), () => fileStep(marker, () => rm(marker, { force: true }))]);
+
+    if (saveError) {
+      return { data: null, error: saveError };
+    }
+
+    return { data: { ...current, document }, error: null };
+  }
+
+  async function upToDate(dir: string, found: AnyDocument): Promise<Result<{ document: ProjectDocument; backupPath?: string }, ProjectsError>> {
+    if (found.schemaVersion === SCHEMA_VERSION) {
+      const { data: document, error } = currentDocument(dir, found);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      return { data: { document }, error: null };
+    }
+
+    const { data: document, error } = currentDocument(dir, migrate(found, appVersion));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: backupPath, error: backupError } = await backUpDocuments(dir, found.schemaVersion, clock.now());
+
+    if (backupError) {
+      return { data: null, error: backupError };
+    }
+
+    const { error: saveError } = await saveDocument(dir, document);
+
+    if (saveError) {
+      return { data: null, error: saveError };
+    }
+
+    return { data: { document, backupPath }, error: null };
+  }
+
+  /**
+   * A folder is a copy when another folder this app knows still holds a Project with its id: one open now, or the
+   * folder that last owned the id. A moved Project keeps its id, since its old folder is gone.
+   */
+  async function isCopy(key: string, id: string) {
+    if ([...open.values()].some((project) => project.document.id === id && project.key !== key)) {
+      return true;
+    }
+
+    const owner = (await recents.all()).find((recent) => recent.id === id);
+
+    if (!owner || (await folderKey(owner.path)) === key) {
+      return false;
+    }
+
+    const { data: document } = await readAnyDocument(owner.path);
+
+    return document?.id === id;
+  }
+
+  /** Makes the Project the window's one open Project, closing any other it had. */
+  async function adopt(dir: string, key: string, document: ProjectDocument, owner?: string) {
+    if (owner !== undefined) {
+      await Promise.all([...open.values()].filter((project) => project.owner === owner).map((project) => close(project.document.id)));
+    }
+
+    const project: OpenProject = {
+      dir,
+      key,
+      document,
+      owner,
+      transcription: createStatusStore<TranscriptionStatus>(initialStatus(document)),
+      queue: Promise.resolve(),
+    };
+    open.set(document.id, project);
+    await recents.remember(dir, document.id);
+
+    return project;
+  }
+
+  function openAt(key: string) {
+    return [...open.values()].find((project) => project.key === key);
+  }
+
+  /**
+   * Runs one lifecycle step on a folder at a time, so two windows can't both find it closed and both open, rename or
+   * trash it. Keyed by the real folder, so another route to it waits too.
+   */
+  function exclusive<T>(key: string, step: () => Promise<T>): Promise<T> {
+    const done = (lifecycle.get(key) ?? Promise.resolve()).then(step);
+    const settled = done.catch(() => undefined);
+    lifecycle.set(key, settled);
+    void settled.then(() => {
+      if (lifecycle.get(key) === settled) {
+        lifecycle.delete(key);
+      }
+    });
+
+    return done;
+  }
+
   async function update(projectId: string, changes: ProjectChanges): Promise<Result<Project, ProjectsError>> {
     const project = open.get(projectId);
 
@@ -205,7 +375,7 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     }
 
     if (changes.name !== undefined) {
-      const { error } = await rename(project, changes.name);
+      const { error } = await renameOpen(project, changes.name);
 
       if (error) {
         return { data: null, error };
@@ -230,43 +400,211 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     return { data: toProject(project), error: null };
   }
 
-  /** Renames the Project, which renames its folder. */
-  async function rename(project: OpenProject, requested: string): Promise<Result<null, ProjectsError>> {
-    const name = validName(requested);
+  /** Renames an open Project, which renames its folder. */
+  async function renameOpen(project: OpenProject, requested: string): Promise<Result<null, ProjectsError>> {
+    const { data: target, error } = await renameTarget(project.dir, requested);
 
-    if (!name) {
-      return { data: null, error: { code: "INVALID_NAME", name: requested } };
+    if (error) {
+      return { data: null, error };
     }
 
-    if (name === basename(project.dir)) {
+    if (!target) {
       return { data: null, error: null };
     }
 
-    const target = join(dirname(project.dir), name);
-    const isCaseChange = target.toLowerCase() === project.dir.toLowerCase();
-    const { data: existing } = await fileStep(target, () => stat(target));
-
-    if (existing && !isCaseChange) {
-      return { data: null, error: { code: "NAME_TAKEN", name } };
-    }
-
     return enqueue(project, async () => {
-      const { error } = await fileStep(target, () => renameRetrying(project.dir, target));
+      const from = project.dir;
+      const { error } = await fileStep(target, () => renameRetrying(from, target));
 
       if (error) {
         return { data: null, error };
       }
 
       project.dir = target;
+      project.key = await folderKey(target);
+      await recents.moved(from, target);
 
       return { data: null, error: null };
     });
   }
 
+  /** The folder a Project renamed to `requested` moves to; undefined when the name is unchanged. */
+  async function renameTarget(dir: string, requested: string): Promise<Result<string | undefined, ProjectsError>> {
+    const name = validName(requested);
+
+    if (!name) {
+      return { data: null, error: { code: "INVALID_NAME", name: requested } };
+    }
+
+    if (name === basename(dir)) {
+      return { data: undefined, error: null };
+    }
+
+    const target = join(dirname(dir), name);
+    const { data: existing } = await fileStep(target, () => stat(target));
+
+    if (existing && !samePath(target, dir)) {
+      return { data: null, error: { code: "NAME_TAKEN", name } };
+    }
+
+    return { data: target, error: null };
+  }
+
+  /** Renames a closed Project from Home. */
+  async function rename(path: string, requested: string, { force = false } = {}): Promise<Result<ProjectSummary, ProjectsError>> {
+    const dir = resolve(path);
+    const key = await folderKey(dir);
+
+    return exclusive(key, () => renameExclusively(dir, key, requested, force));
+  }
+
+  async function renameExclusively(dir: string, key: string, requested: string, force: boolean): Promise<Result<ProjectSummary, ProjectsError>> {
+    const { error } = await closedProject(dir, key, force);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: target, error: targetError } = await renameTarget(dir, requested);
+
+    if (targetError) {
+      return { data: null, error: targetError };
+    }
+
+    if (!target) {
+      return summaryOf(dir);
+    }
+
+    const { error: renameError } = await fileStep(target, () => renameRetrying(dir, target));
+
+    if (renameError) {
+      return { data: null, error: renameError };
+    }
+
+    await recents.moved(dir, target);
+
+    return summaryOf(target);
+  }
+
+  /**
+   * Copies the Project's folder beside it as "<name> copy", marked as a duplicate: it keeps the id until it is first
+   * opened, which gives it its own.
+   */
+  async function duplicate(path: string): Promise<Result<ProjectSummary, ProjectsError>> {
+    const dir = resolve(path);
+
+    return exclusive(await folderKey(dir), () => duplicateExclusively(dir));
+  }
+
+  async function duplicateExclusively(dir: string): Promise<Result<ProjectSummary, ProjectsError>> {
+    const { error } = await readAnyDocument(dir);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: copy, error: copyError } = await claimFolder(dirname(dir), `${basename(dir)} copy`);
+
+    if (copyError) {
+      return { data: null, error: copyError };
+    }
+
+    const { error: cpError } = await fileStep(copy, async () => {
+      await cp(dir, copy, { recursive: true, filter: (source) => isCopied(dir, source) });
+      await writeFile(join(copy, DUPLICATE_FILE), "");
+    });
+
+    if (cpError) {
+      await fileStep(copy, () => rm(copy, { recursive: true, force: true }));
+
+      return { data: null, error: cpError };
+    }
+
+    await recents.remember(copy);
+
+    return summaryOf(copy);
+  }
+
+  /** Moves a closed Project's folder to the Trash. Undo lives in the UI, which waits before asking. */
+  async function remove(path: string, { force = false } = {}): Promise<Result<null, ProjectsError>> {
+    const dir = resolve(path);
+    const key = await folderKey(dir);
+
+    return exclusive(key, () => removeExclusively(dir, key, force));
+  }
+
+  async function removeExclusively(dir: string, key: string, force: boolean): Promise<Result<null, ProjectsError>> {
+    const { error } = await closedProject(dir, key, force);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { error: trashError } = await fileStep(dir, () => trash(dir));
+
+    if (trashError) {
+      return { data: null, error: trashError };
+    }
+
+    await recents.forget([dir]);
+
+    return { data: null, error: null };
+  }
+
+  /**
+   * A Project folder no window here has open. A lock left by anyone else, even a stale one, needs the creator's say-so
+   * (`force`): the Project may be open on another computer that syncs the folder.
+   */
+  async function closedProject(dir: string, key: string, force: boolean): Promise<Result<AnyDocument, ProjectsError>> {
+    if (openAt(key)) {
+      return { data: null, error: { code: "ALREADY_OPEN", path: dir } };
+    }
+
+    const { data: document, error } = await readAnyDocument(dir);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const lock = await readLock(dir);
+
+    if (lock && !lock.isOurs && !force) {
+      return { data: null, error: lockedError(dir, lock) };
+    }
+
+    return { data: document, error: null };
+  }
+
+  /** The recent Projects, newest change first. Forgets those whose folders are gone. */
+  async function list(): Promise<ProjectSummary[]> {
+    const remembered = (await recents.all()).map(({ path }) => path);
+    const { data: entries } = await fileStep(projectsDir, () => readdir(projectsDir, { withFileTypes: true }));
+    const inDefault = (entries ?? []).filter((entry) => entry.isDirectory()).map((entry) => join(projectsDir, entry.name));
+    const paths = [...inDefault, ...remembered].filter((path, index, all) => all.findIndex((other) => samePath(other, path)) === index);
+    const summaries = await Promise.all(paths.map((path) => summarize(path, projectsDir)));
+    const gone = remembered.filter((path) => !summaries.some((summary) => summary && samePath(summary.path, path)));
+
+    if (gone.length > 0) {
+      await recents.forget(gone);
+    }
+
+    return summaries.filter((summary) => summary !== undefined).sort((a, b) => b.modifiedAt - a.modifiedAt);
+  }
+
+  async function summaryOf(dir: string): Promise<Result<ProjectSummary, ProjectsError>> {
+    const summary = await summarize(dir, projectsDir);
+
+    if (!summary) {
+      return { data: null, error: { code: "NOT_A_PROJECT", path: dir, detail: "project.json is missing" } };
+    }
+
+    return { data: summary, error: null };
+  }
+
   /** Saves a change to the document once every earlier change to the folder is done, so none is lost. */
   function save(project: OpenProject, change: (document: ProjectDocument) => ProjectDocument) {
     return enqueue(project, async () => {
-      const document = change(project.document);
+      const document = { ...change(project.document), appVersion };
       const { error } = await saveDocument(project.dir, document);
 
       if (error) {
@@ -385,7 +723,7 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
       }
 
       const fixed = fixedWord(word, text);
-      const document = { ...project.document, transcript: { ...transcript, words: transcript.words.with(index, fixed) } };
+      const document = { ...project.document, appVersion, transcript: { ...transcript, words: transcript.words.with(index, fixed) } };
       const { error } = await saveDocument(project.dir, document);
 
       if (error) {
@@ -448,15 +786,36 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
       return;
     }
 
-    open.delete(projectId);
-    project.job?.abort();
-    await enqueue(project, () => fileStep(project.dir, () => rm(join(project.dir, LOCK_FILE), { force: true })));
+    // Exclusive, so an open of the same folder waiting meanwhile can't take the lock and then lose it to this close.
+    await exclusive(project.key, async () => {
+      if (open.get(projectId) !== project) {
+        return;
+      }
+
+      open.delete(projectId);
+      project.job?.abort();
+      await enqueue(project, () => removeLock(project.dir));
+    });
+  }
+
+  /** Closes the Projects a window had open, once the window is gone. */
+  async function disconnect(connection: string) {
+    await Promise.all([...open.values()].filter(({ owner }) => owner === connection).map((project) => close(project.document.id)));
+  }
+
+  /** Closes every open Project, releasing its lock, before the app quits. */
+  async function closeAll() {
+    await Promise.all([...open.keys()].map(close));
   }
 
   return {
+    list,
+    open: openFolder,
+    rename,
+    duplicate,
+    remove,
     defaults,
     create,
-    open: openFolder,
     update,
     watchTranscription,
     retryTranscription,
@@ -464,7 +823,18 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     lastExportPath,
     rememberExportPath,
     close,
+    disconnect,
+    closeAll,
   };
+}
+
+function lockedError(dir: string, { host, isThisComputer, isStale, lockedAt }: Lock): ProjectsError {
+  return { code: "PROJECT_LOCKED", path: dir, name: basename(dir), host, isThisComputer, isStale, lockedAt };
+}
+
+/** A duplicate leaves out the original's lock and any half-written file. */
+function isCopied(dir: string, source: string) {
+  return relative(dir, source) !== LOCK_FILE && !source.endsWith(".tmp");
 }
 
 /** The word with the creator's text, remembering what was heard; set back to that, it is as heard again. */

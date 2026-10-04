@@ -10,6 +10,7 @@ import { IPC, type ChooseFileOptions, type ChooseSavePathOptions, type ContextMe
 import { handleConnectionStoreMessage } from "./connection-store";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
+import { handleTrashMessage } from "./trash";
 import { createWindow } from "./window";
 
 // IPC payloads come from the renderer, so they are checked before use.
@@ -45,10 +46,20 @@ function start() {
     sampleDir: devOnly(join(app.getAppPath(), "src", "core", "fixtures")),
     onExit: () => broadcast(IPC.coreExited),
     onRestart: () => broadcast(IPC.coreRestarted),
-    onRequest: handleConnectionStoreMessage,
+    onRequest: async (message) => (await handleConnectionStoreMessage(message)) ?? handleTrashMessage(message),
   });
+  let hasStoppedCore = false;
 
-  app.on("before-quit", () => core.stop());
+  // The core releases its Project locks before the app quits, so the next launch doesn't find them stale.
+  app.on("before-quit", (event) => {
+    if (hasStoppedCore) {
+      return;
+    }
+
+    event.preventDefault();
+    hasStoppedCore = true;
+    void core.stop().then(() => app.quit());
+  });
   app.on("activate", focusOrCreateWindow);
   handleIpc(core);
   installAppMenu({ newWindow: createWindow, crashCore: devOnly(() => core.crash()) });
@@ -91,6 +102,23 @@ function handleIpc(core: CoreProcess) {
     }
 
     const { canceled, filePaths } = await dialog.showOpenDialog(window, { ...options, properties: ["openFile"] });
+
+    if (canceled) {
+      return null;
+    }
+
+    return filePaths[0] ?? null;
+  });
+
+  ipcMain.handle(IPC.chooseFolder, async (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: title } = z.string().safeParse(payload);
+
+    if (!window || !success) {
+      return null;
+    }
+
+    const { canceled, filePaths } = await dialog.showOpenDialog(window, { title, properties: ["openDirectory"] });
 
     if (canceled) {
       return null;
