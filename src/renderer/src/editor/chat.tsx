@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
+import { costLabel } from "@renderer/new-project/generate-bar";
 import type { RevisionStatus, TimelineScene } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_TYPE_LABELS, sceneName } from "./labels";
@@ -60,6 +61,10 @@ function Thread({ scenes }: { scenes: TimelineScene[] }) {
 
 /** The agent at work, in the thread: reading the request, then rebuilding Scenes. */
 function Working({ status }: { status?: RevisionStatus }) {
+  if (status?.state === "approval" && status.costUsd) {
+    return <Approval status={status} costUsd={status.costUsd} />;
+  }
+
   return (
     <div role="status" className="flex gap-2.5 text-app-sm leading-[1.45]">
       <span aria-hidden="true" className="mt-[5px] size-2 shrink-0 animate-pulse rounded-full bg-status-working" />
@@ -67,6 +72,29 @@ function Working({ status }: { status?: RevisionStatus }) {
         <span className="text-app-xs text-ink-muted">Agent · working</span>
         <span>{workingText(status)}</span>
       </span>
+    </div>
+  );
+}
+
+/** On an API key with approval on, a Revision that regenerates Scenes waits here until the creator approves or stops it. */
+function Approval({ status, costUsd }: { status: RevisionStatus; costUsd: NonNullable<RevisionStatus["costUsd"]> }) {
+  const approve = useRevision((state) => state.approve);
+  const stop = useRevision((state) => state.stop);
+  const regenerating = status.units.filter(({ rebuild }) => rebuild === "regenerate").length;
+
+  return (
+    <div role="group" aria-labelledby="approve-revision" className="flex flex-col gap-2 rounded-lg border border-hairline-soft bg-surface-1 p-3">
+      <p id="approve-revision" className="text-app-sm leading-[1.45]">
+        Regenerating {regenerating} {plural(regenerating, "Scene")} costs about {costLabel(costUsd)} on your API key. Approve?
+      </p>
+      <div className="flex gap-2">
+        <Button size="sm" onClick={stop}>
+          Cancel
+        </Button>
+        <Button variant="primary" size="sm" onClick={approve}>
+          Approve and continue
+        </Button>
+      </div>
     </div>
   );
 }

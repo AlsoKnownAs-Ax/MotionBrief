@@ -35,6 +35,8 @@ type RevisionStore = {
   follow: (video: VideoRef) => () => void;
   /** Sends a request about the selected Scenes, or the whole video. Resolves once the core has taken it. */
   send: (text: string) => Promise<boolean>;
+  /** Approves the estimated cost of the Scenes a Revision waiting in `approval` regenerates. */
+  approve: () => void;
   stop: () => void;
 };
 
@@ -52,7 +54,7 @@ const ENDINGS: Partial<Record<RevisionStatus["state"], (status: RevisionStatus, 
       .map((problem) => ({ role: "note" as const, isProblem: true, text: `The new Version is saved but can't be shown: ${problem.message}` })),
   ],
   failed: ({ error }) => [{ role: "note", isProblem: true, text: failureText(error) }],
-  stopped: () => [{ role: "note", text: "Stopped. The video is as it was." }],
+  stopped: ({ error }) => [{ role: "note", text: stoppedText(error) }],
 };
 
 let nextId = 1;
@@ -126,6 +128,11 @@ export const useRevision = create<RevisionStore>((set, get) => {
 
       return true;
     },
+    approve: () => {
+      if (video) {
+        void safe(core.video.approveRevision(video));
+      }
+    },
     stop: () => {
       if (video) {
         void safe(core.video.stopRevision(video));
@@ -155,7 +162,7 @@ function toggled(selection: string[], sceneId: string, additive: boolean): strin
 
 /** Whether a Revision is underway, so the current Version plays on with its affected Scenes marked. */
 export function isRevising(status: RevisionStatus | undefined) {
-  return status?.state === "revising" || status?.state === "rebuilding" || status?.state === "saving";
+  return status?.state === "revising" || status?.state === "approval" || status?.state === "rebuilding" || status?.state === "saving";
 }
 
 export function nameOf(scenes: TimelineScene[], sceneId: string) {
@@ -166,6 +173,14 @@ export function nameOf(scenes: TimelineScene[], sceneId: string) {
   }
 
   return sceneName(scene);
+}
+
+function stoppedText(error: RevisionError | undefined) {
+  if (error?.code === "AGENT_FAILED" && error.error.code === "COST_CAP") {
+    return "Cost cap reached. The video is as it was.";
+  }
+
+  return "Stopped. The video is as it was.";
 }
 
 function failureText(error: RevisionError | undefined) {

@@ -10,6 +10,7 @@ import type { Previews, Stills } from "../modules/preview";
 import type { Projects, Version } from "../modules/projects";
 import { bundledPreset } from "../modules/style";
 import { realClock } from "../modules/system";
+import type { Usage } from "../modules/usage";
 import { createReplayConnector } from "./fixtures/replay-connector";
 import {
   connect,
@@ -50,7 +51,7 @@ describe("Stop", { timeout: RUN_TIMEOUT_MS }, () => {
     replay.hold("storyboard");
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     await generation.until(({ state }) => state === "planning");
     await core.video.stop(video);
     const stopped = await generation.until(({ stopped }) => stopped !== undefined);
@@ -74,7 +75,7 @@ describe("Stop", { timeout: RUN_TIMEOUT_MS }, () => {
     UNITS.forEach((unit) => replay.hold(`scene-code ${unit}`));
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     await generation.until((status) => status.units.filter((unit) => unit.status === "writing").length === 4);
     replay.release("scene-code s01");
     // s01 finishes and frees a subagent for s05, which waits too.
@@ -106,7 +107,7 @@ describe("Stop", { timeout: RUN_TIMEOUT_MS }, () => {
     ["s02", "s03", "s04"].forEach((unit) => replay.hold(`scene-code ${unit}`));
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     // s01 is in the Checker, the other three subagents are writing, and s05 waits for a free one.
     const checking = await generation.until((status) => unitStatuses(status).s01 === "checking");
     await core.video.stop(video);
@@ -127,7 +128,7 @@ describe("Stop", { timeout: RUN_TIMEOUT_MS }, () => {
     UNITS.forEach((unit) => replay.hold(`scene-code ${unit}`));
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     await generation.until((status) => status.units.filter((unit) => unit.status === "writing").length === 4);
     await core.project.close({ projectId: project.id });
     generation.stop();
@@ -153,7 +154,7 @@ describe("a subscription plan limit", { timeout: RUN_TIMEOUT_MS }, () => {
     UNITS.forEach((unit) => replay.hold(`scene-code ${unit}`));
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     await generation.until((status) => status.units.filter((unit) => unit.status === "writing").length === 4);
     replay.release("scene-code s01");
     // s01 finishes and frees a subagent for s05, which waits too.
@@ -186,7 +187,7 @@ describe("a failed login", { timeout: RUN_TIMEOUT_MS }, () => {
     ["s02", "s03", "s04", "s05"].forEach((unit) => replay.hold(`scene-code ${unit}`));
     const generation = await watch(core, video);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     const done = await generation.until(({ state }) => state === "done" || state === "failed");
     generation.stop();
 
@@ -209,7 +210,7 @@ describe("after a crash or quit mid-run", { timeout: RUN_TIMEOUT_MS }, () => {
     ["s02", "s03", "s04", "s05"].forEach((unit) => killed.replay.hold(`scene-code ${unit}`));
     const generation = await watch(killed.core, video);
 
-    await killed.core.video.generate(video);
+    await killed.core.video.generate({ ...video, approved: true });
     await generation.until((status) => unitStatuses(status).s01 === "ready");
     generation.stop();
     // The app is gone mid-run, leaving its lock and the generation in progress behind.
@@ -243,7 +244,7 @@ describe("after a crash or quit mid-run", { timeout: RUN_TIMEOUT_MS }, () => {
     const project = await newProject(killed.core, killed.dir);
     const video: VideoRef = { projectId: project.id, format: "horizontal" };
     const generation = await watch(killed.core, video);
-    await killed.core.video.generate(video);
+    await killed.core.video.generate({ ...video, approved: true });
     await generation.until(({ state }) => state === "done");
     killed.replay.hold("scene-code s02");
 
@@ -302,7 +303,7 @@ describe("Retry", { timeout: RUN_TIMEOUT_MS }, () => {
     const generation = await watch(core, video);
     const asked = () => UNITS.map((unit) => replay.askedOf(`scene-code ${unit}`).length);
 
-    await core.video.generate(video);
+    await core.video.generate({ ...video, approved: true });
     const generated = await generation.until(({ state }) => state === "done" || state === "failed");
 
     expect(generated).toMatchObject({ state: "done", version: 1 });
@@ -412,7 +413,10 @@ async function fakedGeneration(project: Project, transcript: unknown, script: Pa
   // No stills, so passing units aren't reviewed.
   const stills = { frames: async () => ({ data: null, error: { code: "BROWSER_FAILED", message: "No stills here" } }) } as unknown as Stills;
   const workDir = await mkdtemp(join(root, "agents-"));
-  const generation = createGeneration({ connector: replay.connector, checker, previews, stills, projects, clock: realClock, workDir });
+  // Usage counts nothing here and never asks for approval.
+  const run = { connector: () => replay.connector, isCapped: () => false, finish: async () => undefined };
+  const usage = { needsApproval: async () => false, startRun: () => run } as unknown as Usage;
+  const generation = createGeneration({ connector: replay.connector, checker, previews, stills, projects, clock: realClock, workDir, usage });
 
   return { generation, replay, saved, storing: storing.promise, finishStoring: () => stored.resolve() };
 }

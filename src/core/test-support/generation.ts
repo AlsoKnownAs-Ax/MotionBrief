@@ -22,9 +22,10 @@ export async function unitCode(variant: "good" | "repaired" | "raw-color" | "mis
 }
 
 /** A turn in which the agent hands in a Storyboard through its host tool. */
-export function submitsStoryboard(submitted: unknown): AgentEvent[] {
+export function submitsStoryboard(submitted: unknown, ...events: AgentEvent[]): AgentEvent[] {
   return [
     { type: "tool-call", toolUseId: "toolu_storyboard", name: "mcp__motionbrief__submit_storyboard", input: { storyboard: submitted } },
+    ...events,
     { type: "turn-completed", status: "completed", text: "Submitted the Storyboard." },
   ];
 }
@@ -62,19 +63,21 @@ type Setup = {
   wrap?: (connector: Connector) => Connector;
   /** The folders of an earlier core, to stand in for the app started again. */
   dir?: string;
+  /** App data shared with another core, such as Settings and usage. */
+  appDataDir?: string;
 };
 
 /**
  * A core on its own folders under `root` (or `dir`'s) with the transcription model installed, an agent replaying
  * `script` and the `stacked` Transcript.
  */
-export async function connect({ root, script, status, whisper, wrap = (connector) => connector, dir }: Setup) {
+export async function connect({ root, script, status, whisper, wrap = (connector) => connector, dir, appDataDir }: Setup) {
   const coreDir = dir ?? (await mkdtemp(join(root, "core-")));
   const replay = createReplayConnector(script, status);
   const modelPin = { version: "test", url: "http://127.0.0.1:9/model.bin", sha256: sha256(MODEL), size: MODEL.length };
   const { router } = createCore({
     appVersion: "1.2.3",
-    appDataDir: join(coreDir, "app-data"),
+    appDataDir: appDataDir ?? join(coreDir, "app-data"),
     projectsDir: join(coreDir, "Projects"),
     cacheDir: join(coreDir, "cache"),
     modelPin,
@@ -113,7 +116,8 @@ export async function generate(core: CoreClient, video: VideoRef): Promise<Gener
   const stop = new AbortController();
   const statuses = await core.video.generation(video, { signal: stop.signal });
   await statuses.next();
-  await core.video.generate(video);
+  // The replay connector is an API key, where a first generation waits for approval by default.
+  await core.video.generate({ ...video, approved: true });
 
   try {
     for await (const status of statuses) {
@@ -165,4 +169,33 @@ export function unitStatuses(status: GenerationStatus) {
 
 export function sha256(data: string | Uint8Array) {
   return createHash("sha256").update(data).digest("hex");
+}
+
+/** Everything a stream yields, and a way to wait for an item; resolves once the first has come. */
+export async function follow<T>(open: (signal: AbortSignal) => Promise<AsyncIterable<T>>) {
+  const items: T[] = [];
+  const waiters: { matches: (item: T) => boolean; resolve: (item: T) => void }[] = [];
+  const stop = new AbortController();
+
+  void (async () => {
+    for await (const item of await open(stop.signal)) {
+      items.push(item);
+      waiters.filter(({ matches }) => matches(item)).forEach(({ resolve }) => resolve(item));
+    }
+  })().catch(() => undefined);
+
+  const until = (matches: (item: T) => boolean) =>
+    new Promise<T>((resolve) => {
+      const seen = items.find(matches);
+
+      if (seen) {
+        resolve(seen);
+        return;
+      }
+
+      waiters.push({ matches, resolve });
+    });
+  await until(() => true);
+
+  return { items, until, stop: () => stop.abort() };
 }

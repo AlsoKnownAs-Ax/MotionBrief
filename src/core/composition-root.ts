@@ -11,10 +11,12 @@ import { createMedia } from "../modules/media";
 import { createPreviews, createStills } from "../modules/preview";
 import { createProjects, type Trash } from "../modules/projects";
 import { createRevisions } from "../modules/revision";
+import { createSettings } from "../modules/settings";
 import { createPresetStore } from "../modules/style";
 import { createSystem, realClock, realDisk, type Clock, type Disk } from "../modules/system";
 import { createWhisperCli, createWhisperTranscriber, type WhisperEngine } from "../modules/transcriber";
 import { createTranscriptionModel } from "../modules/transcription-model";
+import { createUsage } from "../modules/usage";
 import { ModelDepSchema, type ModelDep } from "../shared/deps-manifest";
 import { bundledClaudePath } from "./claude-binary";
 import { chromeHeadlessShellPath, ffmpegPath as pinnedFfmpegPath, ffprobePath as pinnedFfprobePath, whisperCliPath, whisperVadModelPath } from "./native";
@@ -112,12 +114,15 @@ export function createCore({
     locations: projectExportLocations(projects),
     onRunningChange: onExportsChange,
   });
-  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
-  const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR) });
+  const settings = createSettings({ appDataDir });
+  const usage = createUsage({ connector, settings, projects, clock, appDataDir });
+  const models = async () => (await settings.get()).models;
+  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
+  const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
   return {
-    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions }),
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, usage, settings }),
     /** A window's connection closed: its Project is closed and unlocked. */
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */

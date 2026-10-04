@@ -6,6 +6,7 @@ import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { Progress } from "@renderer/components/ui/progress";
+import { ExportControl } from "@renderer/editor/export-control";
 import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, stopHeadline, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
@@ -20,7 +21,8 @@ import { SidePanel } from "@renderer/editor/side-panel";
 import { Splitter } from "@renderer/editor/splitter";
 import { Timeline } from "@renderer/editor/timeline";
 import { useNavigation } from "@renderer/navigation";
-import type { Format, GenerationStatus, GenerationStop } from "../../../contract";
+import { UsageControl } from "@renderer/usage/usage-control";
+import type { Format, GenerationStatus, GenerationStop, VideoRef } from "../../../contract";
 
 /** The editor's part of the title bar: back to Home, the Project's name, its Formats and the video's generation. */
 export function EditorToolbar() {
@@ -44,6 +46,31 @@ export function EditorToolbar() {
       <GenerationBadge />
     </div>
   );
+}
+
+/** The editor's actions on the right of the title bar: the open video's usage, then Export MP4. */
+export function EditorActions() {
+  const followed = useGeneration((state) => state.video);
+  const isStored = useOpenVideo((state) => state.isStored);
+  const projectId = useOpenVideo((state) => state.projectId);
+  const format = useOpenVideo((state) => state.preview?.timeline.format);
+  const video = followed ?? storedVideo(isStored, projectId, format);
+
+  return (
+    <>
+      <UsageControl video={video} />
+      <ExportControl />
+    </>
+  );
+}
+
+/** The open video, once its Format is known; the fixture Project isn't open in the Project store, so it has no usage. */
+function storedVideo(isStored: boolean, projectId: string, format: Format | undefined): VideoRef | undefined {
+  if (!isStored || !format) {
+    return undefined;
+  }
+
+  return { projectId, format };
 }
 
 /** A Project has at most one video in each Format: the tabs switch between them, or to the Generate empty state. */
@@ -401,6 +428,7 @@ const STOP_ROLES = {
   stopped: "status",
   closed: "status",
   "plan-limit": "alert",
+  "cost-cap": "alert",
   authentication: "alert",
 } satisfies Record<GenerationStop["cause"], "status" | "alert">;
 

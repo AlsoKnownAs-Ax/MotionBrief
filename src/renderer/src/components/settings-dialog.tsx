@@ -11,6 +11,7 @@ import { sizeLabel } from "@renderer/new-project/labels";
 import { PresetEditorDialog } from "@renderer/style/preset-editor";
 import { PresetSettings } from "@renderer/style/preset-settings";
 import { useSetUpdateChannel, useUpdateState } from "@renderer/updates/update";
+import { CostSettings, ModelSettings } from "@renderer/usage/usage-settings";
 import type { CacheStatus, ConnectionStatus } from "../../../contract";
 import type { UpdateState } from "../../../shared/ipc";
 
@@ -42,6 +43,8 @@ export function SettingsDialog() {
             <DialogDescription>Changes apply to the next run.</DialogDescription>
           </DialogHeader>
           <ClaudeSettings onOpenSetup={() => setIsOpen(false)} />
+          <ModelSettings />
+          <CostSettings />
           <PresetSettings />
           <StorageSettings />
           <UpdateSettings />

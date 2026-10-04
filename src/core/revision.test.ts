@@ -71,8 +71,11 @@ beforeAll(async () => {
 
 afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 
-/** A core replaying `script`, with an open, transcribed Project of the `stacked` Voiceover in Blueprint and 16:9. */
-async function connect(script: ReplayScript) {
+/**
+ * A core replaying `script`, with an open, transcribed Project of the `stacked` Voiceover in Blueprint and 16:9. The
+ * replay connector is an API key; "Approve cost before running" is off unless `approveCost`.
+ */
+async function connect(script: ReplayScript, { approveCost = false } = {}) {
   const dir = await mkdtemp(join(root, "core-"));
   const replay = createReplayConnector(script);
   const modelPin = { version: "test", url: "http://127.0.0.1:9/model.bin", sha256: createHash("sha256").update(MODEL).digest("hex"), size: MODEL.length };
@@ -85,6 +88,7 @@ async function connect(script: ReplayScript) {
     adapters: { connector: replay.connector, whisper: fakeWhisper(await whisperFixture("stacked", 1)) },
   });
   const core = createRouterClient(router);
+  await core.settings.update({ approveCost });
   await writeFile(join(dir, "model.bin"), MODEL);
   await core.transcriptionModel.import({ path: join(dir, "model.bin") });
 
@@ -195,9 +199,10 @@ async function watch(core: CoreClient, video: VideoRef) {
 
 const ENDED = new Set(["answered", "done", "failed", "stopped"]);
 
-/** Sends a request and waits for the Revision to end. */
+/** Sends a request and waits for the Revision to end, approving its cost if it asks. */
 async function revise(core: CoreClient, video: VideoRef, message: string, scope: string[] = []) {
   const revision = await watch(core, video);
+  void revision.until(({ state }) => state === "approval").then(() => core.video.approveRevision(video));
   await core.video.revise({ ...video, message, scope });
   const ended = await revision.until(({ state, request }) => ENDED.has(state) && request?.message === message);
   revision.stop();
@@ -290,23 +295,27 @@ describe("a Revision that changes content", () => {
   let connected: Awaited<ReturnType<typeof connect>>;
   let v1Units: Record<string, string>;
   let done: RevisionStatus;
+  let statuses: RevisionStatus[];
 
   beforeAll(async () => {
     const s03 = scene(storyboard, "s03");
     (s03.content.caption as { text: string }).text = "Instant";
     // Neither subagent has a recorded turn, so both stop before handing in code: s01's instruction can't be applied,
     // and s03's new content ends as a fallback.
-    connected = await connect({
-      revision: [
-        submitsPatch({
-          scenes: [s03],
-          instructions: [{ scene: "s01", text: "Make the headline twice as big" }],
-          summary: "Shortened the stat's caption and made the hook's headline bigger.",
-        }),
-      ],
-    });
+    connected = await connect(
+      {
+        revision: [
+          submitsPatch({
+            scenes: [s03],
+            instructions: [{ scene: "s01", text: "Make the headline twice as big" }],
+            summary: "Shortened the stat's caption and made the hook's headline bigger.",
+          }),
+        ],
+      },
+      { approveCost: true },
+    );
     v1Units = await generatedGood(connected.project);
-    ({ ended: done } = await revise(connected.core, connected.video, "Shorter caption on the stat, bigger hook headline", ["s01", "s03"]));
+    ({ ended: done, statuses } = await revise(connected.core, connected.video, "Shorter caption on the stat, bigger hook headline", ["s01", "s03"]));
   }, RUN_TIMEOUT_MS);
 
   afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
@@ -317,6 +326,16 @@ describe("a Revision that changes content", () => {
       ["s01", "regenerate"],
       ["s03", "regenerate"],
     ]);
+  });
+
+  it("waits for approval of the regenerated Scenes' cost after planning, on an API key with approval on", () => {
+    const approval = statuses.find(({ state }) => state === "approval");
+    const asked = statuses.indexOf(approval!);
+
+    expect(approval?.costUsd?.high).toBeGreaterThan(0);
+    expect(statuses.slice(0, asked).some(({ state }) => state === "rebuilding")).toBe(true);
+    // Nothing was regenerated before the approval.
+    expect(statuses.slice(0, asked + 1).flatMap(({ units }) => units).every(({ status }) => status === "queued" || status === "ready")).toBe(true);
   });
 
   it("keeps the previous code of a unit whose instruction couldn't be applied, and says so", async () => {
@@ -385,13 +404,15 @@ describe("a Revision", () => {
     s04.transition = { type: "carry-over", element: "headline" } as Scene["transition"];
     const revised = structuredClone(s04);
     revised.transition = { type: "carry-over", element: "cta" } as Scene["transition"];
-    const { core, replay, project, video } = await connect({ revision: [submitsPatch({ scenes: [revised], summary: "Carried the call to action instead." })] });
+    const { core, replay, project, video } = await connect({ revision: [submitsPatch({ scenes: [revised], summary: "Carried the call to action instead." })] }, { approveCost: true });
     const code = Object.fromEntries(await Promise.all(["s01", "s02", "s03"].map(async (unit) => [unit, await unitCode("good", unit)] as const)));
     await generated(project, carrying, code, ["s04", "s05"]);
 
-    const { ended } = await revise(core, video, "Carry the call to action into the outro", ["s04"]);
+    const { ended, statuses } = await revise(core, video, "Carry the call to action into the outro", ["s04"]);
 
     expect(ended).toMatchObject({ state: "done", version: 2 });
+    // Re-rendering costs nothing, so it never asks for approval.
+    expect(statuses.some(({ state }) => state === "approval")).toBe(false);
     expect(ended.units.map(({ id, rebuild }) => [id, rebuild])).toEqual([
       ["s04", "rerender"],
       ["s05", "rerender"],

@@ -1,7 +1,7 @@
 import { mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import type { Format } from "../../contract";
+import { UsageTotalsSchema, type Format } from "../../contract";
 import { fileStep, writeAtomically, type FileError, type Result } from "./files";
 
 export const VIDEO_FILE = "video.json";
@@ -17,6 +17,8 @@ export const VideoDocumentSchema = z.object({
   frameChecked: z.object({ version: z.number().int().positive(), frameContractVersion: z.string() }).optional(),
   /** Whether the video shows Captions, once the creator chose; until then its Format's default. */
   captions: z.boolean().optional(),
+  /** What every agent run for this video has used; dollars only from runs on an API key. */
+  usage: UsageTotalsSchema.optional(),
 });
 
 export type VideoDocument = z.infer<typeof VideoDocumentSchema>;
