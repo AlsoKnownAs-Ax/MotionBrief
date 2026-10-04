@@ -5,6 +5,7 @@ import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
 import type { Connector } from "../modules/connector";
 import { createCoreRouter } from "../modules/core-api";
+import { createExporter, projectExportLocations } from "../modules/exporter";
 import { createMedia } from "../modules/media";
 import { createPreviews, createStills } from "../modules/preview";
 import { createProjects } from "../modules/projects";
@@ -14,7 +15,7 @@ import { createWhisperCli, createWhisperTranscriber, type WhisperEngine } from "
 import { createTranscriptionModel } from "../modules/transcription-model";
 import { ModelDepSchema, type ModelDep } from "../shared/deps-manifest";
 import { bundledClaudePath } from "./claude-binary";
-import { chromeHeadlessShellPath, ffmpegPath, ffprobePath, whisperCliPath, whisperVadModelPath } from "./native";
+import { chromeHeadlessShellPath, ffmpegPath as pinnedFfmpegPath, ffprobePath as pinnedFfprobePath, whisperCliPath, whisperVadModelPath } from "./native";
 import { sampleProject } from "./sample-project";
 
 /**
@@ -47,12 +48,18 @@ export type CoreOptions = {
   adapters?: Partial<Adapters>;
   /** The chrome-headless-shell the frame runs in; the pinned one in vendor/ by default. */
   chromePath?: string;
+  /** The FFmpeg and FFprobe exports encode with; the pinned ones in vendor/ by default. */
+  ffmpegPath?: string;
+  ffprobePath?: string;
   /** The source tree's fixtures folder: development builds open the fixture Project from it. */
   sampleDir?: string;
 };
 
 /** The cache folder's subfolder of assembled preview pages. */
 const PREVIEW_DIR = "preview";
+
+/** The cache folder's subfolder of renders on their way to an exported MP4. */
+const EXPORT_DIR = "export";
 
 /** The one place that picks implementations and wires the modules into the core API. */
 export function createCore({
@@ -65,6 +72,8 @@ export function createCore({
   connectionStore,
   adapters,
   chromePath = chromeHeadlessShellPath(),
+  ffmpegPath = pinnedFfmpegPath(),
+  ffprobePath = pinnedFfprobePath(),
   sampleDir,
 }: CoreOptions) {
   const clock = adapters?.clock ?? realClock;
@@ -76,17 +85,18 @@ export function createCore({
   const system = createSystem({ clock, appVersion, pid: process.pid });
   const checker = createChecker({ chromePath });
   const transcriptionModel = createTranscriptionModel({ appDataDir, pin: modelPin, disk });
-  const media = createMedia({ ffmpegPath: ffmpegPath(), ffprobePath: ffprobePath() });
-  // Assembled pages are folders that keep themselves to the newest few, so the cache's per-file LRU leaves them alone.
-  const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR] });
+  const media = createMedia({ ffmpegPath, ffprobePath });
+  // Assembled pages keep themselves to the newest few and export renders delete themselves, so the cache's per-file LRU leaves both alone.
+  const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR, EXPORT_DIR] });
   const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
   const stills = createStills({ cache, chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   const projects = createProjects({ projectsDir, appDataDir, media, transcriber, clock });
   const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
+  const exporter = createExporter({ workDir: join(cacheDir, EXPORT_DIR), chromePath, ffmpegPath, ffprobePath, locations: projectExportLocations(projects) });
   const sample = sampleDir ? sampleProject(sampleDir) : undefined;
 
-  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample, projects, cache, presets, stills }) };
+  return { router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }) };
 }
 
 /** The release's model pin, checked like the scripts check the rest of deps.json. A bad pin is a broken build. */

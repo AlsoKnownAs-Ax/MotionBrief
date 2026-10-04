@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, rm, stat } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import type { Format, NewProjectDefaults, Project, TranscriptionStatus } from "../../contract";
+import type { Format, NewProjectDefaults, Project, TranscriptionStatus, TranscriptWord } from "../../contract";
 import type { Clock } from "../system";
 import type { Media } from "../media";
 import type { Transcriber } from "../transcriber";
 import { createLastUsed } from "./defaults";
-import { LOCK_FILE, saveDocument, SCHEMA_VERSION, writeLock, type ProjectDocument } from "./document";
+import { LOCK_FILE, readDocument, saveDocument, SCHEMA_VERSION, writeLock, type DocumentError, type ProjectDocument } from "./document";
 import { copyHashed, fileStep, renameRetrying, type FileError, type Result } from "./files";
 import { candidateName, nameFromFile, validName } from "./names";
 import { createStatusStore } from "./status";
+import { readVideo, saveVideo, type VideoDocumentError } from "./video";
 
 export type ProjectsOptions = {
   /** Where new Projects go by default: Documents/MotionBrief. */
@@ -23,12 +24,15 @@ export type ProjectsOptions = {
 export type Projects = ReturnType<typeof createProjects>;
 
 export type ProjectsError =
-  | FileError
+  | DocumentError
   | { code: "VOICEOVER_UNREADABLE"; path: string; detail: string }
   | { code: "NO_AUDIO"; path: string }
   | { code: "INVALID_NAME"; name: string }
   | { code: "NAME_TAKEN"; name: string }
-  | { code: "UNKNOWN_PROJECT"; projectId: string };
+  | { code: "UNKNOWN_PROJECT"; projectId: string }
+  | { code: "TRANSCRIPT_NOT_READY"; projectId: string }
+  | { code: "UNKNOWN_WORD"; index: number; words: number }
+  | { code: "INVALID_WORD"; text: string };
 
 export type NewProject = {
   voiceoverPath: string;
@@ -130,6 +134,35 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     }
 
     await lastUsed.remember(choices);
+
+    return { data: toProject(register(dir, document)), error: null };
+  }
+
+  /** Opens a Project folder. One already open in this app is answered as it is. */
+  async function openFolder(path: string): Promise<Result<Project, ProjectsError>> {
+    const { data: document, error } = await readDocument(path);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const already = open.get(document.id);
+
+    if (already) {
+      return { data: toProject(already), error: null };
+    }
+
+    const { error: lockError } = await writeLock(path);
+
+    if (lockError) {
+      return { data: null, error: lockError };
+    }
+
+    return { data: toProject(register(path, document)), error: null };
+  }
+
+  /** Keeps a locked Project open, transcribing its Voiceover unless its Transcript is saved. */
+  function register(dir: string, document: ProjectDocument) {
     const project: OpenProject = {
       dir,
       document,
@@ -137,9 +170,12 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
       queue: Promise.resolve(),
     };
     open.set(document.id, project);
-    startTranscription(project);
 
-    return { data: toProject(project), error: null };
+    if (!document.transcript) {
+      startTranscription(project);
+    }
+
+    return project;
   }
 
   /** Makes the Project folder, numbering the name while a folder of that name exists. */
@@ -179,8 +215,7 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     const choices = definedOf({ format: changes.format, stylePreset: changes.stylePreset, language: changes.language });
     const isNewLanguage = changes.language !== undefined && changes.language !== project.document.language;
     // A Transcript in another language is no use; it is replaced once the new one is done.
-    const transcript = keptTranscript(project.document, isNewLanguage);
-    const { error } = await save(project, { ...project.document, ...choices, transcript });
+    const { error } = await save(project, (document) => ({ ...document, ...choices, transcript: keptTranscript(document, isNewLanguage) }));
 
     if (error) {
       return { data: null, error };
@@ -228,9 +263,10 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     });
   }
 
-  /** Saves the document once every earlier change to the folder is done. */
-  function save(project: OpenProject, document: ProjectDocument) {
+  /** Saves a change to the document once every earlier change to the folder is done, so none is lost. */
+  function save(project: OpenProject, change: (document: ProjectDocument) => ProjectDocument) {
     return enqueue(project, async () => {
+      const document = change(project.document);
       const { error } = await saveDocument(project.dir, document);
 
       if (error) {
@@ -282,7 +318,7 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
           return;
         }
 
-        const { error: saveError } = await save(project, { ...project.document, transcript });
+        const { error: saveError } = await save(project, (saved) => ({ ...saved, transcript }));
 
         if (saveError) {
           project.transcription.update({ state: "failed", error: { code: "FILE_FAILED", message: `${saveError.path}: ${saveError.message}` } });
@@ -317,6 +353,93 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     return { data: null, error: null };
   }
 
+  /**
+   * Fixes a misheard word in the saved Transcript: its text changes and its timing stays. The Transcript is
+   * Project-level, so this never touches a video or its Versions.
+   */
+  async function fixWord(projectId: string, index: number, requested: string): Promise<Result<TranscriptWord, ProjectsError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const text = requested.trim().replace(/\s+/g, " ");
+
+    if (!text) {
+      return { data: null, error: { code: "INVALID_WORD", text: requested } };
+    }
+
+    // Checked in the queue, against the Transcript every earlier change left.
+    return enqueue(project, async (): Promise<Result<TranscriptWord, ProjectsError>> => {
+      const { transcript } = project.document;
+
+      if (!transcript) {
+        return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
+      }
+
+      const word = transcript.words[index];
+
+      if (!word) {
+        return { data: null, error: { code: "UNKNOWN_WORD", index, words: transcript.words.length } };
+      }
+
+      const fixed = fixedWord(word, text);
+      const document = { ...project.document, transcript: { ...transcript, words: transcript.words.with(index, fixed) } };
+      const { error } = await saveDocument(project.dir, document);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      project.document = document;
+      project.transcription.set(initialStatus(document));
+
+      return { data: fixed, error: null };
+    });
+  }
+
+  /** Where the video was last exported to, kept in the video's folder; absent before its first export. */
+  async function lastExportPath(projectId: string, format: Format): Promise<Result<string | undefined, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { data: video, error } = await enqueue(project, () => readVideo(project.dir, format));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: video.lastExportPath, error: null };
+  }
+
+  function rememberExportPath(projectId: string, format: Format, path: string): Promise<Result<null, ProjectsError | VideoDocumentError>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
+    }
+
+    return enqueue(project, async () => {
+      const { data: video, error } = await readVideo(project.dir, format);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      const { error: saveError } = await saveVideo(project.dir, format, { ...video, lastExportPath: path });
+
+      if (saveError) {
+        return { data: null, error: saveError };
+      }
+
+      return { data: null, error: null };
+    });
+  }
+
   /** Stops the Project's work, waits for its last write, and releases the lock. */
   async function close(projectId: string) {
     const project = open.get(projectId);
@@ -330,7 +453,29 @@ export function createProjects({ projectsDir, appDataDir, media, transcriber, cl
     await enqueue(project, () => fileStep(project.dir, () => rm(join(project.dir, LOCK_FILE), { force: true })));
   }
 
-  return { defaults, create, update, watchTranscription, retryTranscription, close };
+  return {
+    defaults,
+    create,
+    open: openFolder,
+    update,
+    watchTranscription,
+    retryTranscription,
+    fixWord,
+    lastExportPath,
+    rememberExportPath,
+    close,
+  };
+}
+
+/** The word with the creator's text, remembering what was heard; set back to that, it is as heard again. */
+function fixedWord(word: TranscriptWord, text: string): TranscriptWord {
+  const heard = word.heard ?? word.text;
+
+  if (text === heard) {
+    return { text, start: word.start, end: word.end };
+  }
+
+  return { text, start: word.start, end: word.end, heard };
 }
 
 function keptTranscript(document: ProjectDocument, isNewLanguage: boolean) {

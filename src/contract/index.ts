@@ -260,6 +260,31 @@ export const PreviewSchema = z.object({
 /** A Scene's still, as a data URL, for its card in the Scene timeline. */
 export const SceneThumbnailSchema = z.object({ sceneId: z.string(), image: z.string() });
 
+/** One video of a Project: a Project has at most one video in each Format. */
+export const VideoRefSchema = z.object({ projectId: z.string(), format: FormatSchema });
+
+/** Why an export saved nothing. */
+export const ExportErrorSchema = z.discriminatedUnion("code", [
+  z.object({ code: z.literal("CHROME_MISSING"), path: z.string() }),
+  z.object({ code: z.literal("FFMPEG_MISSING"), path: z.string() }),
+  /** The render itself failed; `message` is the producer's. */
+  z.object({ code: z.literal("RENDER_FAILED"), message: z.string() }),
+  /** The chosen folder isn't there, or the MP4 couldn't be moved into it. */
+  z.object({ code: z.literal("SAVE_FAILED"), path: z.string(), message: z.string() }),
+]);
+
+/** Where an export stands: rendering through its stages, then saved or failed. */
+export const ExportStatusSchema = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("rendering"),
+    stage: z.enum(["preparing", "capturing", "encoding", "finishing"]),
+    /** 0 to 1, across every stage. */
+    progress: z.number().min(0).max(1),
+  }),
+  z.object({ state: z.literal("done"), path: z.string() }),
+  z.object({ state: z.literal("failed"), error: ExportErrorSchema }),
+]);
+
 export const AuthMethodSchema = z.enum(["subscription", "api-key"]);
 
 /** The normalized error taxonomy of a connector; UI copy maps the codes to messages. */
@@ -331,6 +356,8 @@ export const TranscriptWordSchema = z.object({
   /** Seconds into the Voiceover. */
   start: z.number().nonnegative(),
   end: z.number().nonnegative(),
+  /** What whisper-cli heard, once the creator fixed the word's text; absent while the word is as heard. */
+  heard: z.string().optional(),
 });
 
 /** A Voiceover's words with the time each is spoken; Project-level, shared by every Format. */
@@ -413,6 +440,20 @@ const PROJECT_ERRORS = {
   NAME_TAKEN: { data: z.object({ name: z.string() }) },
   UNKNOWN_PROJECT,
   FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+  /** The folder's `project.json` isn't a Project document this app reads. */
+  INVALID_DOCUMENT: { data: z.object({ path: z.string(), message: z.string() }) },
+};
+
+/** Why a word fix was refused. */
+const WORD_FIX_ERRORS = {
+  UNKNOWN_PROJECT,
+  /** Words can be fixed once the Transcript is saved, not while it is transcribed. */
+  TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+  /** `index` is past the end of the Transcript's `words`. */
+  UNKNOWN_WORD: { data: z.object({ index: z.number(), words: z.number() }) },
+  /** A word's text can't be empty. */
+  INVALID_WORD: { data: z.object({ text: z.string() }) },
+  FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
 };
 
 export const coreContract = {
@@ -523,7 +564,20 @@ export const coreContract = {
      * Opens the fixture Project's video, until Projects open from disk. Only development builds
      * have it; elsewhere this fails with SAMPLE_UNAVAILABLE.
      */
-    openSample: oc.errors({ SAMPLE_UNAVAILABLE: {} }).output(z.object({ name: z.string(), preview: PreviewSchema })),
+    openSample: oc.errors({ SAMPLE_UNAVAILABLE: {} }).output(z.object({ projectId: z.string(), name: z.string(), preview: PreviewSchema })),
+  },
+  export: {
+    /**
+     * Renders an open preview's video to an MP4 with the engine the player uses, then saves it at
+     * `path` and remembers that path for the video. Streams its status; abort the call to cancel,
+     * and nothing is saved.
+     */
+    mp4: oc
+      .errors({ PREVIEW_NOT_FOUND: { data: z.object({ id: z.string() }) } })
+      .input(z.object({ previewId: z.string(), path: z.string(), video: VideoRefSchema }))
+      .output(eventIterator(ExportStatusSchema)),
+    /** Where the video was last exported to; absent before its first export. */
+    lastPath: oc.input(VideoRefSchema).output(z.object({ path: z.string().optional() })),
   },
   connection: {
     /** Checks the connection with `claude auth status`; spends no tokens. */
@@ -569,6 +623,11 @@ export const coreContract = {
         }),
       )
       .output(ProjectSchema),
+    /**
+     * Opens a Project folder and locks it. A Project without a saved Transcript starts transcribing; one with a
+     * Transcript, word fixes and all, is never transcribed again.
+     */
+    open: oc.errors(PROJECT_ERRORS).input(z.object({ path: z.string() })).output(ProjectSchema),
     /** Changes an open Project's choices. A new name renames its folder; a new language transcribes it again. */
     update: oc
       .errors(PROJECT_ERRORS)
@@ -583,6 +642,14 @@ export const coreContract = {
       .output(ProjectSchema),
     /** Streams the Transcript as it is transcribed, then the saved Transcript. */
     transcription: oc.errors({ UNKNOWN_PROJECT }).input(ProjectIdInput).output(eventIterator(TranscriptionStatusSchema)),
+    /**
+     * Fixes a misheard word: changes the text of the word at `index` in the saved Transcript and keeps its timing.
+     * The Transcript is Project-level, so a fix never makes a Version. Answers with the word as saved.
+     */
+    fixWord: oc
+      .errors(WORD_FIX_ERRORS)
+      .input(ProjectIdInput.extend({ index: z.number().int().nonnegative(), text: z.string() }))
+      .output(TranscriptWordSchema),
     /** Transcribes again after a failure. */
     retryTranscription: oc.errors({ UNKNOWN_PROJECT }).input(ProjectIdInput),
     /** Stops working on the Project and releases its lock. */
@@ -630,6 +697,9 @@ export type TimelineScene = VideoTimeline["scenes"][number];
 export type TimelineWord = VideoTimeline["words"][number];
 export type Preview = z.infer<typeof PreviewSchema>;
 export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
+export type VideoRef = z.infer<typeof VideoRefSchema>;
+export type ExportError = z.infer<typeof ExportErrorSchema>;
+export type ExportStatus = z.infer<typeof ExportStatusSchema>;
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 export type ConnectorError = z.infer<typeof ConnectorErrorSchema>;
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;

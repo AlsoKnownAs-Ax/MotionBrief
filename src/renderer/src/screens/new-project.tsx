@@ -8,7 +8,7 @@ import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { ProjectForm, type ProjectChanges } from "@renderer/new-project/project-form";
-import { TranscriptPane } from "@renderer/new-project/transcript-pane";
+import { TranscriptPane, type FixWord } from "@renderer/new-project/transcript-pane";
 import { chooseVoiceover, useFileDrop } from "@renderer/new-project/voiceover-file";
 import type { Project } from "../../../contract";
 
@@ -143,12 +143,27 @@ function ProjectEditor({ project, onProject }: ProjectEditorProps) {
     return undefined;
   }
 
+  /** The Transcript stream shows the fix too, once it is saved. */
+  const fixWord: FixWord = async (index, text) => {
+    const { data: saved, error } = await safe(core.project.fixWord({ projectId: project.id, index, text }));
+
+    if (error) {
+      return { error: projectErrorMessage(error) };
+    }
+
+    return { text: saved.text };
+  };
+
   return (
     <div className="flex min-h-0 flex-1 gap-5 p-5">
       <div className="w-[360px] shrink-0 overflow-y-auto pr-1">
         <ProjectForm project={project} transcription={transcription} onChange={change} />
       </div>
-      <TranscriptPane transcription={transcription} onRetry={() => void safe(core.project.retryTranscription({ projectId: project.id }))} />
+      <TranscriptPane
+        transcription={transcription}
+        onRetry={() => void safe(core.project.retryTranscription({ projectId: project.id }))}
+        onFixWord={fixWord}
+      />
     </div>
   );
 }

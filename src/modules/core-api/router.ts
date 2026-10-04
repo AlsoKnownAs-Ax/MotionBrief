@@ -4,6 +4,7 @@ import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
+import type { Exporter } from "../exporter";
 import type { Previews, StillError, Stills, ThumbnailsError } from "../preview";
 import { validateStoryboard } from "../storyboard";
 import { BUNDLED_PALETTES, bundledFonts, checkContrast, FONT_PAIRINGS, presetSample, type PresetStore, type PresetStoreError } from "../style";
@@ -11,7 +12,7 @@ import type { System } from "../system";
 import type { TranscriptionModel } from "../transcription-model";
 
 /** The fixture Project development builds open from Home, until Projects open from disk. */
-export type SampleProject = { name: string; source: () => Promise<VideoSource> };
+export type SampleProject = { id: string; name: string; source: () => Promise<VideoSource> };
 
 export type CoreRouterDeps = {
   system: System;
@@ -19,6 +20,7 @@ export type CoreRouterDeps = {
   connector: Connector;
   transcriptionModel: TranscriptionModel;
   previews: Previews;
+  exporter: Exporter;
   sample?: SampleProject;
   projects: Projects;
   cache: Cache;
@@ -29,7 +31,7 @@ export type CoreRouterDeps = {
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
 
 /** The core API: implements the contract by delegating to the modules. Owns no logic. */
-export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, sample, projects, cache, presets, stills }: CoreRouterDeps) {
+export function createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills }: CoreRouterDeps) {
   const api = implement(coreContract);
 
   /** A failed step still answers with the current status, so the UI never shows a stale one. */
@@ -136,8 +138,20 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
           throw new Error(`The fixture Project doesn't open: ${JSON.stringify(error)}`);
         }
 
-        return { name: sample.name, preview };
+        return { projectId: sample.id, name: sample.name, preview };
       }),
+    },
+    export: {
+      mp4: api.export.mp4.handler(async function* ({ input, errors, signal }) {
+        const source = previews.source(input.previewId);
+
+        if (!source) {
+          throw errors.PREVIEW_NOT_FOUND({ data: { id: input.previewId } });
+        }
+
+        yield* exporter.mp4({ source, path: input.path, video: input.video, signal });
+      }),
+      lastPath: api.export.lastPath.handler(async ({ input }) => ({ path: await exporter.lastPath(input) })),
     },
     connection: {
       status: api.connection.status.handler(() => connector.status()),
@@ -157,11 +171,13 @@ export function createCoreRouter({ system, checker, connector, transcriptionMode
     project: {
       defaults: api.project.defaults.handler(() => projects.defaults()),
       create: api.project.create.handler(async ({ input }) => dataOrThrow(await projects.create(input))),
+      open: api.project.open.handler(async ({ input }) => dataOrThrow(await projects.open(input.path))),
       update: api.project.update.handler(async ({ input: { projectId, ...changes } }) => dataOrThrow(await projects.update(projectId, changes))),
       transcription: api.project.transcription.handler(({ input, signal }) => dataOrThrow(projects.watchTranscription(input.projectId, signal))),
       retryTranscription: api.project.retryTranscription.handler(({ input }) => {
         dataOrThrow(projects.retryTranscription(input.projectId));
       }),
+      fixWord: api.project.fixWord.handler(async ({ input }) => dataOrThrow(await projects.fixWord(input.projectId, input.index, input.text))),
       close: api.project.close.handler(({ input }) => projects.close(input.projectId)),
     },
     cache: {
