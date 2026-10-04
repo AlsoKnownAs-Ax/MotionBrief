@@ -22,7 +22,7 @@ export const SUBMIT_TOOLS = {
 
 /**
  * Wraps a connector so every session, turn and event goes through unchanged and is recorded on the way: the eval
- * measures the run from the recording, and its text outputs become replays.
+ * measures the run from the recording.
  */
 export function createRecorder(connector: Connector) {
   const sessions: RecordedSession[] = [];
@@ -95,13 +95,3 @@ function isCallTo(event: AgentEvent, tool: string): event is Extract<AgentEvent,
   return event.type === "tool-call" && (event.name === tool || event.name.endsWith(`__${tool}`));
 }
 
-/**
- * The recorded turns as a replay script, a list per session label, for the replay connector. Text deltas are left
- * out: a turn's final text is on its `turn-completed`.
- */
-export function replayScript(sessions: RecordedSession[]): Record<string, AgentEvent[][]> {
-  const turns = sessions.flatMap(({ label, turns }) => turns.map(({ events }) => ({ label, events: events.filter(({ type }) => type !== "text-delta") })));
-  const byLabel = Map.groupBy(turns, ({ label }) => label);
-
-  return Object.fromEntries([...byLabel].map(([label, labelled]) => [label, labelled.map(({ events }) => events)]));
-}

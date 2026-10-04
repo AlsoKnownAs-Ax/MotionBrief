@@ -3,12 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { AgentEvent } from "../modules/connector";
+import { applyPatch, type Patch } from "../modules/revision";
+import type { Storyboard } from "../modules/storyboard";
 import { main } from "./eval/cli";
 import { addToCorpus, saveResults } from "./eval/corpus";
 import { createRecorder, type Recorder } from "./eval/recorder";
 import { SCRIPTED_REVISIONS } from "./eval/release-set";
 import { blockReasons, planQuota, type CaseResult, type EvalResult } from "./eval/results";
 import { runEval, type CaseOutput } from "./eval/run";
+import { corpusEntries, replayRun, writtenUnits, type CorpusEntry, type ReplayedRun } from "./test-support/corpus";
 import { connect, storyboard, submitsCode, submitsStoryboard, unitCode } from "./test-support/generation";
 import { voiceover } from "./test-support/media";
 
@@ -159,17 +162,33 @@ describe("the paid eval", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual(result);
   });
 
-  it("adds every saved Version's Storyboard and Scene code to the replay corpus, and every agent turn as a replay", async () => {
-    const entries = await addToCorpus(outputs, { fixturesDir, runId: "test-run" });
-    const [first] = await Promise.all(entries.map(async (path) => JSON.parse(await readFile(path, "utf8")) as { storyboard: string; transcript: string; units: Record<string, string> }));
-    const replay = JSON.parse(await readFile(join(fixturesDir, "eval", "test-run", "caching-horizontal-blueprint", "replay.json"), "utf8")) as Record<string, AgentEvent[][]>;
+  describe("added to the replay corpus", () => {
+    let entry: CorpusEntry;
+    let run: ReplayedRun;
 
-    expect(entries.map((path) => path.split(/[\\/]/).at(-1))).toEqual(["eval-test-run-caching-horizontal-blueprint-v1.json", "eval-test-run-caching-horizontal-blueprint-v2.json"]);
-    expect(Object.keys(first!.units)).toEqual(["s01", "s02", "s03", "s04"]);
-    expect(await readFile(join(fixturesDir, `${first!.units.s03}.css`), "utf8")).toBe((await unitCode("good", "s03")).css);
-    expect(JSON.parse(await readFile(join(fixturesDir, first!.storyboard), "utf8"))).toEqual(storyboard);
-    expect(replay.storyboard).toHaveLength(2);
-    expect(replay.revision).toHaveLength(4);
+    beforeAll(async () => {
+      await addToCorpus(outputs, { fixturesDir, runId: "test-run" });
+      ({ entry } = (await corpusEntries(fixturesDir))[0]!);
+      run = await replayRun(entry, root, fixturesDir);
+    }, RUN_TIMEOUT_MS);
+
+    it("is one run of the case: the first generation with its fallback marked, then the Revision that saved a Version with its patch", async () => {
+      expect(entry).toMatchObject({ preset: "blueprint", fallbacks: ["s05"] });
+      expect(Object.keys(entry.units)).toEqual(["s01", "s02", "s03", "s04"]);
+      expect(await readFile(join(fixturesDir, `${entry.units.s03}.css`), "utf8")).toBe((await unitCode("good", "s03")).css);
+      expect(entry.revisions).toEqual([expect.objectContaining({ request: SCRIPTED_REVISIONS[0]!.message, scope: ["s03"], units: {}, fallbacks: [] })]);
+      expect(JSON.parse(await readFile(join(fixturesDir, entry.revisions[0]!.patch), "utf8"))).toMatchObject({ scenes: [withTransition("s03", "cut")], summary: "Cut out of the stat" });
+    });
+
+    it("replays through the corpus replay, with its fallback replayed as a fallback", () => {
+      const [first, revised] = run.versions;
+
+      expect(run.generation).toMatchObject({ state: "done", version: 1 });
+      expect(run.written[0]).toEqual(writtenUnits(run.corpus));
+      expect(first).toMatchObject({ storyboard: run.corpus.storyboard, code: run.corpus.code, flags: [expect.objectContaining({ unit: "s05", kind: "fallback" })] });
+      expect(run.revisions[0]).toMatchObject({ state: "done", version: 2 });
+      expect(revised?.storyboard).toEqual(applyPatch(first!.storyboard as Storyboard, run.corpus.revisions[0]!.patch as Patch));
+    });
   });
 });
 

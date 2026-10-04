@@ -8,20 +8,19 @@ import {
   type Project,
   type RevisionStatus,
   type StoryboardIssue,
-  type StoryboardRules,
   type StoryboardTranscript,
   type Transcript,
   type UnitCode,
   type UsageStatus,
   type VideoRef,
 } from "../../contract";
-import type { AgentEvent, PlanUsage } from "../../modules/connector";
+import type { PlanUsage } from "../../modules/connector";
 import { FRAME_CONTRACT_VERSION } from "../../modules/frame";
 import { readVersion, type StoredVersion } from "../../modules/projects";
 import { PatchSchema, validatePatch } from "../../modules/revision";
 import { StoryboardSchema, type Storyboard } from "../../modules/storyboard";
 import { storyboardRules } from "../../modules/style";
-import { handedIn, replayScript, sessionsOf, SUBMIT_TOOLS, type RecordedSession, type Recorder } from "./recorder";
+import { handedIn, sessionsOf, SUBMIT_TOOLS, type RecordedSession, type Recorder } from "./recorder";
 import type { BundledPresetId, EvalCase, ScriptedRevision } from "./release-set";
 import {
   blockReasons,
@@ -52,24 +51,31 @@ export type EvalOptions = {
   now?: () => number;
 };
 
-/** A saved Version's text outputs, as the replay corpus takes them. */
-export type VersionOutput = {
-  version: number;
-  frameContractVersion: string;
-  preset: BundledPresetId;
-  rules: StoryboardRules;
-  storyboard: unknown;
-  /** Scene code of every unit that has some; the others play as their fallback Scene. */
-  code: Record<string, UnitCode>;
-};
-
+/**
+ * A case's agent outputs, as the replay corpus takes them: the first generation's Storyboard and Scene code, then each
+ * Revision that saved a Version with the patch it was saved from. A unit whose agent ended without passing code (a
+ * fallback, or an instruction that couldn't be applied) is listed in `fallbacks` and has no code.
+ */
 export type CaseOutput = {
   caseId: string;
+  preset: BundledPresetId;
+  frameContractVersion: string;
   /** The Transcript every Version of the case was written from. */
   transcript: StoryboardTranscript;
-  versions: VersionOutput[];
-  /** Every agent turn of the case, by session label, for the replay connector. */
-  replay: Record<string, AgentEvent[][]>;
+  storyboard: unknown;
+  code: Record<string, UnitCode>;
+  fallbacks: string[];
+  revisions: RevisionOutput[];
+};
+
+export type RevisionOutput = {
+  request: string;
+  scope: string[];
+  /** The patch the Revision was saved from: the agent's last, valid one. */
+  patch: unknown;
+  /** Scene code of each unit it regenerated that passed. */
+  code: Record<string, UnitCode>;
+  fallbacks: string[];
 };
 
 /**
@@ -81,7 +87,7 @@ export async function runEval(options: EvalOptions): Promise<{ result: EvalResul
   const { core, runId, cases: evalCases, verdict: askVerdict, now = Date.now } = options;
   const started = now();
   const [{ appVersion }, connection] = await Promise.all([core.system.info(), core.connection.status()]);
-  const runs: { result: CaseResult; output: CaseOutput }[] = [];
+  const runs: { result: CaseResult; output?: CaseOutput }[] = [];
 
   for (const evalCase of evalCases) {
     runs.push(await runCase(options, evalCase));
@@ -105,7 +111,8 @@ export async function runEval(options: EvalOptions): Promise<{ result: EvalResul
       blocked: reasons.length > 0,
       blockReasons: reasons,
     },
-    outputs: runs.map(({ output }) => output),
+    // A case whose generation saved nothing has no outputs to replay.
+    outputs: runs.flatMap(({ output }) => optional(output)),
   };
 }
 
@@ -117,7 +124,7 @@ type CaseRun = {
   transcript: Transcript;
 };
 
-async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ result: CaseResult; output: CaseOutput }> {
+async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ result: CaseResult; output?: CaseOutput }> {
   const { core, recorder, projectsDir, log = () => undefined, now = Date.now } = options;
   const started = now();
   const mark = recorder.mark();
@@ -135,9 +142,8 @@ async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ resu
   try {
     log(`${evalCase.id}: generating`);
     const { generation, stored } = await generated(run);
-    const { revisions, versions } = await revised(run, stored);
+    const { revisions, versions, outputs } = await revised(run, stored);
     const exportPath = await exported(run);
-    const sessions = recorder.since(mark);
     const usage = await usageOf(run, baseline, recorder.planSince(mark));
 
     return {
@@ -154,12 +160,7 @@ async function runCase(options: EvalOptions, evalCase: EvalCase): Promise<{ resu
         exportPath,
         wallSeconds: seconds(now() - started),
       },
-      output: {
-        caseId: evalCase.id,
-        transcript: { duration: run.transcript.duration, words: run.transcript.words.map(({ text, start }) => ({ text, start })) },
-        versions: versions.map((stored) => versionOutput(evalCase, stored)),
-        replay: replayScript(sessions),
-      },
+      output: caseOutput(run, stored, outputs),
     };
   } finally {
     await core.project.close({ projectId: project.id });
@@ -241,10 +242,14 @@ function unitIds({ units }: GenerationStatus | RevisionStatus): string[] {
 const REVISION_SETTLED = new Set<RevisionStatus["state"]>(["answered", "done", "failed", "stopped"]);
 
 /** Runs the case's scripted Revisions one after another, each on the newest Version; none when generating saved nothing. */
-async function revised(run: CaseRun, generated: StoredVersion | undefined): Promise<{ revisions: RevisionResult[]; versions: StoredVersion[] }> {
+async function revised(
+  run: CaseRun,
+  generated: StoredVersion | undefined,
+): Promise<{ revisions: RevisionResult[]; versions: StoredVersion[]; outputs: RevisionOutput[] }> {
   const { options, evalCase } = run;
   const { log = () => undefined } = options;
   const revisions: RevisionResult[] = [];
+  const outputs: RevisionOutput[] = [];
   const versions = optional(generated);
 
   for (const scripted of evalCase.revisions) {
@@ -255,15 +260,67 @@ async function revised(run: CaseRun, generated: StoredVersion | undefined): Prom
     }
 
     log(`${evalCase.id}: revising (${scripted.scope})`);
-    const { revision, stored } = await revisedBy(run, current, scripted);
+    const { revision, stored, output } = await revisedBy(run, current, scripted);
     revisions.push(revision);
     versions.push(...optional(stored));
+    outputs.push(...optional(output));
   }
 
-  return { revisions, versions };
+  return { revisions, versions, outputs };
 }
 
-async function revisedBy(run: CaseRun, current: StoredVersion, scripted: ScriptedRevision): Promise<{ revision: RevisionResult; stored?: StoredVersion }> {
+/** The first generation's outputs and those of each Revision that saved a Version; none when generating saved nothing. */
+function caseOutput({ evalCase, transcript }: CaseRun, generated: StoredVersion | undefined, revisions: RevisionOutput[]): CaseOutput | undefined {
+  if (!generated) {
+    return undefined;
+  }
+
+  const { version, code } = generated;
+
+  return {
+    caseId: evalCase.id,
+    preset: evalCase.preset,
+    frameContractVersion: version.frameContractVersion,
+    transcript: { duration: transcript.duration, words: transcript.words.map(({ text, start }) => ({ text, start })) },
+    storyboard: version.storyboard,
+    code,
+    fallbacks: version.flags.filter(({ kind }) => kind === "fallback").map(({ unit }) => unit),
+    revisions,
+  };
+}
+
+/**
+ * What a Revision that saved a Version leaves for the replay: its request, the patch it was saved from, and each
+ * regenerated unit's code, or a fallback marker for a unit whose agent ended without passing code. An instruction-only
+ * unit like that kept its previous code, so the Revision reports its Scenes as not applied rather than as a fallback.
+ */
+function revisionOutput(scripted: ScriptedRevision, sceneIds: string[], status: RevisionStatus, patches: unknown[], stored: StoredVersion | undefined): RevisionOutput | undefined {
+  const patch = patches.at(-1);
+
+  if (status.state !== "done" || !stored || patch === undefined) {
+    return undefined;
+  }
+
+  const { data: storyboard } = StoryboardSchema.safeParse(stored.version.storyboard);
+  const notApplied = new Set(status.notApplied ?? []);
+  const isNotApplied = (unit: string) => (storyboard?.scenes ?? []).some(({ id, canvas }) => (canvas ?? id) === unit && notApplied.has(id));
+  const regenerated = status.units.filter(({ rebuild }) => rebuild === "regenerate").map(({ id }) => id);
+  const failed = regenerated.filter((unit) => isNotApplied(unit) || stored.code[unit] === undefined);
+
+  return {
+    request: scripted.message,
+    scope: sceneIds,
+    patch,
+    code: Object.fromEntries(regenerated.filter((unit) => !failed.includes(unit)).flatMap((unit) => optional(stored.code[unit]).map((code) => [unit, code] as const))),
+    fallbacks: failed,
+  };
+}
+
+async function revisedBy(
+  run: CaseRun,
+  current: StoredVersion,
+  scripted: ScriptedRevision,
+): Promise<{ revision: RevisionResult; stored?: StoredVersion; output?: RevisionOutput }> {
   const { options, ref, project } = run;
   const { core, recorder, now = Date.now } = options;
   const started = now();
@@ -276,10 +333,10 @@ async function revisedBy(run: CaseRun, current: StoredVersion, scripted: Scripte
   await core.video.revise({ ...ref, message: scripted.message, scope: sceneIds });
   const status = await revisionSettled(core, ref, statuses, listening);
   const sessions = recorder.since(mark);
-  const patches = sessionsOf(sessions, "revision")
+  const handedInPatches = sessionsOf(sessions, "revision")
     .flatMap((session) => handedIn(session, SUBMIT_TOOLS.patch))
-    .filter((patch) => patch !== undefined)
-    .map((patch) => ({ issues: patchIssues(run, current, storyboard, patch, sceneIds) }));
+    .filter((patch) => patch !== undefined);
+  const patches = handedInPatches.map((patch) => ({ issues: patchIssues(run, current, storyboard, patch, sceneIds) }));
   const stored = await storedVersion(project, ref, status.version);
   const regenerated = status.units.filter(({ rebuild }) => rebuild === "regenerate").map(({ id }) => id);
   const lint = await firstTryTokenLint(run, sessions, stored, regenerated);
@@ -301,6 +358,7 @@ async function revisedBy(run: CaseRun, current: StoredVersion, scripted: Scripte
       wallSeconds: seconds(now() - started),
     },
     stored,
+    output: revisionOutput(scripted, sceneIds, status, handedInPatches, stored),
   };
 }
 
@@ -457,17 +515,6 @@ async function exported({ options, evalCase, ref }: CaseRun): Promise<string | u
   }
 
   return undefined;
-}
-
-function versionOutput(evalCase: EvalCase, { version, code }: StoredVersion): VersionOutput {
-  return {
-    version: version.version,
-    frameContractVersion: version.frameContractVersion,
-    preset: evalCase.preset,
-    rules: storyboardRules(version.preset, { format: evalCase.format, captions: version.captions }),
-    storyboard: version.storyboard,
-    code,
-  };
 }
 
 /** The usage module's first answer for `video`, or for no video. */
