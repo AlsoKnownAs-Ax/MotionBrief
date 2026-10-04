@@ -1,18 +1,19 @@
 import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
-import type { RevisionError, RevisionStatus, TimelineScene, VideoRef } from "../../../contract";
+import type { ChatEntry, ChatRequestState, ChatStatus, RevisionError, RevisionStatus, TimelineScene, VideoRef } from "../../../contract";
 import { useGeneration } from "./generation";
 import { sceneName } from "./labels";
-import { useOpenVideo } from "./open-video";
 
 /** A line in the chat: what the creator asked (with the Scenes it was about), what the agent said, or what happened. */
 export type ChatMessage = {
-  id: number;
+  id: string;
   role: "creator" | "agent" | "event" | "note";
   text: string;
   /** The Scenes a creator's request was scoped to. */
   scope?: string[];
+  /** A creator's request waiting its turn. */
+  isQueued?: boolean;
   /** A note that something went wrong, rather than one for information. */
   isProblem?: boolean;
 };
@@ -22,8 +23,10 @@ type RevisionStore = {
   selection: string[];
   /** The video's Revision as the core streams it. */
   status?: RevisionStatus;
-  /** This window's chat with the agent, while the video is open. */
-  messages: ChatMessage[];
+  /** The video's chat as saved with it: requests, how each went, Restores, and whether the queue is paused. */
+  chat?: ChatStatus;
+  /** This window's notes on requests the core wouldn't take. */
+  notes: ChatMessage[];
   /** Bumped to bring the chat forward with its composer focused, such as by Revise… on a flagged Scene. */
   chatFocus: number;
   /** Selects only this Scene, or adds it to the selection or takes it out (`additive`, with Shift or Ctrl). */
@@ -31,52 +34,28 @@ type RevisionStore = {
   clearSelection: () => void;
   /** Scopes the chat to these Scenes and brings it forward. */
   reviseScenes: (sceneIds: string[]) => void;
-  /** Starts following the open video's Revisions; returns how to stop. */
+  /** Starts following the open video's chat and Revisions; returns how to stop. */
   follow: (video: VideoRef) => () => void;
-  /** Sends a request about the selected Scenes, or the whole video. Resolves once the core has taken it. */
+  /** Sends a request about the selected Scenes, or the whole video; it queues while the video is busy. */
   send: (text: string) => Promise<boolean>;
+  /** Runs the queue paused by a quit, a crash or a Stop. */
+  resumeQueue: () => void;
   stop: () => void;
 };
 
-type NewMessage = Omit<ChatMessage, "id">;
-
-/** What the chat says when a Revision ends in each way; states that don't end one say nothing. */
-const ENDINGS: Partial<Record<RevisionStatus["state"], (status: RevisionStatus, scenes: TimelineScene[]) => NewMessage[]>> = {
-  answered: ({ reply }) => [{ role: "agent", text: reply || "No change was needed." }],
-  done: ({ summary, version, notApplied = [], previewError }, scenes) => [
-    { role: "agent", text: summary ?? "Done." },
-    { role: "event", text: `Version ${version}` },
-    ...notApplied.map((sceneId) => ({ role: "note" as const, isProblem: true, text: `Couldn't apply to ${nameOf(scenes, sceneId)}; it keeps its previous code.` })),
-    ...[previewError]
-      .filter((problem) => problem !== undefined)
-      .map((problem) => ({ role: "note" as const, isProblem: true, text: `The new Version is saved but can't be shown: ${problem.message}` })),
-  ],
-  failed: ({ error }) => [{ role: "note", isProblem: true, text: failureText(error) }],
-  stopped: () => [{ role: "note", text: "Stopped. The video is as it was." }],
-};
-
-let nextId = 1;
+let nextNote = 1;
 
 /** The open video's Revisions and the chat they come from: one per window. */
 export const useRevision = create<RevisionStore>((set, get) => {
   let video: VideoRef | undefined;
 
-  function say(...messages: NewMessage[]) {
-    set((state) => ({ messages: [...state.messages, ...messages.map((message) => ({ ...message, id: nextId++ }))] }));
-  }
-
-  /** Says in chat how a Revision ended, once: a status already ended before this window followed says nothing. */
-  function ended(status: RevisionStatus, before: RevisionStatus | undefined) {
-    if (!before || before.state === status.state) {
-      return;
-    }
-
-    say(...(ENDINGS[status.state]?.(status, useOpenVideo.getState().preview?.timeline.scenes ?? []) ?? []));
+  function note(text: string) {
+    set(({ notes }) => ({ notes: [...notes, { id: `note-${nextNote++}`, role: "note", isProblem: true, text }] }));
   }
 
   return {
     selection: [],
-    messages: [],
+    notes: [],
     chatFocus: 0,
     toggleScene: (sceneId, additive) => set(({ selection }) => ({ selection: toggled(selection, sceneId, additive) })),
     clearSelection: () => set({ selection: [] }),
@@ -84,18 +63,23 @@ export const useRevision = create<RevisionStore>((set, get) => {
     follow: (followed) => {
       video = followed;
       const controller = new AbortController();
-      set({ status: undefined, selection: [], messages: [] });
+      set({ status: undefined, chat: undefined, selection: [], notes: [] });
 
       void (async () => {
         for await (const status of await core.video.revision(followed, { signal: controller.signal })) {
           const before = get().status;
           set({ status });
-          ended(status, before);
 
           // The new Version plays as `video.open` builds it: with the video's Captions choice and its review notes.
           if (status.state === "done" && before?.state !== "done" && status.version !== undefined) {
             useGeneration.getState().reopen();
           }
+        }
+      })().catch(() => undefined);
+
+      void (async () => {
+        for await (const chat of await core.video.chat(followed, { signal: controller.signal })) {
+          set({ chat });
         }
       })().catch(() => undefined);
 
@@ -113,11 +97,10 @@ export const useRevision = create<RevisionStore>((set, get) => {
       }
 
       const scope = get().selection;
-      say({ role: "creator", text, scope });
-      const { error } = await safe(core.video.revise({ ...video, message: text, scope }));
+      const { error } = await safe(core.video.send({ ...video, message: text, scope }));
 
       if (error) {
-        say({ role: "note", isProblem: true, text: reviseErrorMessage(error) });
+        note(sendErrorMessage(error));
 
         return false;
       }
@@ -125,6 +108,11 @@ export const useRevision = create<RevisionStore>((set, get) => {
       set({ selection: [] });
 
       return true;
+    },
+    resumeQueue: () => {
+      if (video) {
+        void safe(core.video.resumeQueue(video));
+      }
     },
     stop: () => {
       if (video) {
@@ -158,6 +146,11 @@ export function isRevising(status: RevisionStatus | undefined) {
   return status?.state === "revising" || status?.state === "rebuilding" || status?.state === "saving";
 }
 
+/** The requests waiting their turn. */
+export function queuedCount(chat: ChatStatus | undefined) {
+  return chat?.entries.filter(({ state }) => state === "queued").length ?? 0;
+}
+
 export function nameOf(scenes: TimelineScene[], sceneId: string) {
   const scene = scenes.find(({ id }) => id === sceneId);
 
@@ -166,6 +159,46 @@ export function nameOf(scenes: TimelineScene[], sceneId: string) {
   }
 
   return sceneName(scene);
+}
+
+type NewMessage = Omit<ChatMessage, "id">;
+
+/** What the chat says after a request, by where it stands; a request still waiting or running says nothing yet. */
+const OUTCOMES = {
+  queued: () => [],
+  running: () => [],
+  answered: ({ reply }) => [{ role: "agent", text: reply || "No change was needed." }],
+  done: ({ summary, version, notApplied = [] }, scenes) => [
+    { role: "agent", text: summary ?? "Done." },
+    { role: "event", text: `Version ${version}` },
+    ...notApplied.map((sceneId) => ({ role: "note" as const, isProblem: true, text: `Couldn't apply to ${nameOf(scenes, sceneId)}; it keeps its previous code.` })),
+  ],
+  failed: ({ error }) => [{ role: "note", isProblem: true, text: failureText(error) }],
+  stopped: () => [{ role: "note", text: "Stopped. The video is as it was." }],
+  closed: () => [{ role: "note", text: "MotionBrief closed before this Revision finished. The video is as it was." }],
+  refused: ({ refused }) => [{ role: "note", isProblem: true, text: REFUSALS[refused ?? ""] ?? "This request couldn't run." }],
+} satisfies Record<ChatRequestState, (entry: ChatEntry, scenes: TimelineScene[]) => NewMessage[]>;
+
+/** Why a queued request couldn't run once its turn came, per error code. */
+const REFUSALS: Record<string, string> = {
+  NOT_GENERATED: "This couldn't run: the video had no Version to revise.",
+  UNKNOWN_SCENE: "This couldn't run: a Scene it was about isn't in the video any more.",
+  UNKNOWN_PROJECT: "This couldn't run: the Project was closed.",
+};
+
+/** The chat's lines, in the order they happened. */
+export function chatLines(entries: ChatEntry[], scenes: TimelineScene[]): ChatMessage[] {
+  return entries.flatMap((entry) => entryLines(entry, scenes).map((line, index) => ({ ...line, id: `${entry.id}-${index}` })));
+}
+
+function entryLines(entry: ChatEntry, scenes: TimelineScene[]): NewMessage[] {
+  if (entry.kind === "restore") {
+    return [{ role: "event", text: `Version ${entry.version} · Restored Version ${entry.restoredFrom}` }];
+  }
+
+  const state = entry.state ?? "queued";
+
+  return [{ role: "creator", text: entry.message ?? "", scope: entry.scope, isQueued: state === "queued" }, ...OUTCOMES[state](entry, scenes)];
 }
 
 function failureText(error: RevisionError | undefined) {
@@ -197,18 +230,16 @@ function issueText(issue: { message: string } | undefined) {
   return `: ${issue.message}`;
 }
 
-/** Why the core wouldn't start a Revision, per error code it answers with. */
-const REVISE_ERRORS: Record<string, string> = {
-  REVISING: "A Revision is already running. Wait for it, or stop it.",
-  NOT_GENERATED: "The video can be revised once it is generated.",
-  UNKNOWN_SCENE: "A selected Scene isn't in the video any more. Select the Scenes again.",
+/** Why the core wouldn't take a request, per error code it answers with. */
+const SEND_ERRORS: Record<string, string> = {
   UNKNOWN_PROJECT: "This Project was closed. Go back to Home and open it again.",
+  FILE_FAILED: "The request couldn't be saved in the Project folder. Try again.",
 };
 
-function reviseErrorMessage(error: unknown) {
+function sendErrorMessage(error: unknown) {
   if (!(error instanceof ORPCError) || !error.defined) {
     return "Something went wrong talking to the MotionBrief core. Try again.";
   }
 
-  return REVISE_ERRORS[error.code] ?? `Couldn't start the Revision: ${error.message}`;
+  return SEND_ERRORS[error.code] ?? `Couldn't send the request: ${error.message}`;
 }
