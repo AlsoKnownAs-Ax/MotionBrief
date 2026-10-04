@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
+import type { Treatments } from "../../contract";
 
 const require = createRequire(import.meta.url);
 
@@ -25,10 +26,11 @@ export type InlinedIcons = {
 };
 
 /**
- * Replaces every icon placeholder with the icon's inline SVG. The placeholder's id, class and
- * other attributes move to the SVG, which gets `mb-icon` (a 1em box drawn in `currentColor`).
+ * Replaces every icon placeholder with the icon's inline SVG, an `mb-icon` (a 1em box drawn in
+ * `currentColor`). The placeholder's id, class and other attributes move to the SVG, or, in a chip
+ * treatment, to the 1em `mb-chip` around it, so Scene code sizes and places icons the same way in all three.
  */
-export async function inlineIcons(html: string): Promise<InlinedIcons> {
+export async function inlineIcons(html: string, treatment: Treatments["icons"] = "outline"): Promise<InlinedIcons> {
   const names = [...new Set([...html.matchAll(ICON_PLACEHOLDER)].map((match) => match[2] ?? ""))];
   const svgs = new Map(await Promise.all(names.map(async (name) => [name, await iconSvg(name)] as const)));
 
@@ -40,7 +42,7 @@ export async function inlineIcons(html: string): Promise<InlinedIcons> {
         return "";
       }
 
-      return withAttributes(svg, `${before} ${after}`);
+      return withAttributes(svg, `${before} ${after}`, treatment);
     }),
     unknownIcons: names.filter((name) => !svgs.get(name)),
   };
@@ -87,11 +89,18 @@ async function readIcon(path: string): Promise<string | undefined> {
   }
 }
 
-/** Puts the placeholder's attributes on the SVG root, joining its classes with `mb-icon`. */
-function withAttributes(svg: string, attributes: string): string {
+/** Puts the placeholder's attributes on the SVG root, or on the chip around it, joining its classes with `mb-icon` or `mb-chip`. */
+function withAttributes(svg: string, attributes: string, treatment: Treatments["icons"]): string {
   const classes = /\bclass="([^"]*)"/.exec(attributes)?.[1] ?? "";
   const others = attributes.replace(/\bclass="[^"]*"/, "").replace(/\s+/g, " ").trim();
-  const opening = ["<svg", `class="${`mb-icon ${classes}`.trim()}"`, others].filter(Boolean).join(" ");
 
-  return svg.replace("<svg", opening);
+  if (treatment === "outline") {
+    return svg.replace("<svg", openingTag("<svg", `mb-icon ${classes}`, others));
+  }
+
+  return `${openingTag("<span", `mb-chip ${classes}`, others)}>${svg.replace("<svg", '<svg class="mb-icon"')}</span>`;
+}
+
+function openingTag(start: string, classes: string, others: string): string {
+  return [start, `class="${classes.trim()}"`, others].filter(Boolean).join(" ");
 }

@@ -1,6 +1,8 @@
 // The frame's motion helpers, `MB.*`, which Scene code calls inside the page. Loaded once by the root
 // page after GSAP; reads window.MB_DATA, which the Assembler injects: each unit's duration and the
-// anchor time of every Storyboard element, in seconds from the unit's start.
+// anchor time of every Storyboard element, in seconds from the unit's start, and the defaults the
+// Style Preset's Motion and connector treatment set.
+/* global gsap */
 (function () {
   "use strict";
 
@@ -79,6 +81,62 @@
     return { x: cx + dx * s, y: cy + dy * s };
   }
 
+  /** The point a fraction `s` of the way along a connector: a straight line, or the S-curve MB.connect draws. */
+  function along(start, end, curve, s) {
+    if (!curve) {
+      return { x: start.x + (end.x - start.x) * s, y: start.y + (end.y - start.y) * s };
+    }
+
+    var mid = (start.x + end.x) / 2;
+    var u = 1 - s;
+
+    return {
+      x: u * u * u * start.x + 3 * u * u * s * mid + 3 * u * s * s * mid + s * s * s * end.x,
+      y: u * u * u * start.y + 3 * u * u * s * start.y + 3 * u * s * s * end.y + s * s * s * end.y,
+    };
+  }
+
+  /**
+   * A hand-drawn connector: the clean one, wobbling sideways in short quadratic segments. The wobble
+   * is seeded from the path, so every seek draws the same line; the ends stay on the box edges.
+   */
+  function sketchyPath(key, start, end, curve) {
+    var seed = 0;
+
+    for (var i = 0; i < key.length; i++) {
+      seed = (seed * 31 + key.charCodeAt(i)) % 9973;
+    }
+
+    function random() {
+      seed = (seed * 7919 + 17) % 9973;
+      return seed / 9973 - 0.5;
+    }
+
+    var length = Math.hypot(end.x - start.x, end.y - start.y);
+    var segments = Math.max(2, Math.round(length / 90));
+    var amplitude = Math.min(6, 2 + length / 250);
+    var nx = -(end.y - start.y) / (length || 1);
+    var ny = (end.x - start.x) / (length || 1);
+    var d = "M" + start.x + " " + start.y;
+
+    for (var k = 1; k <= segments; k++) {
+      var control = along(start, end, curve, (k - 0.5) / segments);
+      var point = along(start, end, curve, k / segments);
+      var bend = random() * amplitude * 1.6;
+      var drift = k === segments ? 0 : random() * amplitude;
+
+      d += " Q" + (control.x + nx * bend).toFixed(1) + " " + (control.y + ny * bend).toFixed(1);
+      d += " " + (point.x + nx * drift).toFixed(1) + " " + (point.y + ny * drift).toFixed(1);
+    }
+
+    return d;
+  }
+
+  /** Overshooting eases would push a wipe or a blur past its end state, so those settle instead. */
+  function settles(from) {
+    return from.clipPath !== undefined || from.filter !== undefined;
+  }
+
   window.MB = {
     /** The frame contract this runtime implements. */
     version: data().contractVersion,
@@ -106,19 +164,23 @@
       };
     },
 
-    /** An entrance on the spoken word: it starts 50 ms early with an ease-out. Styles: rise, drop, left, right, pop, fade, blur, wipe. */
+    /**
+     * An entrance on the spoken word: it starts 50 ms early with the Motion's ease-out. Styles: rise,
+     * drop, left, right, pop, fade, blur, wipe; the Motion picks one when none is given.
+     */
     reveal: function (tl, target, time, style, options) {
       var o = options || {};
       var motion = data().motion;
       var pair = STYLES[style || motion.reveal] || STYLES.rise;
-      var to = Object.assign({}, pair[1], { duration: o.duration || motion.duration, ease: o.ease || motion.ease, stagger: o.stagger || 0 });
+      var ease = o.ease || (settles(pair[0]) ? motion.settle : motion.ease);
+      var to = Object.assign({}, pair[1], { duration: o.duration || motion.duration, ease: ease, stagger: o.stagger || 0 });
 
       tl.fromTo(target, Object.assign({}, pair[0], o.from || {}), to, Math.max(0, time - LEAD));
 
       return tl;
     },
 
-    /** Draws SVG strokes on, landing like MB.reveal: 50 ms early with an ease-out. */
+    /** Draws SVG strokes on, landing like MB.reveal: 50 ms early with an ease-out that never overshoots. */
     draw: function (tl, target, time, options) {
       var o = options || {};
       var motion = data().motion;
@@ -130,7 +192,7 @@
         tl.fromTo(
           path,
           { strokeDashoffset: length },
-          { strokeDashoffset: 0, duration: o.duration || 1.3 * motion.duration, ease: o.ease || motion.ease },
+          { strokeDashoffset: 0, duration: o.duration || 1.3 * motion.duration, ease: o.ease || motion.settle },
           Math.max(0, time - LEAD),
         );
       });
@@ -140,8 +202,9 @@
 
     /**
      * Lays an SVG <path> out as a connector between two elements, measured from the layout: it runs
-     * between their box edges, `gap` px out. The path's <svg class="mb-wire"> sits in the elements'
-     * common container. The only way to draw a connector; call it before MB.draw.
+     * between their box edges, `gap` px out, straight or curved and clean or hand-drawn as the Style
+     * Preset says. The path's <svg class="mb-wire"> sits in the elements' common container. The only
+     * way to draw a connector; call it before MB.draw.
      */
     connect: function (path, from, to, options) {
       var o = options || {};
@@ -160,7 +223,9 @@
       var curve = o.curve === undefined ? data().connector.curve : o.curve;
       var d = "M" + start.x + " " + start.y;
 
-      if (curve) {
+      if (data().connector.sketchy) {
+        d = sketchyPath((element.id || "") + start.x + end.y, start, end, curve);
+      } else if (curve) {
         var mid = (start.x + end.x) / 2;
         d += " C" + mid + " " + start.y + " " + mid + " " + end.y + " " + end.x + " " + end.y;
       } else {
@@ -186,7 +251,7 @@
           y: box.y + box.h / 2 - element.offsetHeight / 2 - element.offsetTop,
         };
       });
-      var leg = (o.duration || 0.6 * (points.length - 1)) / (points.length - 1);
+      var leg = (o.duration || 0.6 * data().motion.pace * (points.length - 1)) / (points.length - 1);
 
       tl.fromTo(element, { x: points[0].x, y: points[0].y, opacity: 0 }, { x: points[0].x, y: points[0].y, opacity: 1, duration: 0.2 }, Math.max(0, time - LEAD));
 
@@ -214,7 +279,7 @@
         { value: o.from || 0 },
         {
           value: value,
-          duration: o.duration || 1.2,
+          duration: o.duration || 1.2 * data().motion.pace,
           ease: o.ease || "power2.out",
           onUpdate: function () {
             element.textContent = format(state.value);
@@ -256,10 +321,24 @@
       var o = options || {};
       var motion = data().motion;
 
-      tl.to(target, { scale: o.scale || 1.08, color: o.color || "var(--accent)", duration: 0.2, ease: "power2.out" }, time);
-      tl.to(target, { scale: 1, duration: 0.4, ease: motion.ease }, time + 0.2);
+      tl.to(target, { scale: o.scale || motion.emphasis, color: o.color || "var(--accent)", duration: 0.2, ease: "power2.out" }, time);
+      tl.to(target, { scale: 1, duration: 0.4 * motion.pace, ease: motion.ease }, time + 0.2);
 
       return tl;
+    },
+
+    /**
+     * Owned by the frame, never called by Scene code: plays a unit's timeline at the Motion's reduced
+     * frame rate by stepping its time, holding each frame until the next. Steps never run ahead, so
+     * nothing shows before its word; MB's short stepped entrances still arrive by its word + 0.1 s.
+     */
+    quantize: function (tl, duration) {
+      var steps = Math.max(1, Math.round(duration * data().motion.fps));
+      var stepped = gsap.timeline({ paused: true });
+
+      stepped.fromTo(tl, { time: 0 }, { time: duration, duration: duration, ease: "steps(" + steps + ")" }, 0);
+
+      return stepped;
     },
   };
 })();

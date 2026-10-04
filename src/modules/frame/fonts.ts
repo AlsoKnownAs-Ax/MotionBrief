@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
-import type { FontFamily } from "./tokens";
+import type { FontFamily, Typography } from "../../contract";
 
 const require = createRequire(import.meta.url);
 
@@ -16,6 +16,11 @@ type BundledFont = {
 const BUNDLED_FONTS = {
   Inter: { slug: "inter", package: "@fontsource/inter", weights: [400, 600, 700, 800] },
   "JetBrains Mono": { slug: "jetbrains-mono", package: "@fontsource/jetbrains-mono", weights: [400, 700] },
+  Manrope: { slug: "manrope", package: "@fontsource/manrope", weights: [400, 600, 700, 800] },
+  "IBM Plex Mono": { slug: "ibm-plex-mono", package: "@fontsource/ibm-plex-mono", weights: [400, 500, 700] },
+  Fredoka: { slug: "fredoka", package: "@fontsource/fredoka", weights: [400, 600, 700] },
+  Nunito: { slug: "nunito", package: "@fontsource/nunito", weights: [400, 700, 800] },
+  VT323: { slug: "vt323", package: "@fontsource/vt323", weights: [400] },
 } satisfies Record<FontFamily, BundledFont>;
 
 /** A file the page needs, copied from `from` to `path` relative to the page. */
@@ -23,10 +28,15 @@ export type FontFile = { path: string; from: string };
 
 export type BundledFonts = { files: FontFile[]; css: string };
 
-/** `@font-face` rules for every bundled font, and the files they load from `assets/fonts/`. */
-export async function bundledFonts(): Promise<BundledFonts> {
+/** `@font-face` rules for the families a typography uses, and the files they load from `assets/fonts/`. */
+export async function bundledFonts(typography: Typography): Promise<BundledFonts> {
+  const families = [...new Set([typography.display, typography.body, typography.label, typography.mono].map(({ family }) => family))];
   const fonts = await Promise.all(
-    Object.entries(BUNDLED_FONTS).map(async ([family, font]) => ({ family, font, subsets: await subsetsOf(font) })),
+    families.map(async (family) => {
+      const font = BUNDLED_FONTS[family];
+
+      return { family, font, subsets: await subsetsOf(font) };
+    }),
   );
   const faces = fonts.flatMap(({ family, font, subsets }) =>
     font.weights.flatMap((weight) =>

@@ -271,6 +271,11 @@ const PRESET_TRANSITION = {
   camera: "camera",
 } satisfies Record<TransitionType, PresetTransition>;
 
+/** The Storyboard Transitions a Style Preset's allowed set lets a Storyboard use. */
+export function transitionTypesFor(allowed: PresetTransition[]): TransitionType[] {
+  return (Object.keys(PRESET_TRANSITION) as TransitionType[]).filter((type) => allowed.includes(PRESET_TRANSITION[type]));
+}
+
 /**
  * Every Scene but the last names the Transition into the next one, drawn from the Style Preset's
  * allowed set. Camera moves happen exactly between Scenes on the same Canvas; a carry-over morphs

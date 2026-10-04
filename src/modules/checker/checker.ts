@@ -1,9 +1,9 @@
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CheckFinding, StoryboardIssue, StoryboardRules, StoryboardTranscript, UnitCode } from "../../contract";
+import type { CheckFinding, StoryboardIssue, StoryboardRules, StoryboardTranscript, StylePreset, UnitCode } from "../../contract";
 import { assemble, planUnits, type AssembledPage } from "../assembler";
-import { FRAME_CONTRACT_VERSION, inlineIcons, type FrameTokens } from "../frame";
+import { FRAME_CONTRACT_VERSION, inlineIcons } from "../frame";
 import { validateStoryboard } from "../storyboard";
 import { checkContract } from "./contract";
 import { runHyperframesCheck, type HyperframesError } from "./hyperframes";
@@ -19,7 +19,8 @@ export type CheckInput = {
   storyboard: unknown;
   transcript: StoryboardTranscript;
   rules: StoryboardRules;
-  tokens: FrameTokens;
+  /** The video's Style Preset snapshot, which the frame draws the units in. */
+  preset: StylePreset;
   /** Scene code per unit id; a unit without code is drawn as its fallback Scene. */
   code: Record<string, UnitCode>;
 };
@@ -50,7 +51,7 @@ export type Checker = ReturnType<typeof createChecker>;
  * contract, and reports every finding against the unit it belongs to.
  */
 export function createChecker({ chromePath }: CheckerOptions) {
-  async function check({ storyboard: raw, transcript, rules, tokens, code }: CheckInput): Promise<CheckResult> {
+  async function check({ storyboard: raw, transcript, rules, preset, code }: CheckInput): Promise<CheckResult> {
     const { data: storyboard, error } = validateStoryboard(raw, transcript, rules);
 
     if (error) {
@@ -71,7 +72,7 @@ export function createChecker({ chromePath }: CheckerOptions) {
     const dir = await mkdtemp(join(tmpdir(), "motionbrief-check-"));
 
     try {
-      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, tokens, code });
+      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, preset, code });
 
       if (assembleError) {
         return { data: null, error: assembleError };

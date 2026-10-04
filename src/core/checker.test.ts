@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { CheckFinding, UnitCode } from "../contract";
 import storyboard from "./fixtures/checker/storyboard.json";
 import transcript from "./fixtures/checker/transcript.json";
-import { BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
+import { BLUEPRINT, BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
 
 /** Scene code for a unit, as hand-written in `fixtures/checker/<variant>/<unit>.{css,html,js}`. */
 async function unitCode(variant: string, unit: string): Promise<UnitCode> {
@@ -23,7 +23,7 @@ describe("Checker", () => {
   it(
     "passes hand-written, token-only Scene code with no findings",
     async () => {
-      const report = await connect().checker.check({ storyboard, transcript, rules: RULES, code: await goodCode() });
+      const report = await connect().checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code: await goodCode() });
 
       expect(report).toEqual({ frameContractVersion: "1.0.0", findings: [] });
     },
@@ -35,7 +35,7 @@ describe("Checker", () => {
 
     beforeAll(async () => {
       const code = { s01: await unitCode("faulty", "s01"), s02: await unitCode("faulty", "s02") };
-      ({ findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, code }));
+      ({ findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code }));
     }, BROWSER_TIMEOUT_MS);
 
     it("reports a Storyboard element missing from the page", () => {
@@ -99,7 +99,7 @@ describe("Checker", () => {
     it("an invalid Storyboard, with its issues", async () => {
       const invalid = { ...storyboard, scenes: [storyboard.scenes[0], { ...storyboard.scenes[1], id: "s01" }] };
 
-      const check = connect().checker.check({ storyboard: invalid, transcript, rules: RULES, code: {} });
+      const check = connect().checker.check({ storyboard: invalid, transcript, rules: RULES, preset: BLUEPRINT, code: {} });
 
       await expect(check).rejects.toMatchObject({
         code: "INVALID_STORYBOARD",
@@ -110,7 +110,7 @@ describe("Checker", () => {
     it("code for a unit the Storyboard doesn't have", async () => {
       const code = { s01: await unitCode("good", "s01"), s03: await unitCode("good", "s02") };
 
-      const check = connect().checker.check({ storyboard, transcript, rules: RULES, code });
+      const check = connect().checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code });
 
       await expect(check).rejects.toMatchObject({ code: "UNKNOWN_UNIT", data: { unit: "s03", units: ["s01", "s02"] } });
     });
@@ -118,7 +118,7 @@ describe("Checker", () => {
     it("without the pinned chrome-headless-shell, saying where it should be", async () => {
       const chromePath = join(import.meta.dirname, "no-such-chrome");
 
-      const check = connect({ chromePath }).checker.check({ storyboard, transcript, rules: RULES, code: await goodCode() });
+      const check = connect({ chromePath }).checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code: await goodCode() });
 
       await expect(check).rejects.toMatchObject({ code: "CHECKER_UNAVAILABLE", data: { cause: "CHROME_MISSING", detail: chromePath } });
     });
@@ -129,7 +129,7 @@ describe("Checker", () => {
     async () => {
       const code = { s01: await unitCode("good", "s01"), s02: await unitCode("lint", "s02") };
 
-      const { findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, code });
+      const { findings } = await connect().checker.check({ storyboard, transcript, rules: RULES, preset: BLUEPRINT, code });
 
       expect(located(findings).filter(({ source }) => source === "lint")).toEqual([
         { unit: "s02", source: "lint", code: "font_family_without_font_face", selector: expect.any(String) },

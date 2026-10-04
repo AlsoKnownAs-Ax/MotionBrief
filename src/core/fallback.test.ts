@@ -3,13 +3,13 @@ import type { StoryboardRules } from "../contract";
 import horizontal from "./fixtures/storyboard/horizontal.json";
 import transcript from "./fixtures/storyboard/transcript.json";
 import verticalCaptions from "./fixtures/storyboard/vertical-captions.json";
-import { BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
+import { BLUEPRINT, BROWSER_TIMEOUT_MS, connect, RULES } from "./test-support/checker";
 
 describe("fallback Scenes", () => {
   it(
     "draw every Scene Type, and a Canvas, so that they pass every check in horizontal",
     async () => {
-      const report = await connect().checker.check({ storyboard: horizontal, transcript, rules: RULES, code: {} });
+      const report = await connect().checker.check({ storyboard: horizontal, transcript, rules: RULES, preset: BLUEPRINT, code: {} });
 
       expect(report.findings).toEqual([]);
     },
@@ -21,7 +21,7 @@ describe("fallback Scenes", () => {
     async () => {
       const rules: StoryboardRules = { ...RULES, format: "vertical", captions: true };
 
-      const report = await connect().checker.check({ storyboard: verticalCaptions, transcript, rules, code: {} });
+      const report = await connect().checker.check({ storyboard: verticalCaptions, transcript, rules, preset: BLUEPRINT, code: {} });
 
       expect(report.findings).toEqual([]);
     },

@@ -1,0 +1,7 @@
+.lc-stat { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 34px; text-align: center; }
+.lc-number { font-size: 200px; color: var(--accent); }
+.lc-row { display: flex; align-items: center; gap: 24px; }
+.lc-code { padding: 22px 30px; }
+.lc-key { color: var(--accent2); }
+.lc-hit { display: flex; align-items: center; gap: 14px; padding: 18px 28px; border-radius: 999px; background: color-mix(in srgb, var(--good) 18%, transparent); color: var(--good); }
+.lc-hit-icon { font-size: 44px; }
