@@ -97,15 +97,18 @@ type UnitRun = AgentRun & {
   preset: StylePreset;
   brief: PresetBrief;
   unit: Unit;
+  /** What the Checker finds on the page with no unit's code, so page-wide findings the unit didn't cause are told apart. */
+  baseline: CheckFinding[];
   /** The unit is being written (`attempts` handed in so far) or checked. */
   onProgress: (status: "writing" | "checking", attempts: number) => void;
 };
 
 /**
  * A Scene-code subagent: writes one unit, which the Checker checks on its own (every other unit drawn
- * as its fallback Scene), and rewrites it with the findings at most twice.
+ * as its fallback Scene), and rewrites it with the findings at most twice. A finding that names no unit
+ * counts against it unless the page has it without the unit's code too.
  */
-export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, onProgress, ...run }: UnitRun): Promise<UnitOutcome> {
+export async function writeUnitCode({ checker, storyboard, transcript, rules, preset, brief, unit, baseline, onProgress, ...run }: UnitRun): Promise<UnitOutcome> {
   let submitted: UnitCode | undefined;
   const submit = defineHostTool({
     name: SCENE_CODE_TOOL,
@@ -152,7 +155,8 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
         return { data: { code: null, attempts, reason: `The checks couldn't run: ${error.code}` }, error: null };
       }
 
-      const findings = report.findings.filter((finding) => finding.unit === unit.id);
+      const known = new Set(baseline.map(findingKey));
+      const findings = report.findings.filter((finding) => finding.unit === unit.id || (finding.unit === undefined && !known.has(findingKey(finding))));
 
       if (findings.length === 0) {
         return { data: { code, attempts }, error: null };
@@ -170,6 +174,10 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
   }
 
   return outcome.data;
+}
+
+function findingKey({ source, code, message, selector }: CheckFinding): string {
+  return JSON.stringify([source, code, message, selector]);
 }
 
 /** The findings a fallback is flagged with. */

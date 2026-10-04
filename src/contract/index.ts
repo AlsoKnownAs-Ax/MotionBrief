@@ -428,6 +428,9 @@ export const GenerationUnitSchema = z.object({
   attempts: z.number().int().nonnegative(),
 });
 
+/** Why the video so far couldn't be shown, such as its Voiceover having moved. */
+export const GenerationPreviewErrorSchema = z.object({ code: z.string(), message: z.string() });
+
 export const GenerationStatusSchema = z.object({
   /** `idle` until Generate is pressed; `planning` while the Storyboard is written; `writing` while its units are. */
   state: z.enum(["idle", "planning", "writing", "done", "failed"]),
@@ -435,6 +438,8 @@ export const GenerationStatusSchema = z.object({
   units: z.array(GenerationUnitSchema),
   /** The video so far, once the Storyboard is valid: it plays as units finish, the rest as the Storyboard animatic. */
   preview: PreviewSchema.optional(),
+  /** Set while the newest preview couldn't be built; `preview`, if any, is then an older one. The generation carries on. */
+  previewError: GenerationPreviewErrorSchema.optional(),
   /** The Version the generation saved, once `done`. */
   version: z.number().int().positive().optional(),
   error: GenerationErrorSchema.optional(),
@@ -729,3 +734,4 @@ export type GenerationEstimate = z.infer<typeof GenerationEstimateSchema>;
 export type GenerationError = z.infer<typeof GenerationErrorSchema>;
 export type GenerationUnit = z.infer<typeof GenerationUnitSchema>;
 export type GenerationStatus = z.infer<typeof GenerationStatusSchema>;
+export type GenerationPreviewError = z.infer<typeof GenerationPreviewErrorSchema>;

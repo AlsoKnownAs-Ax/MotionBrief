@@ -1,0 +1,3 @@
+.list { display: flex; flex-direction: column; justify-content: center; gap: 28px; }
+.item { display: flex; align-items: center; gap: 24px; padding: 22px 32px; width: 720px; }
+.item .mb-icon { font-size: 48px; color: var(--accent2); }

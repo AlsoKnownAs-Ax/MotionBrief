@@ -128,6 +128,7 @@ export function Editor() {
     <main className="flex min-h-0 flex-1 flex-col">
       <div className="flex min-h-0 flex-1">
         <section aria-label="Player" className="flex min-w-0 flex-1 flex-col gap-3 px-5 pt-4 pb-3.5">
+          <GenerationNotice />
           <Player preview={preview} />
           <Transport preview={preview} />
         </section>
@@ -162,15 +163,24 @@ export function Editor() {
 function GenerationStage() {
   const status = useGeneration((state) => state.status);
   const lostError = useGeneration((state) => state.lostError);
-  const error = status?.error ? generationErrorMessage(status.error) : lostError && `MotionBrief stopped hearing about the generation: ${lostError}`;
 
-  if (error) {
+  if (status?.error) {
     return (
       <main className="flex flex-1 items-center justify-center p-10">
         <p role="alert" className="flex max-w-[60ch] items-start gap-2 text-app-body text-status-fallback-ink">
           <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-          {error}
+          {generationErrorMessage(status.error)}
         </p>
+      </main>
+    );
+  }
+
+  if (lostError || status?.previewError) {
+    return (
+      <main className="flex flex-1 items-center justify-center p-10">
+        <div className="w-full max-w-[72ch]">
+          <GenerationNotice />
+        </div>
       </main>
     );
   }
@@ -192,4 +202,41 @@ function GenerationStage() {
       </div>
     </main>
   );
+}
+
+/**
+ * What keeps the creator from seeing the generation as it is: the window lost touch with it, or the newest
+ * preview couldn't be built. Either way the core carries on and saves every finished Scene.
+ */
+function GenerationNotice() {
+  const previewError = useGeneration((state) => state.status?.previewError);
+  const lostError = useGeneration((state) => state.lostError);
+  const reconnect = useGeneration((state) => state.reconnect);
+
+  if (lostError) {
+    return (
+      <div role="alert" className="flex items-center gap-2.5 rounded-md bg-status-fallback-tint px-3 py-2 text-app-sm text-status-fallback-ink">
+        <CircleAlertIcon aria-hidden="true" className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          Lost touch with the generation, so the video here may be out of date: {lostError} The generation may still be running.
+        </span>
+        <Button size="sm" onClick={reconnect}>
+          Reconnect
+        </Button>
+      </div>
+    );
+  }
+
+  if (previewError) {
+    return (
+      <div role="alert" className="flex items-center gap-2.5 rounded-md bg-status-fallback-tint px-3 py-2 text-app-sm text-status-fallback-ink">
+        <CircleAlertIcon aria-hidden="true" className="size-4 shrink-0" />
+        <span className="min-w-0 flex-1">
+          The newest Scenes can’t be shown: {previewError.message} Finished Scenes are still saved in the Project.
+        </span>
+      </div>
+    );
+  }
+
+  return null;
 }

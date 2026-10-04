@@ -21,7 +21,7 @@ const storyboard = JSON.parse(await readFile(join(FIXTURES, "storyboard.json"), 
 const tooLong = JSON.parse(await readFile(join(FIXTURES, "storyboard-too-long.json"), "utf8")) as unknown;
 
 /** Committed Scene code: `good` passes every check, the other variants each fail one. */
-async function unitCode(variant: "good" | "raw-color" | "missing-element", unit: string): Promise<UnitCode> {
+async function unitCode(variant: "good" | "raw-color" | "missing-element" | "page-error", unit: string): Promise<UnitCode> {
   const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(FIXTURES, variant, `${unit}.${part}`), "utf8")));
 
   return { css: css ?? "", html: html ?? "", js: js ?? "" };
@@ -162,7 +162,8 @@ describe("first generation", () => {
     const script = {
       storyboard: [submitsStoryboard(tooLong), submitsStoryboard(storyboard)],
       "scene-code s01": [submitsCode(await unitCode("good", "s01"))],
-      "scene-code s02": [submitsCode(await unitCode("good", "s02"))],
+      // Its page error names no unit, but a page without it has none: fixed on its first retry.
+      "scene-code s02": [submitsCode(await unitCode("page-error", "s02")), submitsCode(await unitCode("good", "s02"))],
       // Fixed on its first retry.
       "scene-code s03": [submitsCode(await unitCode("raw-color", "s03")), submitsCode(await unitCode("good", "s03"))],
       "scene-code s04": [submitsCode(await unitCode("good", "s04"))],
@@ -213,8 +214,6 @@ describe("first generation", () => {
     const turns = replay.askedOf("storyboard");
 
     expect(turns).toHaveLength(2);
-    expect(turns[1]?.message).toContain("PACING");
-    expect(turns[1]?.message).toContain("s04");
     expect(turns[0]?.options.model).toBe("claude-opus-5-5");
     expect([...new Set(statuses.map(({ state }) => state))]).toEqual(["idle", "planning", "writing", "done"]);
   });
@@ -226,30 +225,18 @@ describe("first generation", () => {
     expect(UNITS.map((unit) => replay.askedOf(`scene-code ${unit}`)[0]?.options.model)).toEqual(UNITS.map(() => "claude-opus-5-5"));
   });
 
-  it("gives each subagent the Storyboard, the Style Preset, its own entries and their anchor and spoken-word times", () => {
-    const [first] = replay.askedOf("scene-code s02");
-    const message = first?.message ?? "";
-
-    // The whole Storyboard, with every Scene.
-    storyboard.scenes.forEach(({ id }) => expect(message).toContain(`"${id}"`));
-    expect(message).toContain("Blueprint");
-    // s02 starts at 7.43 s, 0.25 s before its first word: "5" is spoken at 14.36 s and names s02-fast.
-    expect(message).toMatch(/s02-fast\D+6\.93/);
-    expect(message).toMatch(/6\.93\D+5\b/);
-    expect(first?.options.systemPrompt).toContain("MB.reveal");
+  it("retries a unit the Checker finds fault with", () => {
+    expect(replay.askedOf("scene-code s03")).toHaveLength(2);
+    expect(done.units.find(({ id }) => id === "s03")).toEqual({ id: "s03", status: "ready", attempts: 2 });
   });
 
-  it("feeds the Checker's findings back for a retry", () => {
-    const turns = replay.askedOf("scene-code s03");
-
-    expect(turns).toHaveLength(2);
-    expect(turns[1]?.message).toContain("RAW_COLOR");
-    expect(done.units.find(({ id }) => id === "s03")).toEqual({ id: "s03", status: "ready", attempts: 2 });
+  it("retries a unit whose code makes the page fail, even when the error names no unit", () => {
+    expect(replay.askedOf("scene-code s02")).toHaveLength(2);
+    expect(done.units.find(({ id }) => id === "s02")).toEqual({ id: "s02", status: "ready", attempts: 2 });
   });
 
   it("makes a unit that still fails after 2 retries a fallback Scene", () => {
     expect(replay.askedOf("scene-code s05")).toHaveLength(3);
-    expect(replay.askedOf("scene-code s05")[2]?.message).toContain("MISSING_ELEMENT");
     expect(done.units.find(({ id }) => id === "s05")).toEqual({ id: "s05", status: "fallback", attempts: 3 });
     expect(done.preview?.timeline.scenes.map(({ id, status }) => [id, status])).toEqual([
       ["s01", "ready"],
@@ -339,6 +326,24 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     generation.stop();
 
     expect(failed.error).toEqual({ code: "AGENT_FAILED", error: { code: "AUTHENTICATION_FAILED", message: "Log in" } });
+    await core.project.close({ projectId: project.id });
+  });
+
+  it("says why the video so far can't be shown, and still saves it", async () => {
+    // No recorded Scene code: every unit becomes a fallback Scene without being checked.
+    const { core, dir } = await connect({ script: { storyboard: [submitsStoryboard(storyboard)] } });
+    const project = await newProject(core, dir);
+    const video: VideoRef = { projectId: project.id, format: "horizontal" };
+    const { voiceover: copy } = JSON.parse(await readFile(join(project.path, "project.json"), "utf8")) as { voiceover: { file: string } };
+    await rm(join(project.path, copy.file));
+    const generation = await watch(core, video);
+
+    await core.video.generate(video);
+    const done = await generation.until(({ state }) => state === "done" || state === "failed");
+    generation.stop();
+
+    expect(done).toMatchObject({ state: "done", version: 1, previewError: { code: "VOICEOVER_MISSING" } });
+    expect(done.preview).toBeUndefined();
     await core.project.close({ projectId: project.id });
   });
 

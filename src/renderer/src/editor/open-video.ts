@@ -4,6 +4,7 @@ import { create } from "zustand";
 import { core } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
+import { usePlayback } from "./playback";
 import type { Preview } from "../../../contract";
 
 type OpenVideo = {
@@ -47,7 +48,9 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
     projectName: "",
     isStored: false,
     wordFixes: {},
-    open: (project, preview) =>
+    open: (project, preview) => {
+      // Only a page swapped for a newer one of the same video plays on.
+      usePlayback.setState({ resumes: false });
       set({
         projectId: project.id,
         projectName: project.name,
@@ -55,7 +58,8 @@ export const useOpenVideo = create<OpenVideo>((set, get) => {
         preview,
         wordFixes: {},
         fixError: undefined,
-      }),
+      });
+    },
     showPreview: (preview) => set({ preview }),
     fixWord: async (index, text) => {
       const { projectId, isStored, wordFixes } = get();

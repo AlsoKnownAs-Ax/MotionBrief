@@ -1,5 +1,7 @@
 import type {
+  CheckFinding,
   GenerationEstimate,
+  GenerationPreviewError,
   GenerationStatus,
   GenerationUnit,
   StylePreset,
@@ -13,7 +15,7 @@ import { planUnits, type Unit } from "../assembler";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
-import type { Previews } from "../preview";
+import type { PreviewError, Previews } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type VideoContent } from "../projects";
 import type { Storyboard } from "../storyboard";
 import { listPresets, presetBrief, storyboardRules } from "../style";
@@ -163,6 +165,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
       return failed(fileErrorOf(recordError));
     }
 
+    const baseline = await pageFindings(storyboard, transcript, rules, preset);
     await publish({ state: "writing" });
 
     const results = await inParallel(units, PARALLEL_UNITS, async (unit): Promise<FileFailure | undefined> => {
@@ -176,6 +179,7 @@ export function createGeneration({ connector, checker, previews, projects, clock
         preset,
         brief,
         unit,
+        baseline,
         onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
       });
 
@@ -232,13 +236,24 @@ export function createGeneration({ connector, checker, previews, projects, clock
         const units = [...progress.values()];
         const pending = Object.fromEntries(units.filter(({ status }) => isWork(status)).map(({ id, status }) => [id, status as UnitWork]));
         const { data: video } = await projects.video(ref.projectId, ref.format);
-        const { data: preview } = await previews.open({ storyboard, transcript, rules, preset, code: { ...code }, pending, voiceover: video?.voiceoverPath });
+        const source = { storyboard, transcript, rules, preset, code: { ...code }, pending, voiceover: video?.voiceoverPath };
+        const { preview, previewError } = await previews.open(source).then(
+          ({ data, error }) => ({ preview: data, previewError: error ? previewErrorOf(error) : undefined }),
+          (cause: unknown) => ({ preview: null, previewError: thrown(cause) }),
+        );
 
-        store.set({ ...store.get(), ...change, units, preview: preview ?? store.get().preview });
+        store.set({ ...store.get(), ...change, units, preview: preview ?? store.get().preview, previewError });
       });
 
       return last;
     };
+  }
+
+  /** The Checker's findings on the page with every unit as its fallback Scene; none when it can't run, so every page-wide finding counts. */
+  async function pageFindings(storyboard: Storyboard, transcript: Transcript, rules: ReturnType<typeof storyboardRules>, preset: StylePreset): Promise<CheckFinding[]> {
+    const { data: report } = await checker.check({ storyboard, transcript, rules, preset, code: {} });
+
+    return report?.findings ?? [];
   }
 
   /** Streams the generation of a video of an open Project: `idle` until Generate is pressed. */
@@ -298,6 +313,21 @@ function projectError(error: ProjectsError): GenerateError {
   }
 
   return { code: "FILE_FAILED", path: "", message: error.code };
+}
+
+function thrown(cause: unknown): GenerationPreviewError {
+  return { code: "PREVIEW_FAILED", message: cause instanceof Error ? cause.message : String(cause) };
+}
+
+function previewErrorOf(error: PreviewError): GenerationPreviewError {
+  switch (error.code) {
+    case "VOICEOVER_MISSING":
+      return { code: error.code, message: `The Voiceover isn't at ${error.path} any more.` };
+    case "INVALID_STORYBOARD":
+      return { code: error.code, message: error.issues.map((issue) => issue.message).join(" ") };
+    case "UNKNOWN_UNIT":
+      return { code: error.code, message: `The Storyboard has no unit ${error.unit}.` };
+  }
 }
 
 function cents(dollars: number): number {
