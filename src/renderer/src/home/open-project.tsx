@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { useToast } from "@renderer/components/toast";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
-import { core, orpc, queryClient } from "@renderer/core/connection";
+import { core, orpc, queryClient, rememberOpenProject } from "@renderer/core/connection";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
 import { openStoredVideo } from "@renderer/editor/stored-video";
 import { useNavigation } from "@renderer/navigation";
@@ -56,6 +56,7 @@ export async function openProject(path: string, { force = false } = {}) {
   }
 
   const { project, backupPath, recovered } = opened;
+  rememberOpenProject(project);
 
   if (backupPath) {
     useToast.getState().show({ text: `Updated "${project.name}" for this version of MotionBrief. Its old files are in ${backupPath}.` });

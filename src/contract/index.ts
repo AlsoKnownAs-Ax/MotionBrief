@@ -1006,7 +1006,18 @@ export const coreContract = {
      * an older schema forward after backing up its documents, and gives a copied folder its own id. A Project without
      * a saved Transcript starts transcribing; one with a Transcript, word fixes and all, is never transcribed again.
      */
-    open: oc.errors(PROJECT_ERRORS).input(LockedPathInput).output(OpenedProjectSchema),
+    open: oc
+      .errors(PROJECT_ERRORS)
+      .input(
+        LockedPathInput.extend({
+          /**
+           * Opens it again after the core restarted: takes a lock left on this computer by a holder that is gone, such as
+           * the crashed core, without asking. Any other lock still answers PROJECT_LOCKED.
+           */
+          reclaim: z.boolean().optional(),
+        }),
+      )
+      .output(OpenedProjectSchema),
     /** Renames a closed Project, which renames its folder. A lock left by anyone else needs `force`, as open does. */
     rename: oc.errors(PROJECT_ERRORS).input(LockedPathInput.extend({ name: z.string() })).output(ProjectSummarySchema),
     /** Copies a Project's folder beside it. The copy keeps the id until it is first opened, which gives it its own. */

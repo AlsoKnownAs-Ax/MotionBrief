@@ -277,6 +277,50 @@ describe("after a crash or quit mid-run", { timeout: RUN_TIMEOUT_MS }, () => {
   });
 });
 
+describe("after the core crashes mid-run", { timeout: RUN_TIMEOUT_MS }, () => {
+  it("the restarted core takes back the abandoned lock without asking and saves the run by Stop's rules", async () => {
+    const script = {
+      storyboard: [submitsStoryboard(storyboard)],
+      "scene-code s01": [submitsCode(await unitCode("good", "s01"))],
+    };
+    const crashed = await connect({ root, script });
+    const project = await newProject(crashed.core, crashed.dir);
+    const video: VideoRef = { projectId: project.id, format: "horizontal" };
+    ["s02", "s03", "s04", "s05"].forEach((unit) => crashed.replay.hold(`scene-code ${unit}`));
+    const generation = await watch(crashed.core, video);
+
+    await crashed.core.video.generate({ ...video, approved: true });
+    await generation.until((status) => unitStatuses(status).s01 === "ready");
+    generation.stop();
+    await kill(project.path);
+
+    // The window opens its Project again in the new core, as it does when main restarts it.
+    const restarted = await connect({ root, script: {}, dir: crashed.dir });
+    const opened = await restarted.core.project.open({ path: project.path, reclaim: true });
+    const resumed = await watch(restarted.core, video);
+
+    expect(opened).toMatchObject({ project: { id: project.id }, recovered: [{ format: "horizontal", version: 1 }] });
+    expect(resumed.statuses[0]).toMatchObject({ state: "idle" });
+    expect(await restarted.core.video.open(video)).toMatchObject({ version: 1 });
+    expect(restarted.replay.asked).toEqual([]);
+    resumed.stop();
+    await restarted.core.project.close({ projectId: project.id });
+  });
+
+  it("leaves a lock another running MotionBrief holds to the creator", async () => {
+    const { core, dir } = await connect({ root, script: {} });
+    const project = await newProject(core, dir);
+    await core.project.close({ projectId: project.id });
+    // The test runner's parent stands in for a MotionBrief still running on this computer.
+    await writeFile(join(project.path, ".lock"), JSON.stringify({ host: hostname(), pid: process.ppid }));
+
+    await expect(core.project.open({ path: project.path, reclaim: true })).rejects.toMatchObject({
+      code: "PROJECT_LOCKED",
+      data: { isThisComputer: true, isStale: false },
+    });
+  });
+});
+
 /** Leaves the Project as a killed app does: locked by a process that is gone. */
 async function kill(projectPath: string) {
   const { pid } = spawnSync(process.execPath, ["-e", ""]);

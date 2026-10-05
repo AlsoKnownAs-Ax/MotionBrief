@@ -1,6 +1,7 @@
 import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
-import { core, orpc, queryClient } from "@renderer/core/connection";
+import { useToast } from "@renderer/components/toast";
+import { closeProject, core, orpc, queryClient, rememberOpenProject, useCoreConnection } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import type { Format, GenerationError, GenerationStatus, GenerationStop, OpenedVideo, Project, StylePreset, VideoRef } from "../../../contract";
@@ -42,6 +43,8 @@ type GenerationStore = {
   showFormat: (format: Format) => void;
   /** Listens to the generation again after losing it; the core kept it going. */
   reconnect: () => void;
+  /** Follows the video again in a core restarted after a crash, which has opened the Project again. */
+  followRestartedCore: () => void;
   /** Plays the open Format's newest saved Version again, such as one a Revision just saved. */
   reopen: () => void;
   /** Stops the run; finished Scenes are kept and the rest become flagged fallbacks. */
@@ -156,6 +159,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     isReconnectOpen: false,
     follow: (project, video, opened) => {
       useOpenVideo.getState().open({ ...project, isStored: true }, opened?.preview);
+      rememberOpenProject(project);
       followed = project;
       show(video, opened);
     },
@@ -176,6 +180,22 @@ export const useGeneration = create<GenerationStore>((set, get) => {
 
       if (video) {
         listen(video);
+      }
+    },
+    followRestartedCore: () => {
+      const { video } = get();
+
+      if (!video) {
+        return;
+      }
+
+      // The old run went with the old core: opening the Project saved it by Stop's rules, and the old core's preview is gone.
+      set({ status: undefined, isStopping: false });
+      listen(video);
+      void openStored(video);
+
+      if (useCoreConnection.getState().recovered?.some(({ format }) => format === video.format)) {
+        useToast.getState().show({ text: RECOVERED_TEXT });
       }
     },
     reopen: () => {
@@ -223,10 +243,18 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       const { projectId, isStored } = useOpenVideo.getState();
       unfollow();
       if (isStored) {
-        void safe(core.project.close({ projectId }));
+        void closeProject(projectId);
       }
     },
   };
+});
+
+const RECOVERED_TEXT = "MotionBrief's core restarted while this video was being generated. Its finished Scenes are saved; the rest are flagged fallbacks to Retry.";
+
+useCoreConnection.subscribe(({ restarts }, before) => {
+  if (restarts !== before.restarts) {
+    useGeneration.getState().followRestartedCore();
+  }
 });
 
 /** Whether the generation is still writing the video, so it isn't complete yet. */

@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, AudioLinesIcon, CheckIcon, CircleAlertIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@renderer/components/ui/button";
-import { core, orpc, queryClient } from "@renderer/core/connection";
+import { closeProject, core, orpc, queryClient, rememberOpenProject } from "@renderer/core/connection";
 import { useGeneration } from "@renderer/editor/generation";
 import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
@@ -44,6 +44,13 @@ export function NewProject() {
     // Only a new drop starts a Project.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [droppedVoiceover]);
+
+  useEffect(() => {
+    // A rename moves the folder a restarted core opens the Project from.
+    if (project) {
+      rememberOpenProject(project);
+    }
+  }, [project]);
 
   useCloseOnLeave(project?.id);
 
@@ -87,7 +94,7 @@ function useCloseOnLeave(projectId: string | undefined) {
 
     return () => {
       if (useNavigation.getState().screen !== "editor") {
-        void safe(core.project.close({ projectId })).then(() => queryClient.invalidateQueries({ queryKey: orpc.project.list.key() }));
+        void closeProject(projectId).then(() => queryClient.invalidateQueries({ queryKey: orpc.project.list.key() }));
       }
     };
   }, [projectId]);

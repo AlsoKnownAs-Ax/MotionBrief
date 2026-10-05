@@ -200,7 +200,9 @@ export function createCoreRouter({
     },
     project: {
       list: api.project.list.handler(() => projects.list()),
-      open: api.project.open.handler(async ({ input: { path, force }, context }) => dataOrThrow(await projects.open(path, { force }, context))),
+      open: api.project.open.handler(async ({ input: { path, force, reclaim }, context }) =>
+        dataOrThrow(await projects.open(path, { force, reclaim }, context)),
+      ),
       rename: api.project.rename.handler(async ({ input: { path, name, force } }) => dataOrThrow(await projects.rename(path, name, { force }))),
       duplicate: api.project.duplicate.handler(async ({ input }) => dataOrThrow(await projects.duplicate(input.path))),
       delete: api.project.delete.handler(async ({ input: { path, force } }) => {

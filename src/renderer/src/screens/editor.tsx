@@ -6,6 +6,7 @@ import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { Progress } from "@renderer/components/ui/progress";
+import { useCoreConnection } from "@renderer/core/connection";
 import { ExportControl } from "@renderer/editor/export-control";
 import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, stopHeadline, useGeneration } from "@renderer/editor/generation";
@@ -168,6 +169,8 @@ function useFollowRevisions() {
   const projectId = useGeneration((state) => state.video?.projectId);
   const format = useGeneration((state) => state.video?.format);
   const follow = useRevision((state) => state.follow);
+  // A restarted core has the Project open again with any Revision discarded and the queue paused: follow it there.
+  const restarts = useCoreConnection((state) => state.restarts);
 
   useEffect(() => {
     if (!projectId || !format) {
@@ -175,7 +178,7 @@ function useFollowRevisions() {
     }
 
     return follow({ projectId, format });
-  }, [projectId, format, follow]);
+  }, [projectId, format, follow, restarts]);
 }
 
 function finishedUnits({ units }: GenerationStatus) {
