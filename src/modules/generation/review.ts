@@ -1,13 +1,13 @@
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import type { StoryboardRules, StylePreset, Transcript, UnitCode } from "../../contract";
+import type { ConnectorError, StoryboardRules, StylePreset, Transcript, UnitCode } from "../../contract";
 import type { Unit } from "../assembler";
 import { defineHostTool } from "../connector";
 import type { Stills } from "../preview";
 import { sceneTimings, type Storyboard } from "../storyboard";
 import type { PresetBrief } from "../style";
-import { runTurn, withSession, type AgentRun } from "./agents";
+import { endsRun, runTurn, withSession, type AgentRun } from "./agents";
 import { REVIEW_TOOL, reviewMessage, reviewSystem } from "./prompts";
 
 /** What the reviewer wants repaired, and the sentence the creator sees if the repair is reverted. */
@@ -31,23 +31,28 @@ type ReviewRun = AgentRun & {
   code: UnitCode;
 };
 
+type Result<T, E> = { data: T; error: null } | { data: null; error: E };
+
+const NO_REVIEW = { data: null, error: null };
+
 /**
  * The visual review: the Renderer draws stills of the unit (every other unit as its fallback Scene), and
  * the reviewer judges them once. Resolves with what to repair, or `null` when the unit looks right or
  * couldn't be reviewed, which never holds the unit back: anything the stills, the workspace or the
- * session throw ends the review here, never the generation.
+ * session throw ends the review here, never the generation. Only an error that ends the whole run, such as
+ * a failed login or a plan limit, comes back as one, so the run stops as Stop does.
  */
-export async function reviewUnit(run: ReviewRun): Promise<Review | null> {
-  return judge(run).catch(() => null);
+export async function reviewUnit(run: ReviewRun): Promise<Result<Review | null, ConnectorError>> {
+  return judge(run).catch(() => NO_REVIEW);
 }
 
-async function judge({ stills, storyboard, transcript, rules, preset, brief, unit, code, ...run }: ReviewRun): Promise<Review | null> {
+async function judge({ stills, storyboard, transcript, rules, preset, brief, unit, code, ...run }: ReviewRun): Promise<Result<Review | null, ConnectorError>> {
   const moments = momentsOf(storyboard, transcript, unit);
   const source = { storyboard, transcript, rules, preset, code: { [unit.id]: code } };
   const { data: frames } = await stills.frames(source, moments.map(({ time }) => time), REVIEW_WIDTH);
 
   if (!frames) {
-    return null;
+    return NO_REVIEW;
   }
 
   let verdict: { looksRight: boolean; problems: string[]; note: string } | undefined;
@@ -67,19 +72,42 @@ async function judge({ stills, storyboard, transcript, rules, preset, brief, uni
   });
   const setup = { label: `review ${unit.id}`, systemPrompt: reviewSystem(storyboard.format, brief), hostTools: [submit] };
 
-  const { data: review } = await withSession(run, setup, async (session, workspaceDir) => {
+  const { data: review, error } = await withSession(run, setup, async (session, workspaceDir): Promise<Result<Review | null, ConnectorError>> => {
     const files = moments.map(({ sceneId }, index) => ({ file: `still-${index + 1}.jpg`, time: moments[index]?.time ?? 0, sceneId }));
     await Promise.all(files.map(({ file }, index) => writeFile(join(workspaceDir, file), frames[index] ?? new Uint8Array())));
     const turnError = await runTurn(session, reviewMessage({ unit, stills: files }), run.signal);
 
+    if (endsRun(turnError)) {
+      return { data: null, error: turnError };
+    }
+
     if (turnError) {
-      return { data: null, error: null };
+      return NO_REVIEW;
     }
 
     return { data: reviewOf(verdict), error: null };
   });
 
-  return review ?? null;
+  if (!error) {
+    return { data: review, error: null };
+  }
+
+  const reviewError = sessionError(error);
+
+  if (endsRun(reviewError)) {
+    return { data: null, error: reviewError };
+  }
+
+  return NO_REVIEW;
+}
+
+/** The connector error a review session ended with: its own, or the one it couldn't start with. */
+function sessionError(error: ConnectorError | { code: "AGENT_FAILED"; error: ConnectorError }): ConnectorError {
+  if ("error" in error) {
+    return error.error;
+  }
+
+  return error;
 }
 
 function reviewOf(verdict: { looksRight: boolean; problems: string[]; note: string } | undefined): Review | null {

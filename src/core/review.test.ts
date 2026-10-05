@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { CoreClient, GenerationStatus, Project, UnitCode } from "../contract";
-import { connect, generate, newProject, storyboard, submitsCode, submitsReview, submitsStoryboard, unitCode } from "./test-support/generation";
+import { connect, failsWith, generate, newProject, storyboard, submitsCode, submitsReview, submitsStoryboard, unitCode } from "./test-support/generation";
 
 // Every unit is checked and drawn in the pinned chrome-headless-shell, each taking seconds.
 const RUN_TIMEOUT_MS = 300_000;
@@ -108,6 +108,38 @@ describe("visual review and repair", () => {
     expect(replay.askedOf("scene-code s04")).toHaveLength(1);
     expect(done.units.find(({ id }) => id === "s04")).toEqual({ id: "s04", status: "ready", attempts: 1 });
   });
+});
+
+describe("a visual review whose login fails", () => {
+  it(
+    "keeps the passing code it reviewed and stops the run as Stop does",
+    async () => {
+      const script = {
+        storyboard: [submitsStoryboard(storyboard)],
+        "scene-code s01": [submitsCode(await unitCode("good", "s01"))],
+        "review s01": [failsWith({ code: "AUTHENTICATION_FAILED", message: "Log in" })],
+      };
+      const { core, replay, dir } = await connect({ root, script });
+      const project = await newProject(core, dir);
+      ["s02", "s03", "s04", "s05"].forEach((unit) => replay.hold(`scene-code ${unit}`));
+      const done = await generate(core, { projectId: project.id, format: "horizontal" });
+      const saved = JSON.parse(await readFile(join(project.path, "horizontal", "versions", "1.json"), "utf8")) as {
+        units: Record<string, string>;
+        flags: { unit: string; reason: string }[];
+      };
+
+      expect(done).toMatchObject({ state: "done", version: 1, stopped: { cause: "authentication" } });
+      expect(Object.keys(saved.units)).toEqual(["s01"]);
+      expect(saved.flags.map(({ unit, reason }) => [unit, reason])).toEqual(
+        ["s02", "s03", "s04", "s05"].map((unit) => [unit, "Claude's login failed before this Scene was finished."]),
+      );
+      // s01 was never sent back for a repair, and the held subagents were interrupted.
+      expect(replay.askedOf("scene-code s01")).toHaveLength(1);
+      expect(replay.sessions().open).toBe(0);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
 });
 
 describe("a visual review that throws", () => {

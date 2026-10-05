@@ -798,13 +798,14 @@ export function createGeneration({ connector, checker, previews, stills, project
 
     /** Stores passing code, or flags the unit. Flags are read after any wait, since other units change them meanwhile. */
     async function keep(unit: Unit, outcome: UnitOutcome): Promise<FileFailure | undefined> {
+      const stop = stopAfter(outcome);
+
+      // Passing code whose review hit a failed login or plan limit is kept, and the run ends as Stop does.
+      if (stop) {
+        halt(run, stop);
+      }
+
       if (!outcome.code) {
-        const stop = stopAfter(outcome);
-
-        if (stop) {
-          halt(run, stop);
-        }
-
         const previousNote = previousNotes[unit.id];
 
         // A unit retried for its review note keeps the code it played, with its note, rather than becoming a fallback.
@@ -1173,13 +1174,13 @@ function stopOf(error: ConnectorError): GenerationStop | undefined {
   return undefined;
 }
 
-/** A failed unit that ends the whole run says why; any other failure stops only the unit. */
-function stopAfter(outcome: UnitOutcome): GenerationStop | undefined {
-  if (outcome.code || !outcome.error) {
+/** A unit whose agent hit an error that ends the whole run says why; any other failure stops only the unit. */
+function stopAfter({ error }: UnitOutcome): GenerationStop | undefined {
+  if (!error) {
     return undefined;
   }
 
-  return stopOf(outcome.error);
+  return stopOf(error);
 }
 
 /** A unit the run didn't finish is flagged with why the run stopped, rather than its own last failure. */

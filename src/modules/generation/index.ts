@@ -12,6 +12,6 @@ export {
   type StyleChangeError,
   type StyleRequest,
 } from "./generation";
-export { RETRIES, sendTurn, withSession, writeUnitCode, type AgentRun, type SessionSetup, type UnitOutcome } from "./agents";
+export { endsRun, RETRIES, sendTurn, withSession, writeUnitCode, type AgentRun, type SessionSetup, type UnitOutcome } from "./agents";
 export { reviewUnit } from "./review";
 export { issueLine, storyboardSystem } from "./prompts";

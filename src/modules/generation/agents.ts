@@ -91,12 +91,23 @@ export async function writeStoryboard({ transcript, rules, brief, ...run }: Stor
 
 /**
  * How a unit ended: its passing Scene code, with the reviewer's note when its repair was reverted, or
- * why it plays as its fallback Scene, with the connector's error when the agent couldn't carry on.
+ * why it plays as its fallback Scene, with the connector's error when the agent couldn't carry on. Passing
+ * code carries an error only when its review or repair hit one that ends the whole run (see `endsRun`).
  */
-export type UnitOutcome = { code: UnitCode; attempts: number; note?: string } | { code: null; attempts: number; reason: string; error?: ConnectorError };
+export type UnitOutcome = { code: UnitCode; attempts: number; note?: string; error?: ConnectorError } | { code: null; attempts: number; reason: string; error?: ConnectorError };
 
-/** A visual review of passing code: what to repair, or `null` when it looks right or couldn't be reviewed. */
-export type ReviewCode = (code: UnitCode) => Promise<{ problems: string[]; note: string } | null>;
+/**
+ * A visual review of passing code: what to repair, or `null` when it looks right or couldn't be reviewed. Its error is
+ * one that ends the whole run, such as a failed login; any other failure is no review.
+ */
+export type ReviewCode = (code: UnitCode) => Promise<Result<{ problems: string[]; note: string } | null, ConnectorError>>;
+
+/** The connector errors that end a whole run as Stop does, rather than one unit or its review: no other agent would get further. */
+const RUN_ENDING = new Set<ConnectorError["code"]>(["AUTHENTICATION_FAILED", "PLAN_LIMIT", "COST_CAP"]);
+
+export function endsRun(error: ConnectorError | undefined): error is ConnectorError {
+  return error !== undefined && RUN_ENDING.has(error.code);
+}
 
 type UnitRun = AgentRun & {
   checker: Checker;
@@ -163,7 +174,12 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
       return { code, attempts };
     }
 
-    const problems = await review(code);
+    const { data: problems, error: reviewError } = await review(code);
+
+    // The code passed before the run had to end: it is kept, and the error ends the run.
+    if (reviewError) {
+      return { code, attempts, error: reviewError };
+    }
 
     if (!problems) {
       return { code, attempts };
@@ -174,6 +190,10 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
     onProgress("writing", attempts);
     const turnError = await runTurn(session, repairMessage(problems.problems), run.signal);
     const repair = handedIn();
+
+    if (endsRun(turnError)) {
+      return { code, attempts, error: turnError };
+    }
 
     if (turnError || !repair) {
       return reverted;
