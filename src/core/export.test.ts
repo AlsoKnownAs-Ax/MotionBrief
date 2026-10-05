@@ -121,9 +121,9 @@ describe("Export MP4", () => {
     });
 
     it("reporting its progress through each stage as it goes", () => {
-      const rendering = statuses.flatMap((status) => (status.state === "rendering" ? [status] : []));
-      const progress = rendering.map((status) => status.progress);
-      const stages = [...new Set(rendering.map(({ stage }) => stage))];
+      const rendering = statuses.filter(({ state }) => state === "rendering");
+      const progress = rendering.map((status) => status.progress ?? -1);
+      const stages = [...new Set(rendering.map(({ stage }) => stage ?? ""))];
       const order = ["preparing", "capturing", "encoding", "finishing"];
 
       // Whether encoding shows as a stage of its own depends on how many browsers the computer runs at once.

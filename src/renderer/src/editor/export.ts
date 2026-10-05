@@ -1,18 +1,23 @@
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
-import type { ExportError, ExportStatus, Format } from "../../../contract";
+import type { ExportError, ExportStage, Format } from "../../../contract";
 import { useOpenVideo } from "./open-video";
-
-type Rendering = Extract<ExportStatus, { state: "rendering" }>;
 
 /** An export failed outside the render: the core stopped answering mid-export, say. */
 type UnexpectedError = { code: "UNEXPECTED"; message: string };
 
-export type ExportJob =
-  | { state: "idle" }
-  | (Rendering & { path: string })
-  | { state: "done"; path: string }
-  | { state: "failed"; error: ExportError | UnexpectedError };
+export type ExportJobError = ExportError | UnexpectedError;
+
+/** The window's export: idle, rendering through its stages to `path`, then saved there or failed. */
+export type ExportJob = {
+  state: "idle" | "rendering" | "done" | "failed";
+  stage?: ExportStage;
+  /** 0 to 1, across every stage, while rendering. */
+  progress?: number;
+  /** Where the MP4 goes, once chosen. */
+  path?: string;
+  error?: ExportJobError;
+};
 
 type ExportStore = {
   job: ExportJob;
@@ -58,7 +63,7 @@ export const useExport = create<ExportStore>((set) => ({
       set({ job: { state: "rendering", stage: "preparing", progress: 0, path } });
 
       for await (const status of await core.export.mp4({ previewId: preview.id, path, video }, { signal: current.signal })) {
-        set({ job: status.state === "rendering" ? { ...status, path } : status });
+        set({ job: { ...status, path: status.path ?? path } });
       }
     } catch (error) {
       if (!current.signal.aborted) {

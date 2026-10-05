@@ -295,17 +295,19 @@ export const ExportErrorSchema = z.discriminatedUnion("code", [
   z.object({ code: z.literal("UPDATING") }),
 ]);
 
+export const ExportStageSchema = z.enum(["preparing", "capturing", "encoding", "finishing"]);
+
 /** Where an export stands: rendering through its stages, then saved or failed. */
-export const ExportStatusSchema = z.discriminatedUnion("state", [
-  z.object({
-    state: z.literal("rendering"),
-    stage: z.enum(["preparing", "capturing", "encoding", "finishing"]),
-    /** 0 to 1, across every stage. */
-    progress: z.number().min(0).max(1),
-  }),
-  z.object({ state: z.literal("done"), path: z.string() }),
-  z.object({ state: z.literal("failed"), error: ExportErrorSchema }),
-]);
+export const ExportStatusSchema = z.object({
+  state: z.enum(["rendering", "done", "failed"]),
+  /** While rendering. */
+  stage: ExportStageSchema.optional(),
+  /** 0 to 1, across every stage, while rendering. */
+  progress: z.number().min(0).max(1).optional(),
+  /** Where the MP4 was saved, once done. */
+  path: z.string().optional(),
+  error: ExportErrorSchema.optional(),
+});
 
 export const AuthMethodSchema = z.enum(["subscription", "api-key"]);
 
@@ -1352,6 +1354,7 @@ export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
 export type VideoRef = z.infer<typeof VideoRefSchema>;
 export type ExportError = z.infer<typeof ExportErrorSchema>;
 export type ExportStatus = z.infer<typeof ExportStatusSchema>;
+export type ExportStage = z.infer<typeof ExportStageSchema>;
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 export type ConnectorError = z.infer<typeof ConnectorErrorSchema>;
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;

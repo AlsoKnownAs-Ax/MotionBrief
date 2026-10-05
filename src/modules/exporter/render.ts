@@ -1,7 +1,8 @@
 import type { RenderJob } from "@hyperframes/producer";
-import type { ExportStatus } from "../../contract";
+import type { ExportStage, ExportStatus } from "../../contract";
 
-type Rendering = Extract<ExportStatus, { state: "rendering" }>;
+/** An export's status while it renders: always with its stage and progress. */
+type Rendering = ExportStatus & { state: "rendering"; stage: ExportStage; progress: number };
 
 export type RenderOutcome = { code: "DONE" } | { code: "CANCELLED" } | { code: "RENDER_FAILED"; message: string };
 

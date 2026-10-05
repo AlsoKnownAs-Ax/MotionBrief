@@ -1,8 +1,8 @@
 import { CircleAlertIcon, CircleCheckIcon, DownloadIcon, FolderOpenIcon, XIcon } from "lucide-react";
 import { Button } from "@renderer/components/ui/button";
 import { Progress } from "@renderer/components/ui/progress";
-import type { ExportStatus } from "../../../contract";
-import { useExport, type ExportJob } from "./export";
+import type { ExportStage } from "../../../contract";
+import { useExport, type ExportJob, type ExportJobError } from "./export";
 import { isGenerating, useGeneration } from "./generation";
 import { useOpenVideo } from "./open-video";
 
@@ -11,7 +11,7 @@ const STAGE_LABELS = {
   capturing: "Rendering",
   encoding: "Encoding",
   finishing: "Finishing",
-} satisfies Record<Extract<ExportStatus, { state: "rendering" }>["stage"], string>;
+} satisfies Record<ExportStage, string>;
 
 const ERROR_MESSAGES = {
   CHROME_MISSING: "The browser MotionBrief renders with is missing. Reinstall MotionBrief.",
@@ -20,10 +20,10 @@ const ERROR_MESSAGES = {
   SAVE_FAILED: "The MP4 couldn't be saved there. Try another folder.",
   UPDATING: "MotionBrief is restarting to update. Export again once it reopens.",
   UNEXPECTED: "The export stopped unexpectedly.",
-} satisfies Record<Extract<ExportJob, { state: "failed" }>["error"]["code"], string>;
+} satisfies Record<ExportJobError["code"], string>;
 
 /** What the error's tooltip adds: the producer's message or the path involved. */
-function errorDetail(error: Extract<ExportJob, { state: "failed" }>["error"]) {
+function errorDetail(error: ExportJobError) {
   if ("message" in error) {
     return error.message;
   }
@@ -48,14 +48,14 @@ export function ExportControl() {
   const isWriting = useGeneration((state) => isGenerating(state.status));
 
   if (job.state === "rendering") {
-    const percent = Math.round(job.progress * 100);
+    const percent = Math.round((job.progress ?? 0) * 100);
 
     return (
-      <div role="status" className="no-drag-region flex items-center gap-3" title={`Exporting to ${job.path}`}>
+      <div role="status" className="no-drag-region flex items-center gap-3" title={`Exporting to ${job.path ?? ""}`}>
         <div className="flex w-[200px] flex-col gap-[5px]">
           <span className="flex justify-between gap-2 text-app-xs">
             <span className="truncate">
-              Exporting MP4<span className="text-ink-muted"> · {STAGE_LABELS[job.stage]}</span>
+              Exporting MP4<span className="text-ink-muted"> · {STAGE_LABELS[job.stage ?? "preparing"]}</span>
             </span>
             <span className="text-ink-muted tabular-nums">{percent}%</span>
           </span>
@@ -79,15 +79,15 @@ export function ExportControl() {
   );
 }
 
-function ExportOutcome({ job, onDismiss }: { job: ExportJob; onDismiss: () => void }) {
-  if (job.state === "done") {
+function ExportOutcome({ job: { state, path, error }, onDismiss }: { job: ExportJob; onDismiss: () => void }) {
+  if (state === "done" && path) {
     return (
       <span role="status" className="flex items-center gap-1 text-app-xs text-status-success">
         <CircleCheckIcon className="size-3.5" />
-        <span className="max-w-[200px] truncate" title={job.path}>
-          Exported {fileName(job.path)}
+        <span className="max-w-[200px] truncate" title={path}>
+          Exported {fileName(path)}
         </span>
-        <Button variant="ghost" size="icon-sm" aria-label="Show in folder" title="Show in folder" onClick={() => window.motionbrief.showInFolder(job.path)}>
+        <Button variant="ghost" size="icon-sm" aria-label="Show in folder" title="Show in folder" onClick={() => window.motionbrief.showInFolder(path)}>
           <FolderOpenIcon />
         </Button>
         <DismissButton onClick={onDismiss} />
@@ -95,14 +95,12 @@ function ExportOutcome({ job, onDismiss }: { job: ExportJob; onDismiss: () => vo
     );
   }
 
-  if (job.state === "failed") {
-    const detail = errorDetail(job.error);
-
+  if (state === "failed" && error) {
     return (
       <span role="alert" className="flex items-center gap-1 text-app-xs text-status-fallback-ink">
         <CircleAlertIcon className="size-3.5" />
-        <span className="max-w-[280px] truncate" title={detail}>
-          {ERROR_MESSAGES[job.error.code]}
+        <span className="max-w-[280px] truncate" title={errorDetail(error)}>
+          {ERROR_MESSAGES[error.code]}
         </span>
         <DismissButton onClick={onDismiss} />
       </span>
