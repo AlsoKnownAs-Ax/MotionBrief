@@ -1,10 +1,12 @@
 import type { VideoRef } from "../../contract";
-import type { Projects } from "../projects";
+import type { Projects, ProjectsError, VideoDocumentError } from "../projects";
+
+type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
 /** Where each video was last exported to. */
 export type ExportLocations = {
   last: (video: VideoRef) => Promise<string | undefined>;
-  remember: (video: VideoRef, path: string) => Promise<void>;
+  remember: (video: VideoRef, path: string) => Promise<Result<null, ProjectsError | VideoDocumentError>>;
 };
 
 /** The Project keeps each video's last export path in the video's folder (ADR 0004), so it travels with the Project. */
@@ -15,12 +17,6 @@ export function projectExportLocations(projects: Projects): ExportLocations {
 
       return path ?? undefined;
     },
-    remember: async ({ projectId, format }, path) => {
-      const { error } = await projects.rememberExportPath(projectId, format, path);
-
-      if (error) {
-        throw new Error(`The Project didn't save the export path: ${JSON.stringify(error)}`);
-      }
-    },
+    remember: ({ projectId, format }, path) => projects.rememberExportPath(projectId, format, path),
   };
 }
