@@ -19,7 +19,6 @@ import { voiceover } from "./media";
 import { fakeWhisper } from "./whisper";
 
 const FIXTURES = join(import.meta.dirname, "..", "fixtures");
-const CORPUS = join(FIXTURES, "corpus");
 
 /** The four bundled Style Presets: a Palette/typography swap replays a video in each one's. */
 export const PRESETS = ["blueprint", "whiteboard", "sketchbook", "terminal"] as const;
@@ -37,9 +36,22 @@ const CorpusEntrySchema = z.object({
   storyboard: z.string(),
   transcript: z.string(),
   units: z.record(z.string(), z.string()),
-  /** Revisions in the order they were asked for: the creator's request and scope, the agent's patch, and the Scene code of each unit it regenerated. */
+  /** Units whose agent ended without passing code, which play as their fallback Scene: they replay as a failed agent turn. */
+  fallbacks: z.array(z.string()).default([]),
+  /**
+   * Revisions in the order they were asked for: the creator's request and scope, the agent's patch, the Scene code of
+   * each unit it regenerated, and the regenerated units whose agent ended without passing code.
+   */
   revisions: z
-    .array(z.object({ request: z.string(), scope: z.array(z.string()), patch: z.string(), units: z.record(z.string(), z.string()) }))
+    .array(
+      z.object({
+        request: z.string(),
+        scope: z.array(z.string()),
+        patch: z.string(),
+        units: z.record(z.string(), z.string()),
+        fallbacks: z.array(z.string()).default([]),
+      }),
+    )
     .default([]),
 });
 
@@ -75,14 +87,28 @@ export type ReplayedRun = {
   /** The video's saved Versions as they are now. */
   saved: () => Promise<SavedVersion[]>;
   /** Every corpus file this run reads, loaded. */
-  corpus: { storyboard: unknown; transcript: StoryboardTranscript; code: Record<string, UnitCode>; revisions: { patch: unknown; code: Record<string, UnitCode> }[] };
+  corpus: {
+    storyboard: unknown;
+    transcript: StoryboardTranscript;
+    code: Record<string, UnitCode>;
+    fallbacks: string[];
+    revisions: { patch: unknown; code: Record<string, UnitCode>; fallbacks: string[] }[];
+  };
 };
 
-/** Every corpus entry, by file name. A malformed entry throws: the corpus is committed, so that's a broken commit. */
-export async function corpusEntries(): Promise<{ name: string; entry: CorpusEntry }[]> {
-  const names = (await readdir(CORPUS)).filter((name) => name.endsWith(".json"));
+/**
+ * Every corpus entry in `fixturesDir` (the committed `fixtures/` unless a test writes its own), by file name. A
+ * malformed entry throws: the corpus is committed, so that's a broken commit.
+ */
+export async function corpusEntries(fixturesDir = FIXTURES): Promise<{ name: string; entry: CorpusEntry }[]> {
+  const names = (await readdir(join(fixturesDir, "corpus"))).filter((name) => name.endsWith(".json"));
 
-  return Promise.all(names.map(async (name) => ({ name, entry: CorpusEntrySchema.parse(await json(join("corpus", name))) })));
+  return Promise.all(names.map(async (name) => ({ name, entry: CorpusEntrySchema.parse(await json(join("corpus", name), fixturesDir)) })));
+}
+
+/** The units a step of a run had an agent write, sorted: those with recorded code and those recorded as fallbacks. */
+export function writtenUnits({ code, fallbacks }: { code: Record<string, UnitCode>; fallbacks: string[] }): string[] {
+  return [...Object.keys(code), ...fallbacks].sort();
 }
 
 export function frameMajor(version: string) {
@@ -92,16 +118,16 @@ export function frameMajor(version: string) {
 /**
  * Replays a corpus run through the core API, the way the paid run made it: a Project of a synthetic Voiceover whose
  * Transcript comes from fixture whisper output, `video.generate` with the replay connector handing in the recorded
- * Storyboard and each unit's Scene code, then `video.revise` per recorded Revision with its patch and regenerated
+ * Storyboard and each unit's Scene code, then `video.send` per recorded Revision with its patch and regenerated
  * units. The visual reviewer finds nothing. Everything else runs for real: validation, the Checker on every unit, the
  * rebuild rule, Versions and the Project store.
  */
-export async function replayRun(entry: CorpusEntry, root: string): Promise<ReplayedRun> {
-  const corpus = await loadCorpus(entry);
+export async function replayRun(entry: CorpusEntry, root: string, fixturesDir = FIXTURES): Promise<ReplayedRun> {
+  const corpus = await loadCorpus(entry, fixturesDir);
   const { core, replay, dir } = await connect({ root, script: scriptOf(corpus), whisper: fakeWhisper(whisperOutput(corpus.transcript)) });
   // Revisions wait for approval on an API key by default; the replay approves nothing by hand.
   await core.settings.update({ approveCost: false });
-  const project = await transcribedProject(core, dir, entry, corpus.transcript);
+  const project = await transcribedProject(core, dir, entry, corpus);
   const video = { projectId: project.id, format: formatOf(corpus.storyboard) } satisfies VideoRef;
   const generation = await generate(core, video);
   const written = [regenerated(0, replay)];
@@ -127,17 +153,27 @@ export async function replayRun(entry: CorpusEntry, root: string): Promise<Repla
   };
 }
 
-/** Each label's recorded turns, in the order its sessions ask for them: the generation's first, then each Revision's. */
+/** The turn a unit recorded as a fallback replays: the agent's turn fails, so the unit ends without code, as it did. */
+const ENDS_AS_FALLBACK: AgentEvent[] = [{ type: "turn-completed", status: "failed", error: { code: "SERVICE_ERROR", message: "Recorded as a fallback" } }];
+
+/**
+ * Each label's recorded turns, in the order its sessions ask for them: the generation's first, then each Revision's. A
+ * unit's code is handed in and reviewed as looking right; a unit recorded as a fallback gets a failed turn and no review.
+ */
 function scriptOf(corpus: ReplayedRun["corpus"]): Record<string, AgentEvent[][]> {
-  const codeTurns = [corpus.code, ...corpus.revisions.map(({ code }) => code)].flatMap((code) => Object.entries(code));
-  const units = Map.groupBy(codeTurns, ([unit]) => unit);
+  const steps = [corpus, ...corpus.revisions];
+  const unitTurns = steps.flatMap(({ code, fallbacks }) => [
+    ...Object.entries(code).map(([unit, unitCode]) => ({ unit, turn: submitsCode(unitCode), isReviewed: true })),
+    ...fallbacks.map((unit) => ({ unit, turn: ENDS_AS_FALLBACK, isReviewed: false })),
+  ]);
+  const units = Map.groupBy(unitTurns, ({ unit }) => unit);
   const looksRight = submitsReview({ looksRight: true, problems: [], note: "" });
 
   return {
     storyboard: [submitsStoryboard(corpus.storyboard)],
     revision: corpus.revisions.map(({ patch }) => submitsPatch(patch)),
-    ...Object.fromEntries([...units.entries()].map(([unit, turns]) => [`scene-code ${unit}`, turns.map(([, code]) => submitsCode(code))])),
-    ...Object.fromEntries([...units.entries()].map(([unit, turns]) => [`review ${unit}`, turns.map(() => looksRight)])),
+    ...Object.fromEntries([...units.entries()].map(([unit, turns]) => [`scene-code ${unit}`, turns.map(({ turn }) => turn)])),
+    ...Object.fromEntries([...units.entries()].map(([unit, turns]) => [`review ${unit}`, turns.filter(({ isReviewed }) => isReviewed).map(() => looksRight)])),
   };
 }
 
@@ -159,12 +195,12 @@ function regenerated(from: number, replay: Awaited<ReturnType<typeof connect>>["
 /** A seconds-long tone per Transcript length, shared by every run of that length. */
 const voiceovers = new Map<number, Promise<string>>();
 
-async function transcribedProject(core: CoreClient, dir: string, entry: CorpusEntry, transcript: StoryboardTranscript) {
+async function transcribedProject(core: CoreClient, dir: string, entry: CorpusEntry, { transcript, storyboard }: ReplayedRun["corpus"]) {
   const shared = join(dir, "..", "voiceovers");
   await mkdir(shared, { recursive: true });
   const path = voiceovers.get(transcript.duration) ?? voiceover(shared, `${transcript.duration}s.wav`, [{ tone: transcript.duration }]);
   voiceovers.set(transcript.duration, path);
-  const project = await core.project.create({ voiceoverPath: await path, format: formatOf(await json(entry.storyboard)), stylePreset: entry.preset });
+  const project = await core.project.create({ voiceoverPath: await path, format: formatOf(storyboard), stylePreset: entry.preset });
 
   for await (const { state } of await core.project.transcription({ projectId: project.id })) {
     if (state === "done") {
@@ -196,12 +232,12 @@ function whisperOutput({ duration, words }: StoryboardTranscript): RawWhisperOut
   });
 }
 
-/** Starts a Revision and resolves with its last status once it has ended. */
+/** Sends a Revision through the chat, as the creator does, and resolves with its last status once it has ended. */
 async function revise(core: CoreClient, video: VideoRef, message: string, scope: string[]): Promise<RevisionStatus> {
   const stop = new AbortController();
   const statuses = await core.video.revision(video, { signal: stop.signal });
   await statuses.next();
-  await core.video.revise({ ...video, message, scope });
+  await core.video.send({ ...video, message, scope });
 
   try {
     for await (const status of statuses) {
@@ -235,12 +271,19 @@ async function savedVersions(project: Project, format: VideoRef["format"]): Prom
 }
 
 /** An entry's committed files, loaded: its Storyboard, Transcript, first units' code and each Revision's patch and units. */
-export async function loadCorpus(entry: CorpusEntry): Promise<ReplayedRun["corpus"]> {
+export async function loadCorpus(entry: CorpusEntry, fixturesDir = FIXTURES): Promise<ReplayedRun["corpus"]> {
   return {
-    storyboard: await json(entry.storyboard),
-    transcript: StoryboardTranscriptSchema.parse(await json(entry.transcript)),
-    code: await codeOf(entry.units),
-    revisions: await Promise.all(entry.revisions.map(async (revision) => ({ patch: await json(revision.patch), code: await codeOf(revision.units) }))),
+    storyboard: await json(entry.storyboard, fixturesDir),
+    transcript: StoryboardTranscriptSchema.parse(await json(entry.transcript, fixturesDir)),
+    code: await codeOf(entry.units, fixturesDir),
+    fallbacks: entry.fallbacks,
+    revisions: await Promise.all(
+      entry.revisions.map(async (revision) => ({
+        patch: await json(revision.patch, fixturesDir),
+        code: await codeOf(revision.units, fixturesDir),
+        fallbacks: revision.fallbacks,
+      })),
+    ),
   };
 }
 
@@ -248,18 +291,18 @@ function formatOf(storyboard: unknown): VideoRef["format"] {
   return z.object({ format: z.enum(["horizontal", "vertical"]) }).parse(storyboard).format;
 }
 
-async function codeOf(units: Record<string, string>): Promise<Record<string, UnitCode>> {
-  return Object.fromEntries(await Promise.all(Object.entries(units).map(async ([unit, path]) => [unit, await unitCode(path)] as const)));
+async function codeOf(units: Record<string, string>, fixturesDir: string): Promise<Record<string, UnitCode>> {
+  return Object.fromEntries(await Promise.all(Object.entries(units).map(async ([unit, path]) => [unit, await unitCode(path, fixturesDir)] as const)));
 }
 
-async function unitCode(path: string): Promise<UnitCode> {
-  const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(FIXTURES, `${path}.${part}`), "utf8")));
+async function unitCode(path: string, fixturesDir: string): Promise<UnitCode> {
+  const [css, html, js] = await Promise.all(["css", "html", "js"].map((part) => readFile(join(fixturesDir, `${path}.${part}`), "utf8")));
 
   return { css: css ?? "", html: html ?? "", js: js ?? "" };
 }
 
-async function json(path: string): Promise<unknown> {
-  return JSON.parse(await readFile(join(FIXTURES, path), "utf8"));
+async function json(path: string, fixturesDir = FIXTURES): Promise<unknown> {
+  return JSON.parse(await readFile(join(fixturesDir, path), "utf8"));
 }
 
 function milliseconds(seconds: number) {

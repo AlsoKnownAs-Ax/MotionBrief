@@ -8,7 +8,7 @@ import { applyPatch, type Patch } from "../modules/revision";
 import type { Storyboard } from "../modules/storyboard";
 import { bundledPreset, storyboardRules } from "../modules/style";
 import { BROWSER_TIMEOUT_MS } from "./test-support/checker";
-import { corpusEntries, frameMajor, PRESETS, replayRun, type ReplayedRun, type SavedVersion } from "./test-support/corpus";
+import { corpusEntries, frameMajor, PRESETS, replayRun, writtenUnits, type ReplayedRun, type SavedVersion } from "./test-support/corpus";
 
 const entries = await corpusEntries();
 const current = entries.filter(({ entry }) => frameMajor(entry.frameContractVersion) === frameMajor(FRAME_CONTRACT_VERSION));
@@ -23,6 +23,15 @@ beforeAll(async () => {
 });
 
 afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
+
+/** A saved Version's flags as `<unit> <kind>`, sorted: a recorded fallback is the only flag a replay may have. */
+function flagged({ flags }: SavedVersion): string[] {
+  return flags.map(({ unit, kind }) => `${unit} ${kind}`).sort();
+}
+
+function asFallbacks(units: string[]): string[] {
+  return units.map((unit) => `${unit} fallback`).sort();
+}
 
 /** The saved Preset with another bundled Preset's Palette and typography: its Motion, treatments and Transitions stay. */
 function swapped(preset: StylePreset, into: (typeof PRESETS)[number]): StylePreset {
@@ -51,23 +60,27 @@ describe("the replay corpus", () => {
       last = run.versions.at(-1)!;
     }, RUN_TIMEOUT_MS);
 
-    it("generates every unit from its recorded code, each passing the Checker on the first try", () => {
+    it("generates every unit from its recorded code, each passing the Checker on the first try, and its recorded fallbacks as fallbacks", () => {
       const [first] = run.versions;
 
       expect(run.generation).toMatchObject({ state: "done", version: 1 });
-      expect(run.written[0]).toEqual(Object.keys(run.corpus.code).sort());
-      expect(run.generation.units.filter(({ attempts }) => attempts !== 1)).toEqual([]);
-      expect(first).toMatchObject({ number: 1, origin: "generation", flags: [], storyboard: run.corpus.storyboard, code: run.corpus.code });
+      expect(run.written[0]).toEqual(writtenUnits(run.corpus));
+      expect(run.generation.units.filter(({ id }) => !run.corpus.fallbacks.includes(id)).filter(({ attempts }) => attempts !== 1)).toEqual([]);
+      expect(first).toMatchObject({ number: 1, origin: "generation", storyboard: run.corpus.storyboard, code: run.corpus.code });
+      expect(flagged(first!)).toEqual(asFallbacks(run.corpus.fallbacks));
     });
 
-    it.each(entry.revisions.map((revision, index) => ({ ...revision, index })))("applies Revision $index: $request", ({ index, units }) => {
+    it.each(entry.revisions.map((revision, index) => ({ ...revision, index })))("applies Revision $index: $request", ({ index }) => {
       const before = run.versions[index]!;
       const after = run.versions[index + 1];
       const recorded = run.corpus.revisions[index]!;
+      const fallbacks = [run.corpus, ...run.corpus.revisions.slice(0, index + 1)].flatMap((step) => step.fallbacks);
 
       expect(run.revisions[index]).toMatchObject({ state: "done", version: index + 2 });
-      expect(run.written[index + 1]).toEqual(Object.keys(units).sort());
-      expect(after).toMatchObject({ origin: "revision", flags: [], storyboard: applyPatch(before.storyboard as Storyboard, recorded.patch as Patch) });
+      expect(run.written[index + 1]).toEqual(writtenUnits(recorded));
+      expect(after).toMatchObject({ origin: "revision", storyboard: applyPatch(before.storyboard as Storyboard, recorded.patch as Patch) });
+      // A fallback only flags a unit recorded as one, now or earlier, that still plays as one.
+      expect(flagged(after!).filter((flag) => !asFallbacks(fallbacks).includes(flag))).toEqual([]);
       expect(after?.code).toEqual(Object.fromEntries(Object.keys(after?.code ?? {}).map((unit) => [unit, recorded.code[unit] ?? before.code[unit]])));
     });
 
