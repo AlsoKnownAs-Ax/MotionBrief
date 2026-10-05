@@ -7,6 +7,7 @@ export {
   type GenerationOptions,
   type Models,
   type OpenVideoError,
+  type RegenerateError,
   type RetryError,
   shownCaptions,
   type StyleChangeError,

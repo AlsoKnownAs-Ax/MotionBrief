@@ -705,9 +705,9 @@ export const OpenedVideoSchema = z.object({
 /**
  * What made a Version: a first generation; the re-check after a frame major update, which flagged units that no
  * longer pass; a Retry of flagged units; a Revision; a Restore of an earlier Version; a Style tab swap, re-rendered
- * with no agent; or a restyle, which regenerated every unit.
+ * with no agent; a restyle, which regenerated every unit; or a regeneration from scratch, a new Storyboard and every unit.
  */
-export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore", "style", "restyle"]);
+export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore", "style", "restyle", "regeneration"]);
 
 /**
  * What a change in the Style tab costs: nothing, when it changes nothing; a `swap` (Palette, typography, caption style,
@@ -1151,6 +1151,34 @@ export const coreContract = {
         VideoRefSchema.extend({
           /** The creator approved the estimate. Ignored on a subscription, which never asks. */
           approved: z.boolean().optional(),
+        }),
+      ),
+    /**
+     * Regenerates a generated video from scratch: a new Storyboard and every unit, in its current Style Preset snapshot
+     * and Captions. It always needs `confirmed`, which on an API key also approves its cost. The current Version plays
+     * until it completes and saves the next Version; cut short (Stop, the cost cap, a plan limit, a failed login, a crash)
+     * it is discarded, as a restyle is. It starts and returns at once; progress streams through `generation`.
+     */
+    regenerate: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        /** The video has no Version yet: Generate it instead. */
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+        /** A generation, Retry, Revision or Restore is running; regenerate once it ends. */
+        BUSY: { data: z.object({ projectId: z.string() }) },
+        /** Ask the creator, then regenerate again with `confirmed`; `costUsd` on an API key, priced like a first generation. */
+        REGENERATE_UNCONFIRMED: { data: z.object({ costUsd: CostRangeSchema.optional() }) },
+      })
+      .input(
+        VideoRefSchema.extend({
+          /** The creator confirmed the regeneration, and on an API key its cost. */
+          confirmed: z.boolean().optional(),
         }),
       ),
     /** Streams the video's generation now and after every change, until the window stops listening. */

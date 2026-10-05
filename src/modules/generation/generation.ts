@@ -274,7 +274,61 @@ export function createGeneration({ connector, checker, previews, stills, project
     const transcript = video.transcript;
     const captions = choice ?? CAPTIONS_BY_DEFAULT[format];
     const started = { usage: usage.startRun(ref, { voiceoverSeconds: duration }), models: chosen };
-    begin(ref, store, release, started, (run) => generate({ run, ref, transcript, preset, captions, store }));
+    begin(ref, store, release, started, (run) => generate({ run, ref, transcript, preset, captions, store, origin: "generation" }));
+
+    return { data: null, error: null };
+  }
+
+  /**
+   * Regenerates a generated video from scratch once confirmed: a new Storyboard and every unit, in the current Version's
+   * Style Preset snapshot and Captions. The current Version plays until it completes; cut short, it is discarded.
+   */
+  function regenerate(ref: VideoRef, isConfirmed: boolean): Promise<Result<null, OpenVideoError | RegenerateError>> {
+    // In turn with opens and Retry starts, so a re-check never saves a Version under it.
+    return exclusive(storeOf(ref).key, () => startRegeneration(ref, isConfirmed));
+  }
+
+  /** Reserves the video before reading the Version it regenerates, so no other job saves one meanwhile. */
+  async function startRegeneration(ref: VideoRef, isConfirmed: boolean): Promise<Result<null, OpenVideoError | RegenerateError>> {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "BUSY", projectId: ref.projectId } };
+    }
+
+    const started = await regenerateReserved(ref, isConfirmed, release);
+
+    if (started.error) {
+      release();
+    }
+
+    return started;
+  }
+
+  async function regenerateReserved(ref: VideoRef, isConfirmed: boolean, release: () => void): Promise<Result<null, OpenVideoError | RegenerateError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { transcript, stored } = saved;
+
+    if (!isConfirmed) {
+      return { data: null, error: { code: "REGENERATE_UNCONFIRMED", costUsd: await wholeVideoCost(transcript.duration) } };
+    }
+
+    const chosen = await models();
+
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(ref.projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId: ref.projectId } };
+    }
+
+    const { store } = storeOf(ref);
+    const job = { ref, transcript, preset: stored.version.preset, captions: shownCaptions(stored.version), store, origin: "regeneration" as const };
+    store.set({ state: "planning", units: [] });
+    begin(ref, store, release, { usage: usage.startRun(ref), models: chosen }, (run) => generate({ ...job, run }));
 
     return { data: null, error: null };
   }
@@ -440,7 +494,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     const { error: unfit } = validateStoryboard(storyboard, transcript, storyboardRules(preset, { format, captions: version.captions }));
 
     if (!isConfirmed) {
-      return { data: null, error: { code: "RESTYLE_UNCONFIRMED", replans: unfit !== null, costUsd: await restyleCost(transcript.duration) } };
+      return { data: null, error: { code: "RESTYLE_UNCONFIRMED", replans: unfit !== null, costUsd: await wholeVideoCost(transcript.duration) } };
     }
 
     const chosen = await models();
@@ -492,8 +546,8 @@ export function createGeneration({ connector, checker, previews, stills, project
     await writeVideo({ ...restyled, storyboard: planned, captions: shows });
   }
 
-  /** On an API key, what a restyle is estimated to cost: about a first generation. A subscription isn't billed per run. */
-  async function restyleCost(voiceoverSeconds: number): Promise<CostRange | undefined> {
+  /** On an API key, what a restyle or regeneration is estimated to cost: about a first generation. A subscription isn't billed per run. */
+  async function wholeVideoCost(voiceoverSeconds: number): Promise<CostRange | undefined> {
     if ((await connector.status()).method !== "api-key") {
       return undefined;
     }
@@ -503,7 +557,9 @@ export function createGeneration({ connector, checker, previews, stills, project
 
   type GenerateRun = { run: Run; ref: VideoRef; transcript: Transcript; preset: StylePreset; captions: boolean; store: StatusStore };
 
-  async function generate({ run, ref, transcript, preset, captions, store }: GenerateRun) {
+  /** Plans a Storyboard and writes every unit: a first generation, or a regeneration from scratch. */
+  async function generate({ origin, ...job }: GenerateRun & { origin: Extract<VersionOrigin, "generation" | "regeneration"> }) {
+    const { run, ref, transcript, preset, captions, store } = job;
     const { data: storyboard, error } = await planStoryboard(run, ref, transcript, preset, captions);
 
     if (error) {
@@ -511,7 +567,7 @@ export function createGeneration({ connector, checker, previews, stills, project
       return;
     }
 
-    await writeVideo({ run, ref, transcript, preset, captions, storyboard, store, origin: "generation" });
+    await writeVideo({ ...job, storyboard, origin });
   }
 
   /** The Storyboard agent's validated Storyboard for the video in `preset`, written for Captions on or off. */
@@ -529,14 +585,17 @@ export function createGeneration({ connector, checker, previews, stills, project
 
   type VideoRun = GenerateRun & {
     storyboard: Storyboard;
-    origin: Extract<VersionOrigin, "generation" | "restyle">;
+    origin: Extract<VersionOrigin, "generation" | "restyle" | "regeneration">;
     /** Whether the video shows Captions, when that differs from what the Storyboard is written for. */
     showsCaptions?: boolean;
     /** What a restyle changed, for its Version. */
     style?: string;
   };
 
-  /** Writes every unit of a valid Storyboard, as a first generation or a restyle does, and saves them as the next Version. */
+  /**
+   * Writes every unit of a valid Storyboard, as a first generation, a restyle or a regeneration does, and saves them as
+   * the next Version.
+   */
   async function writeVideo({ run, ref, transcript, preset, captions, storyboard, store, origin, showsCaptions, style }: VideoRun) {
     const { projectId, format } = ref;
     const rules = storyboardRules(preset, { format, captions });
@@ -552,11 +611,11 @@ export function createGeneration({ connector, checker, previews, stills, project
     const publish = publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store });
 
     /**
-     * Saved after each unit, so a quit or crash keeps a first generation's finished units. A restyle keeps no record:
-     * one cut short is discarded, so the video stays at the Version it had.
+     * Saved after each unit, so a quit or crash keeps a first generation's finished units. A restyle or regeneration
+     * keeps no record: one cut short is discarded, so the video stays at the Version it had.
      */
     async function saveRecord(): Promise<Result<null, ProjectsError>> {
-      if (origin === "restyle") {
+      if (replacesVersion(origin)) {
         return { data: null, error: null };
       }
 
@@ -576,9 +635,9 @@ export function createGeneration({ connector, checker, previews, stills, project
       return failed(publish, fileError);
     }
 
-    // A stopped restyle (Stop, the cost cap, a plan limit, a failed login, a closed Project) is discarded, as a
-    // stopped Revision is: half a video in the new look would replace a whole one in the old.
-    if (origin === "restyle" && run.stopped) {
+    // A stopped restyle or regeneration (Stop, the cost cap, a plan limit, a failed login, a closed Project) is
+    // discarded, as a stopped Revision is: half a new video would replace a whole one.
+    if (replacesVersion(origin) && run.stopped) {
       store.set({ state: "idle", units: [], stopped: run.stopped });
       return;
     }
@@ -1095,7 +1154,14 @@ export function createGeneration({ connector, checker, previews, stills, project
     };
   }
 
-  return { estimate, start, stop, retry, watch, open, setCaptions, changeStyle, isRunning, whenEnded };
+  return { estimate, start, regenerate, stop, retry, watch, open, setCaptions, changeStyle, isRunning, whenEnded };
+}
+
+export type RegenerateError = { code: "BUSY"; projectId: string } | { code: "REGENERATE_UNCONFIRMED"; costUsd?: CostRange };
+
+/** A run that replaces a whole existing video: kept only once complete, never recovered after a crash. */
+function replacesVersion(origin: VersionOrigin) {
+  return origin === "restyle" || origin === "regeneration";
 }
 
 /** A change from the Style tab: the snapshot to draw the video in, Captions on or off, and whether a restyle is confirmed. */

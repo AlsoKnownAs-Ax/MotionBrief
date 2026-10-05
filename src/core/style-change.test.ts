@@ -309,6 +309,62 @@ describe("a restyle", () => {
   );
 });
 
+describe("a regeneration from scratch", () => {
+  it(
+    "asks to confirm first, priced on an API key, then plans a new Storyboard and every unit while the current Version plays",
+    async () => {
+      const { core, replay, project, video } = await generatedVideo({ storyboard: [submitsStoryboard(storyboard)], ...(await restyleTurns(1)) });
+
+      await expect(core.video.regenerate(video)).rejects.toMatchObject({
+        code: "REGENERATE_UNCONFIRMED",
+        data: { costUsd: { low: expect.any(Number), high: expect.any(Number) } },
+      });
+      expect(replay.asked).toEqual([]);
+
+      const generation = await watch(core, video);
+      replay.hold("storyboard");
+      await core.video.regenerate({ ...video, confirmed: true });
+      await generation.until(({ state }) => state === "planning");
+      // The current Version stays the video's until the new one is complete.
+      expect(await core.video.open(video)).toMatchObject({ version: 1 });
+      await expect(core.video.regenerate({ ...video, confirmed: true })).rejects.toMatchObject({ code: "BUSY" });
+      replay.release("storyboard");
+      const done = await generation.until(({ state }) => state === "done" || state === "failed");
+      generation.stop();
+      const saved = await readVersion(project, 2);
+
+      expect(done).toMatchObject({ state: "done", version: 2 });
+      expect(replay.askedOf("storyboard")).toHaveLength(1);
+      expect(saved).toMatchObject({ origin: "regeneration", storyboard, preset: BLUEPRINT, captions: false });
+      expect((await core.video.versions(video)).map(({ origin }) => origin)).toEqual(["regeneration", "generation"]);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
+    "is discarded when cut short, leaving nothing a crash recovery would save",
+    async () => {
+      const { core, replay, project, video } = await generatedVideo({ storyboard: [submitsStoryboard(storyboard)], ...(await restyleTurns(1)) });
+      const generation = await watch(core, video);
+      replay.hold("scene-code s01");
+
+      await core.video.regenerate({ ...video, confirmed: true });
+      await generation.until(({ units }) => units.some(({ id, status }) => id === "s02" && status === "ready"));
+      const hasRecord = await generationRecord(project);
+      await core.video.stop(video);
+      const ended = await generation.until((status) => status.stopped !== undefined && hasEnded(status));
+      generation.stop();
+
+      expect(hasRecord).toBe(false);
+      expect(ended).toMatchObject({ state: "idle", stopped: { cause: "stopped" } });
+      expect(await newestVersion(core, video)).toBe(1);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+});
+
 /** Ends once the video's restyle has ended, however it ended. */
 const hasEnded = ({ state }: GenerationStatus) => state === "idle" || state === "done" || state === "failed";
 

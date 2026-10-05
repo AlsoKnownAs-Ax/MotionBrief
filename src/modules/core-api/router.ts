@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
-import type { GenerateError, Generation, OpenVideoError, RetryError, StyleChangeError } from "../generation";
+import type { GenerateError, Generation, OpenVideoError, RegenerateError, RetryError, StyleChangeError } from "../generation";
 import type { History, HistoryError } from "../history";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
@@ -226,6 +226,9 @@ export function createCoreRouter({
       generate: api.video.generate.handler(async ({ input }) => {
         dataOrThrow(await generation.start(input));
       }),
+      regenerate: api.video.regenerate.handler(async ({ input: { confirmed, ...video } }) => {
+        dataOrThrow(await generation.regenerate(video, confirmed ?? false));
+      }),
       generation: api.video.generation.handler(async ({ input, signal }) => dataOrThrow(await generation.watch(input, signal))),
       revise: api.video.revise.handler(async ({ input: { projectId, format, ...request } }) => {
         dataOrThrow(await revisions.start({ projectId, format }, request));
@@ -280,7 +283,7 @@ type CodedResult =
   | { data: unknown; error: null }
   | {
       data: null;
-      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | ReviseError | UsageError | SettingsError | HistoryError;
+      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | UsageError | SettingsError | HistoryError;
     };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
