@@ -939,7 +939,7 @@ export function createGeneration({ connector, checker, previews, stills, project
         const { data: video } = await projects.video(ref.projectId, ref.format);
         const source = { storyboard, transcript, rules, preset, code: { ...code }, pending, notes: { ...notes }, voiceover: video?.voiceoverPath };
         const { preview, previewError } = await previews.open(source).then(
-          ({ data, error }) => ({ preview: data, previewError: error ? previewErrorOf(error) : undefined }),
+          ({ data, error }) => ({ preview: data, previewError: previewErrorOf(error) }),
           (cause: unknown) => ({ preview: null, previewError: thrown(cause) }),
         );
 
@@ -1336,7 +1336,7 @@ function isWork(status: GenerationUnit["status"]): boolean {
 /** Units finish in any order; the files list them in the Storyboard's, so the same video always saves the same. */
 function inUnitOrder(content: VideoContent, units: Unit[]): VideoContent {
   const order = (id: string) => units.findIndex((unit) => unit.id === id);
-  const hashes = units.flatMap(({ id }) => (content.units[id] ? [[id, content.units[id]] as const] : []));
+  const hashes = units.map(({ id }) => [id, content.units[id]] as const).filter((entry): entry is readonly [string, string] => Boolean(entry[1]));
 
   return { ...content, units: Object.fromEntries(hashes), flags: [...content.flags].sort((a, b) => order(a.unit) - order(b.unit)) };
 }
@@ -1358,10 +1358,22 @@ function projectError(error: ProjectsError | VideoDocumentError | VersionError):
 }
 
 function thrown(cause: unknown): GenerationPreviewError {
-  return { code: "PREVIEW_FAILED", message: cause instanceof Error ? cause.message : String(cause) };
+  return { code: "PREVIEW_FAILED", message: messageOf(cause) };
 }
 
-function previewErrorOf(error: PreviewError): GenerationPreviewError {
+function messageOf(cause: unknown) {
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+
+  return String(cause);
+}
+
+function previewErrorOf(error: PreviewError | null): GenerationPreviewError | undefined {
+  if (!error) {
+    return undefined;
+  }
+
   return { code: error.code, message: previewErrorMessage(error) };
 }
 

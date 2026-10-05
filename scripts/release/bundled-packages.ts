@@ -23,7 +23,12 @@ export function bundledPackages(build: string): Plugin {
     apply: "build",
     generateBundle() {
       for (const id of this.getModuleIds()) {
-        const dir = this.getModuleInfo(id)?.isExternal ? undefined : packageDirOf(id);
+        // An external module isn't bundled: it ships in node_modules.
+        if (this.getModuleInfo(id)?.isExternal) {
+          continue;
+        }
+
+        const dir = packageDirOf(id);
 
         if (dir) {
           dirs.add(dir);

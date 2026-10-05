@@ -170,7 +170,7 @@ function handleIpc(core: CoreProcess) {
       return null;
     }
 
-    const defaultPath = isAbsolute(options.defaultPath) ? options.defaultPath : join(app.getPath("videos"), options.defaultPath);
+    const defaultPath = inVideos(options.defaultPath);
     const { canceled, filePath } = await dialog.showSaveDialog(window, { ...options, defaultPath, properties: ["showOverwriteConfirmation", "createDirectory"] });
 
     if (canceled || !filePath) {
@@ -234,6 +234,15 @@ function focusOrCreateWindow() {
   }
 
   window.focus();
+}
+
+/** A suggested save path as given when it is a full path; a bare file name goes in the Videos folder. */
+function inVideos(path: string) {
+  if (isAbsolute(path)) {
+    return path;
+  }
+
+  return join(app.getPath("videos"), path);
 }
 
 /** The OS's place for regenerable files: never roamed or backed up, unlike app data. */

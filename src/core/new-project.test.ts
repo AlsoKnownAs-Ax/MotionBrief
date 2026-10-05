@@ -418,7 +418,7 @@ describe("new Project", { timeout: 30_000 }, () => {
       expect(heard.text).toBe("balancer,");
       expect(fixed).toEqual({ text: "Balancer,", start: heard.start, end: heard.end, heard: "balancer," });
       const { transcript } = await projectDocument(project.path);
-      expect(transcript?.words).toEqual(words.map((word, index) => (index === BALANCER ? fixed : word)));
+      expect(transcript?.words).toEqual(words.with(BALANCER, fixed));
       expect(await until(core, project.id, ({ words: shown }) => shown[BALANCER]?.text === "Balancer,")).toMatchObject({ state: "done" });
       // The Transcript is Project-level: nothing but the Project document changed.
       expect((await readdir(project.path)).sort()).toEqual([".lock", "project.json", "voiceover.wav"]);

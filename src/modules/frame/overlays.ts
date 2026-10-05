@@ -33,10 +33,18 @@ const SKETCH_DEFS = `<svg width="0" height="0" style="position: absolute" aria-h
 <filter id="${SKETCH_FILTER}" x="-4%" y="-4%" width="108%" height="108%"><feTurbulence type="fractalNoise" baseFrequency="0.03" numOctaves="2" seed="7" result="noise"/><feDisplacementMap in="SourceGraphic" in2="noise" scale="6" xChannelSelector="R" yChannelSelector="G"/></filter>
 </defs></svg>`;
 
+const LINE_DEFS = { sketchy: SKETCH_DEFS, clean: "" } satisfies Record<Treatments["line"], string>;
+
+const TEXTURE_OVERLAY = '<div id="mb-texture" class="mb-texture" data-layout-ignore></div>';
+
 export function rootTreatments({ texture, line }: Treatments): RootTreatments {
-  return {
-    css: TEXTURES[texture],
-    defs: line === "sketchy" ? SKETCH_DEFS : "",
-    overlay: texture === "none" ? "" : '<div id="mb-texture" class="mb-texture" data-layout-ignore></div>',
-  };
+  return { css: TEXTURES[texture], defs: LINE_DEFS[line], overlay: textureOverlay(texture) };
+}
+
+function textureOverlay(texture: Treatments["texture"]) {
+  if (texture === "none") {
+    return "";
+  }
+
+  return TEXTURE_OVERLAY;
 }

@@ -42,6 +42,9 @@ type UpdatesOptions = {
 
 const ABANDON_AFTER_MS = 30_000;
 
+/** The electron-updater channel each update channel reads: latest.yml, or beta.yml. */
+const FEEDS = { stable: "latest", beta: "beta" } satisfies Record<UpdateChannel, "latest" | "beta">;
+
 /**
  * App updates: checked and downloaded in the background, installed on "Restart to update" or on quit. A
  * staged update only counts while it fits the channel, so a beta downloaded before leaving beta (or still
@@ -90,7 +93,7 @@ export async function createUpdates({ backend, isEnabled, currentVersion, store,
   }
 
   function configure() {
-    backend.configure({ channel: channel === "beta" ? "beta" : "latest", allowPrerelease: channel === "beta" });
+    backend.configure({ channel: FEEDS[channel], allowPrerelease: channel === "beta" });
   }
 
   function check() {

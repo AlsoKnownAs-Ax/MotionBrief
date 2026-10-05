@@ -60,11 +60,13 @@ export async function checkRules(page: FramePage, assembled: AssembledPage): Pro
   return [...overlaps.values(), ...[...textures.values()].map(({ finding }) => finding)];
 }
 
+const OVERLAP_CODES = { icon: "ICON_OVERLAPS_TEXT", image: "IMAGE_OVERLAPS_TEXT" } satisfies Record<Overlap["kind"], string>;
+
 function overlapFinding({ kind, selector, text, textSelector, composition }: Overlap, assembled: AssembledPage, time: number): CheckFinding {
   return {
     unit: unitOf(composition, assembled),
     source: "rules",
-    code: kind === "icon" ? "ICON_OVERLAPS_TEXT" : "IMAGE_OVERLAPS_TEXT",
+    code: OVERLAP_CODES[kind],
     message: `The ${kind} ${selector} overlaps the text "${text}" (${textSelector}). Give each its own space, such as side by side in a flex row, or mark deliberate layering with data-layout-allow-overlap on the ${kind} or the text.`,
     selector,
     time: round(time),

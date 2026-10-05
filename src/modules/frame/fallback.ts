@@ -82,7 +82,15 @@ function lineHtml(scene: Scene, element: SceneElement, leads: boolean): string {
     return `<pre id="${id}" class="mb-card mb-mono fb-code">${escape(lines.join("\n"))}</pre>`;
   }
 
-  return `<div id="${id}" class="${leads ? "mb-title fb-line" : "fb-line"}">${escape(textOf(scene, element.value))}</div>`;
+  return `<div id="${id}" class="${lineClass(leads)}">${escape(textOf(scene, element.value))}</div>`;
+}
+
+function lineClass(leads: boolean) {
+  if (leads) {
+    return "mb-title fb-line";
+  }
+
+  return "fb-line";
 }
 
 /** The words an element shows: its own copy, or what its fields describe. */

@@ -28,7 +28,7 @@ function shownCaptions(page: FramePage) {
 function shownWords(page: FramePage) {
   return page.evaluate<{ text: string; color: string; background: string; opacity: number }[]>(`(() => {
     const line = [...document.querySelectorAll(".mb-caption")].find((node) => { const style = getComputedStyle(node); return style.display !== "none" && style.visibility !== "hidden"; });
-    return line ? [...line.querySelectorAll(".mb-caption-word")].map((word) => { const style = getComputedStyle(word); return { text: word.textContent, color: style.color, background: style.backgroundColor, opacity: Number(style.opacity) }; }) : [];
+    return [...(line?.querySelectorAll(".mb-caption-word") ?? [])].map((word) => { const style = getComputedStyle(word); return { text: word.textContent, color: style.color, background: style.backgroundColor, opacity: Number(style.opacity) }; });
   })()`);
 }
 

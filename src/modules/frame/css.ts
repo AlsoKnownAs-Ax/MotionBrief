@@ -88,15 +88,19 @@ function sketchyCss({ line, surface }: Treatments): string {
     return "";
   }
 
-  const outlines =
-    surface === "flat"
-      ? ""
-      : `.mb-card { border-color: transparent; }
-.mb-card::before { content: ""; position: absolute; inset: calc(-1 * var(--border-w)); border: var(--border-w) solid var(--line); border-radius: inherit; filter: url(#${SKETCH_FILTER}); pointer-events: none; }
-`;
-
-  return `${outlines}.mb-icon, .mb-chip { filter: url(#${SKETCH_FILTER}); }
+  return `${sketchyOutlines(surface)}.mb-icon, .mb-chip { filter: url(#${SKETCH_FILTER}); }
 .mb-chip > .mb-icon { filter: none; }
+`;
+}
+
+/** A flat surface has no outline to wobble. */
+function sketchyOutlines(surface: Treatments["surface"]): string {
+  if (surface === "flat") {
+    return "";
+  }
+
+  return `.mb-card { border-color: transparent; }
+.mb-card::before { content: ""; position: absolute; inset: calc(-1 * var(--border-w)); border: var(--border-w) solid var(--line); border-radius: inherit; filter: url(#${SKETCH_FILTER}); pointer-events: none; }
 `;
 }
 

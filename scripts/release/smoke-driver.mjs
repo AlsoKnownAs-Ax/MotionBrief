@@ -20,8 +20,28 @@ const isWindows = process.platform === "win32";
 async function step(name, run) {
   const started = Date.now();
   const detail = await run();
-  console.log(`ok  ${name} (${((Date.now() - started) / 1000).toFixed(1)} s)${detail ? `: ${detail}` : ""}`);
+  console.log(`ok  ${name} (${((Date.now() - started) / 1000).toFixed(1)} s)${detailText(detail)}`);
 }
+
+function detailText(detail) {
+  if (!detail) {
+    return "";
+  }
+
+  return `: ${detail}`;
+}
+
+/** An executable's file name on this platform. */
+function executable(name) {
+  if (!isWindows) {
+    return name;
+  }
+
+  return `${name}.exe`;
+}
+
+/** The Claude Agent SDK's native package for each platform the release smoke-tests. */
+const CLAUDE_PACKAGES = { win32: "claude-agent-sdk-win32-x64", darwin: "claude-agent-sdk-darwin-arm64" };
 
 function check(condition, message) {
   if (!condition) {
@@ -122,15 +142,15 @@ await step("exports the fixture Project to MP4 (producer, chrome-headless-shell,
 
 await step("whisper-cli runs", async () =>
   // The CPU backend: a Vulkan driver can crash it while loading (see the Transcriber's CPU retry).
-  runUnpacked(join("vendor", "whisper-cli", isWindows ? "whisper-cli.exe" : "whisper-cli"), ["--version"], { GGML_VK_VISIBLE_DEVICES: "" }),
+  runUnpacked(join("vendor", "whisper-cli", executable("whisper-cli")), ["--version"], { GGML_VK_VISIBLE_DEVICES: "" }),
 );
 
-await step("FFprobe runs", async () => runUnpacked(join("vendor", "ffmpeg", isWindows ? "ffprobe.exe" : "ffprobe"), ["-version"]));
+await step("FFprobe runs", async () => runUnpacked(join("vendor", "ffmpeg", executable("ffprobe")), ["-version"]));
 
 await step("the bundled Claude Code binary runs", async () => {
-  const platformPackage = isWindows ? "claude-agent-sdk-win32-x64" : "claude-agent-sdk-darwin-arm64";
+  const platformPackage = CLAUDE_PACKAGES[process.platform] ?? CLAUDE_PACKAGES.darwin;
 
-  return runUnpacked(join("node_modules", "@anthropic-ai", platformPackage, isWindows ? "claude.exe" : "claude"), ["--version"], {
+  return runUnpacked(join("node_modules", "@anthropic-ai", platformPackage, executable("claude")), ["--version"], {
     DISABLE_AUTOUPDATER: "1",
   });
 });

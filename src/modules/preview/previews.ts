@@ -33,6 +33,15 @@ export function previewErrorMessage(error: PreviewError): string {
   return (PREVIEW_ERRORS[error.code] as (error: PreviewError) => string)(error);
 }
 
+/** The file's stats; none for a page without a Voiceover, or a Voiceover that isn't there. */
+async function statOf(path: string | undefined) {
+  if (!path) {
+    return undefined;
+  }
+
+  return stat(path).catch(() => undefined);
+}
+
 export type ThumbnailsError = { code: "PREVIEW_NOT_FOUND"; id: string } | { code: "CHROME_MISSING"; path: string } | FramePageError;
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
@@ -73,7 +82,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
       return { data: null, error: { code: "UNKNOWN_UNIT", unit: unknown, units } };
     }
 
-    const voiceover = source.voiceover ? await stat(source.voiceover).catch(() => undefined) : undefined;
+    const voiceover = await statOf(source.voiceover);
 
     if (source.voiceover && !voiceover?.isFile()) {
       return { data: null, error: { code: "VOICEOVER_MISSING", path: source.voiceover } };

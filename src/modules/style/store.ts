@@ -140,7 +140,11 @@ export function createPresetStore({ dir }: { dir: string }) {
   async function readOne(id: string): Promise<PresetFile | undefined> {
     const path = pathOf(id);
 
-    return path ? readFileAt(path) : undefined;
+    if (!path) {
+      return undefined;
+    }
+
+    return readFileAt(path);
   }
 
   /** A file that isn't a valid Preset is left alone and not listed. */
@@ -181,7 +185,11 @@ export function createPresetStore({ dir }: { dir: string }) {
   function pathOf(id: string): string | undefined {
     const path = resolve(dir, `${id}.json`);
 
-    return StylePresetIdSchema.safeParse(id).success && dirname(path) === resolve(dir) ? path : undefined;
+    if (!StylePresetIdSchema.safeParse(id).success || dirname(path) !== resolve(dir)) {
+      return undefined;
+    }
+
+    return path;
   }
 
   return { list, get, duplicate: serialized(duplicate), save: serialized(save), remove: serialized(remove) };
@@ -205,10 +213,14 @@ function unbundledWeight({ typography }: StylePreset): PresetStoreError | undefi
 
 /** "Blueprint copy", then "Blueprint copy 2" while that name is taken. */
 function copyName(name: string, taken: Set<string>, attempt = 1): string {
-  const suffix = attempt === 1 ? " copy" : ` copy ${attempt}`;
+  const suffix = numbered(" copy", " ", attempt);
   const candidate = `${name.slice(0, NAME_MAX - suffix.length).trimEnd()}${suffix}`;
 
-  return taken.has(candidate) ? copyName(name, taken, attempt + 1) : candidate;
+  if (taken.has(candidate)) {
+    return copyName(name, taken, attempt + 1);
+  }
+
+  return candidate;
 }
 
 /** A kebab-case id from a name; it never changes after, even when the Preset is renamed. */
@@ -218,13 +230,30 @@ function slugOf(name: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
-  return /^[a-z]/.test(slug) ? slug : `preset-${slug}`.replace(/-+$/, "");
+  if (/^[a-z]/.test(slug)) {
+    return slug;
+  }
+
+  return `preset-${slug}`.replace(/-+$/, "");
 }
 
 function freeId(base: string, taken: Set<string>, attempt = 1): string {
-  const candidate = attempt === 1 ? base : `${base}-${attempt}`;
+  const candidate = numbered(base, "-", attempt);
 
-  return taken.has(candidate) ? freeId(base, taken, attempt + 1) : candidate;
+  if (taken.has(candidate)) {
+    return freeId(base, taken, attempt + 1);
+  }
+
+  return candidate;
+}
+
+/** The first try as it is; later ones numbered from 2. */
+function numbered(text: string, separator: string, attempt: number) {
+  if (attempt === 1) {
+    return text;
+  }
+
+  return `${text}${separator}${attempt}`;
 }
 
 async function fileStep<T>(path: string, step: () => Promise<T>): Promise<Result<T, PresetFileError>> {
