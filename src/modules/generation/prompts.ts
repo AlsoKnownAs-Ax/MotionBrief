@@ -87,12 +87,34 @@ ${issues.map(issueLine).join("\n")}`;
 export function issueLine({ code, sceneId, field, message }: StoryboardIssue): string {
   const where = [sceneId, field].filter(Boolean).join(" ");
 
-  return `- [${code}]${where ? ` ${where}:` : ""} ${message}`;
+  return `- [${code}]${issueWhere(where)} ${message}`;
+}
+
+function issueWhere(where: string) {
+  if (!where) {
+    return "";
+  }
+
+  return ` ${where}:`;
 }
 
 export function noStoryboardMessage(): string {
   return `No Storyboard was handed in. Hand in the whole Storyboard with the ${STORYBOARD_TOOL} tool.`;
 }
+
+/** What the safe area leaves out besides the frame's edges: the Captions band at the bottom of a vertical video. */
+const CAPTIONS_BAND = {
+  horizontal: () => "",
+  vertical: (bottom: number) => ` Below y ${bottom} is reserved for Captions: keep everything above it.`,
+} satisfies Record<Format, (bottom: number) => string>;
+
+/** How a Canvas's regions follow each other. */
+const CANVAS_FLOW = { horizontal: "left to right", vertical: "top to bottom" } satisfies Record<Format, string>;
+
+const FORMAT_LAYOUT = {
+  horizontal: "Horizontal: use the width; diagrams run left to right, comparisons side by side.",
+  vertical: "Vertical: stack content, labels at least 40 px, one focal element, use the full height of the safe area.",
+} satisfies Record<Format, string>;
 
 /**
  * The frame and the motion doctrine: what Scene code may use, what it must never do, and what it is
@@ -104,7 +126,7 @@ export function sceneCodeSystem(format: Format, brief: PresetBrief): string {
   return `You write the HyperFrames (HTML, CSS and GSAP) code for one unit of a MotionBrief video: one Scene, or the Scenes sharing one Canvas. You work inside a frame MotionBrief owns, and hand in {css, html, js} with the ${SCENE_CODE_TOOL} tool; MotionBrief wraps it into the unit's composition and checks it when your turn ends.
 
 THE FRAME (already there; never re-create it):
-- The unit is ${width}x${height}. Content stays in the safe area: x ${safe.x}-${width - safe.x}, y ${safe.top}-${safe.bottom}.${format === "vertical" ? ` Below y ${safe.bottom} is reserved for Captions: keep everything above it.` : ""}
+- The unit is ${width}x${height}. Content stays in the safe area: x ${safe.x}-${width - safe.x}, y ${safe.top}-${safe.bottom}.${CAPTIONS_BAND[format](safe.bottom)}
 - The background, its treatment and any texture are painted by the frame. Never paint a full-frame background.
 - Tokens, as CSS variables: colors --bg --bg2 --surface --surface2 --line --ink --muted --accent (the one key thing) --accent2 --accent3 --good --bad; fonts --font-display --font-body --font-label --font-mono; type sizes --fs-display --fs-title --fs-body --fs-label --fs-mono; --radius; the safe area --safe-x --safe-top --safe-w --safe-h.
 - Classes: .mb-safe (an absolute box over the safe area), .mb-card (a surface in the Style Preset's treatment), .mb-display .mb-title .mb-body .mb-label .mb-mono (type), .mb-accent, .mb-icon, .mb-wire (an SVG connector layer).
@@ -130,7 +152,7 @@ HELPERS (window.MB; prefer them, their defaults follow the Style Preset's Motion
 - MB.type(tl, target, time, {duration}): types an element's text on.
 - MB.emphasize(tl, target, time, {scale}): a brief bump in the accent color.
 
-A CANVAS UNIT (several Scenes): put everything in <div id="<unitId>-world"> at left 0, top 0 with an explicit px size, and give each Scene a region <div data-region="<sceneId>"> with explicit px left, top, width and height (${width}x${height}, or larger to zoom out), laid out ${format === "vertical" ? "top to bottom" : "left to right"} as one continuous picture. Inside a region, keep content within the same safe area as the frame. MotionBrief fits each region in the frame and moves the camera between them around each Scene's start; never animate the world or the camera.
+A CANVAS UNIT (several Scenes): put everything in <div id="<unitId>-world"> at left 0, top 0 with an explicit px size, and give each Scene a region <div data-region="<sceneId>"> with explicit px left, top, width and height (${width}x${height}, or larger to zoom out), laid out ${CANVAS_FLOW[format]} as one continuous picture. Inside a region, keep content within the same safe area as the frame. MotionBrief fits each region in the frame and moves the camera between them around each Scene's start; never animate the world or the camera.
 
 A CARRY-OVER INTO YOUR UNIT (the Scene before names an element both Scenes have): that element is on screen from your unit's start (its at(id) is 0) and MotionBrief flies it from its place in the Scene before into yours. Give it no entrance; just lay it out where it belongs.
 
@@ -138,7 +160,7 @@ MOTION AND LOOK:
 - Each element arrives on the word that names it; sequence reveals across the Scene, never everything at once.
 - Something new arrives or moves at least every 2 s while the Scene explains; after the last reveal, hold still (a brief MB.emphasize on a later key word is fine). No idle breathing, no slow drifting pans.
 - Big, bold type, generous spacing, strong alignment; nothing cramped, nothing overlapping.
-- ${format === "vertical" ? "Vertical: stack content, labels at least 40 px, one focal element, use the full height of the safe area." : "Horizontal: use the width; diagrams run left to right, comparisons side by side."}
+- ${FORMAT_LAYOUT[format]}
 
 ${brief.sceneCode}`;
 }
@@ -162,7 +184,7 @@ ${JSON.stringify(storyboard, null, 1)}
 The Style Preset (reach its colors and fonts only through the tokens):
 ${JSON.stringify(presetForCode(preset), null, 1)}
 
-YOUR UNIT: "${unit.id}", ${unit.scenes.length > 1 ? `a Canvas with Scenes ${scenes}` : "a lone Scene"}. It lasts ${seconds(unit.duration)} s (S.duration).
+YOUR UNIT: "${unit.id}", ${unitKind(unit.scenes.length, scenes)}. It lasts ${seconds(unit.duration)} s (S.duration).
 Scene starts within the unit, in seconds: ${JSON.stringify(unit.sceneStarts)}${carriedLine(unit)}
 
 Its Storyboard entries:
@@ -175,6 +197,14 @@ Spoken words, in seconds from the unit's start:
 ${spoken}
 
 Write the unit and hand it in with ${SCENE_CODE_TOOL}.`;
+}
+
+function unitKind(sceneCount: number, scenes: string): string {
+  if (sceneCount > 1) {
+    return `a Canvas with Scenes ${scenes}`;
+  }
+
+  return "a lone Scene";
 }
 
 function carriedLine({ carryIn }: Unit): string {
@@ -232,9 +262,25 @@ ${problems.map((problem) => `- [visual] ${problem}`).join("\n")}`;
 }
 
 export function findingLine({ source, code, message, selector, time }: CheckFinding): string {
-  const where = [selector, time === undefined ? undefined : `at ${seconds(time)} s`].filter(Boolean).join(", ");
+  const where = [selector, atTime(time)].filter(Boolean).join(", ");
 
-  return `- [${source} ${code}] ${message}${where ? ` (${where})` : ""}`;
+  return `- [${source} ${code}] ${message}${findingWhere(where)}`;
+}
+
+function atTime(time: number | undefined) {
+  if (time === undefined) {
+    return undefined;
+  }
+
+  return `at ${seconds(time)} s`;
+}
+
+function findingWhere(where: string) {
+  if (!where) {
+    return "";
+  }
+
+  return ` (${where})`;
 }
 
 /** The Preset as Scene code may use it: Palette roles and fonts by token, never their values. */

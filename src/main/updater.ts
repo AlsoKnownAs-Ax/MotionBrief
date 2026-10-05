@@ -58,6 +58,8 @@ function electronBackend(): UpdateBackend {
       autoUpdater.autoInstallOnAppQuit = install;
     },
     quitAndInstall: () => autoUpdater.quitAndInstall(),
+    // electron-updater hands a macOS download to Squirrel.Mac, which installs it on quit on its own.
+    stagesNatively: process.platform === "darwin",
   };
 }
 

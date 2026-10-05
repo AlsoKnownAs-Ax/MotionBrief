@@ -16,8 +16,8 @@ import type {
 } from "../../contract";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
-import { inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
-import type { PreviewError, Previews, Stills } from "../preview";
+import { endsRun, inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
+import { previewErrorMessage, type Previews, type Stills } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type RevisionRecord, type Version, type VersionError } from "../projects";
 import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { presetBrief, storyboardRules } from "../style";
@@ -313,6 +313,10 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
       return capped(run);
     }
 
+    if (error?.code === "AGENT_FAILED" && endsRun(error.error)) {
+      return halt(run, error.error);
+    }
+
     if (error) {
       return publish(run, { state: "failed", affected: [], error });
     }
@@ -410,6 +414,11 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
         onProgress: (status, attempts) => show({ id: unit.id, rebuild: "regenerate", status, attempts }),
       });
 
+      // A failed login, a plan limit or the cap ends the Revision as Stop does: no other agent would get further.
+      if (endsRun(outcome.error)) {
+        return halt(run, outcome.error);
+      }
+
       // A tweak that couldn't be made leaves the Scene as it was, not as a fallback.
       if (!outcome.code && isInstructionOnly) {
         notApplied.push(...unit.scenes.map(({ id }) => id));
@@ -482,8 +491,16 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
 
   /** A Revision whose run reached the cost cap ends as stopped, with no Version, the way Stop discards one. */
   function capped(run: Run) {
-    const error: ConnectorError = { code: "COST_CAP", message: "Cost cap reached" };
+    halt(run, { code: "COST_CAP", message: "Cost cap reached" });
+  }
+
+  /**
+   * Ends the Revision as Stop does, for an error none of its agents would get past (a failed login, a plan limit, the
+   * cost cap): every agent's turn is interrupted, nothing is saved, and the queue behind it pauses. Says why.
+   */
+  function halt(run: Run, error: ConnectorError) {
     publish(run, { state: "stopped", affected: [], error: { code: "AGENT_FAILED", error } });
+    run.job.controller.abort();
   }
 
   /**
@@ -583,7 +600,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     }
 
     if (error) {
-      return { previewError: { code: error.code, message: previewMessage(error) } };
+      return { previewError: { code: error.code, message: previewErrorMessage(error) } };
     }
 
     return { preview: data };
@@ -722,15 +739,4 @@ function projectError(error: ProjectsError | VersionError): Extract<ProjectsErro
   }
 
   return fileErrorOf(error);
-}
-
-const PREVIEW_ERRORS = {
-  VOICEOVER_MISSING: (error) => `The Voiceover isn't at ${error.path} any more.`,
-  INVALID_STORYBOARD: (error) => error.issues.map((issue) => issue.message).join(" "),
-  UNKNOWN_UNIT: (error) => `The Storyboard has no unit ${error.unit}.`,
-} satisfies { [Code in PreviewError["code"]]: (error: Extract<PreviewError, { code: Code }>) => string };
-
-function previewMessage(error: PreviewError): string {
-  // The table is keyed by code, so each entry receives the error of its own code.
-  return (PREVIEW_ERRORS[error.code] as (error: PreviewError) => string)(error);
 }

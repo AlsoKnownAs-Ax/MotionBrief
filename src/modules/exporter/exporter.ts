@@ -102,7 +102,12 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
         return;
       }
 
-      await locations.remember(video, path).catch((rememberError: unknown) => console.error("[export] the export path wasn't remembered", rememberError));
+      // The MP4 is saved either way; only the next export's suggested path is lost.
+      const { error: rememberError } = await locations.remember(video, path);
+
+      if (rememberError) {
+        console.error("[export] the export path wasn't remembered", rememberError);
+      }
 
       yield { state: "done", path };
     } finally {

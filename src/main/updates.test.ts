@@ -3,9 +3,10 @@ import type { UpdateChannel } from "../shared/ipc";
 import { createUpdates, type ExportsHold } from "./updates";
 
 /** electron-updater as updates.ts sees it: tests fire downloads and read what was configured. */
-function fakeBackend() {
+function fakeBackend(stagesNatively: boolean) {
   const listeners: ((version: string) => void)[] = [];
   const backend = {
+    stagesNatively,
     installOnQuit: true,
     installs: 0,
     channel: "",
@@ -43,8 +44,10 @@ function fakeExports(running = 0) {
   return exports;
 }
 
-async function setup({ channel, running = 0, abandonAfterMs }: { channel?: UpdateChannel; running?: number; abandonAfterMs?: number } = {}) {
-  const backend = fakeBackend();
+type Setup = { channel?: UpdateChannel; running?: number; abandonAfterMs?: number; stagesNatively?: boolean };
+
+async function setup({ channel, running = 0, abandonAfterMs, stagesNatively = false }: Setup = {}) {
+  const backend = fakeBackend(stagesNatively);
   const exports = fakeExports(running);
   const updates = await createUpdates({
     backend,
@@ -95,6 +98,22 @@ describe("app updates", () => {
       expect(updates.state().readyVersion).toBeUndefined();
       expect(backend.installOnQuit).toBe(false);
       expect(await updates.restart()).toBe(false);
+    });
+
+    it("says a beta the system installer already holds (macOS) still installs on quit, rather than pretend it's gone", async () => {
+      const { backend, updates } = await setup({ channel: "beta", stagesNatively: true });
+      backend.download("1.1.0-beta.1");
+
+      await updates.setChannel("stable");
+
+      expect(backend.channel).toBe("latest");
+      expect(updates.state()).toMatchObject({ channel: "stable", readyVersion: "1.1.0-beta.1", stagedBeta: "1.1.0-beta.1" });
+
+      // Stable takes over from the next update.
+      backend.download("1.1.0");
+
+      expect(updates.state()).toMatchObject({ channel: "stable", readyVersion: "1.1.0" });
+      expect(updates.state().stagedBeta).toBeUndefined();
     });
 
     it("still takes a stable release that downloads later", async () => {

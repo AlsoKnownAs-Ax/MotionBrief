@@ -40,7 +40,7 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
   const units = planUnits(storyboard, transcript);
   const duration = transcript.duration;
   const page = await framePage({ format, units, style: preset });
-  const audio = voiceover ? `assets/voiceover${extname(voiceover).toLowerCase()}` : undefined;
+  const audio = audioAsset(voiceover);
 
   await mkdir(join(dir, "compositions"), { recursive: true });
   await Promise.all(page.assets.map((asset) => writeAsset(dir, asset)));
@@ -62,6 +62,24 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
   await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, page, captions: layer, background: preset.palette.colors.bg }));
 
   return { format, width, height, duration, units };
+}
+
+/** Where the page plays the Voiceover from, when it has one. */
+function audioAsset(voiceover: string | undefined) {
+  if (!voiceover) {
+    return undefined;
+  }
+
+  return `assets/voiceover${extname(voiceover).toLowerCase()}`;
+}
+
+/** The root composition's audio clip: the Voiceover for the whole video, or none. */
+function voiceoverTrack(audio: string | undefined, duration: number): string[] {
+  if (!audio) {
+    return [];
+  }
+
+  return [`<audio id="el-voiceover" src="${audio}" data-start="0" data-duration="${duration}" data-track-index="10" data-volume="1"></audio>`];
 }
 
 function captionsWhenOn(captions: boolean, options: Parameters<typeof captionsLayer>[0]) {
@@ -113,9 +131,7 @@ function rootHtml({ width, height, duration, units, audio, page, captions, backg
     (unit, index) =>
       `<div id="el-${unit.id}" class="scene" data-composition-id="${unit.id}" data-composition-src="compositions/${unit.id}.html" data-start="${unit.start}" data-duration="${unit.duration}" data-track-index="${1 + (index % 2)}"></div>`,
   );
-  const voiceover = audio
-    ? [`<audio id="el-voiceover" src="${audio}" data-start="0" data-duration="${duration}" data-track-index="10" data-volume="1"></audio>`]
-    : [];
+  const voiceover = voiceoverTrack(audio, duration);
 
   return `<!doctype html>
 <html lang="en">

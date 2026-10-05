@@ -76,9 +76,14 @@ async function serve(root: string, request: IncomingMessage, response: ServerRes
     return;
   }
 
-  const file = path === undefined ? undefined : resolve(root, `.${path}`);
+  if (path === undefined) {
+    notFound(response);
+    return;
+  }
 
-  if (!file || !isInside(file, root) || relative(root, file).split(sep).length < 2) {
+  const file = resolve(root, `.${path}`);
+
+  if (!isInside(file, root) || relative(root, file).split(sep).length < 2) {
     notFound(response);
     return;
   }
@@ -141,9 +146,25 @@ function parseRange(header: string | undefined, size: number): { start: number; 
   }
 
   const [, from = "", to = ""] = match;
-  const start = from === "" ? Math.max(0, size - Number(to)) : Number(from);
-  const end = from === "" || to === "" ? size - 1 : Math.min(Number(to), size - 1);
 
+  // `-suffix`: the file's last bytes.
+  if (from === "") {
+    return satisfiable(Math.max(0, size - Number(to)), size - 1, size);
+  }
+
+  return satisfiable(Number(from), lastByte(to, size), size);
+}
+
+/** An open-ended range runs to the end of the file, and none runs past it. */
+function lastByte(to: string, size: number) {
+  if (to === "") {
+    return size - 1;
+  }
+
+  return Math.min(Number(to), size - 1);
+}
+
+function satisfiable(start: number, end: number, size: number): { start: number; end: number } | "unsatisfiable" {
   if (start > end || start >= size) {
     return "unsatisfiable";
   }

@@ -120,7 +120,7 @@ function Transfer({ status, compact, label, action }: TransferProps) {
           {actionLabel}
         </Button>
       </div>
-      {compact ? null : <ImportLink>Already have the file? Import it…</ImportLink>}
+      {!compact ? <ImportLink>Already have the file? Import it…</ImportLink> : null}
     </div>
   );
 }

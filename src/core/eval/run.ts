@@ -505,7 +505,7 @@ async function exported({ options, evalCase, ref }: CaseRun): Promise<string | u
 
   for await (const status of await core.export.mp4({ previewId: preview.id, path, video: ref })) {
     if (status.state === "failed") {
-      log(`${evalCase.id}: export failed (${status.error.code})`);
+      log(`${evalCase.id}: export failed (${status.error?.code ?? "unknown"})`);
       return undefined;
     }
 

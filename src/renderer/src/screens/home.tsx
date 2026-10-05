@@ -165,7 +165,7 @@ export function Home() {
         </dl>
       </section>
 
-      {import.meta.env.DEV && <OpenFixtureProject />}
+      {import.meta.env.DEV ? <OpenFixtureProject /> : null}
 
       <p className="flex items-center gap-2 text-app-xs text-ink-muted">
         <ShortcutKeys shortcut={SHORTCUTS.showShortcuts} />
@@ -185,13 +185,21 @@ function OpenFixtureProject() {
     <div className="flex flex-col items-center gap-2">
       <Button variant="tertiary" disabled={openFixture.isPending} onClick={() => openFixture.mutate()}>
         <FlaskConicalIcon />
-        {openFixture.isPending ? "Opening the fixture Project" : "Open the fixture Project"}
+        {fixtureLabel(openFixture.isPending)}
       </Button>
-      {openFixture.error && (
+      {openFixture.error ? (
         <p role="alert" className="text-app-xs text-status-fallback-ink">
           {openFixture.error.message}
         </p>
-      )}
+      ) : null}
     </div>
   );
+}
+
+function fixtureLabel(isOpening: boolean) {
+  if (isOpening) {
+    return "Opening the fixture Project";
+  }
+
+  return "Open the fixture Project";
 }

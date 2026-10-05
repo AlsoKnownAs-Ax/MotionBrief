@@ -1,6 +1,7 @@
 import { readFile, rm, stat } from "node:fs/promises";
 import { hostname } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import { fileStep, writeAtomically } from "./files";
 
 export const LOCK_FILE = ".lock";
@@ -52,13 +53,28 @@ export async function readLock(dir: string): Promise<Lock | undefined> {
   };
 }
 
-function parseLock(text: string): { host: string; pid: number } {
-  try {
-    const { host, pid } = JSON.parse(text) as { host?: unknown; pid?: unknown };
+/** Each field on its own, so a lock with one unreadable field still names its holder's other. */
+const LockFileSchema = z.object({ host: z.string().catch(""), pid: z.number().catch(0) });
 
-    return { host: typeof host === "string" ? host : "", pid: typeof pid === "number" ? pid : 0 };
+/** A lock that isn't JSON, or isn't one at all, names no holder: no host and no process, so it is stale. */
+const UNREADABLE = { host: "", pid: 0 };
+
+function parseLock(text: string): { host: string; pid: number } {
+  const { success, data: lock } = LockFileSchema.safeParse(parseJson(text));
+
+  if (!success) {
+    return UNREADABLE;
+  }
+
+  return lock;
+}
+
+/** JSON.parse throws on text that isn't JSON. */
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
   } catch {
-    return { host: "", pid: 0 };
+    return undefined;
   }
 }
 

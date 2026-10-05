@@ -96,8 +96,8 @@ export function Transport({ preview }: { preview: Preview }) {
       <Button
         variant="tertiary"
         size="icon"
-        aria-label={isPlaying ? "Pause (Space)" : "Play (Space)"}
-        title={isPlaying ? "Pause (Space)" : "Play (Space)"}
+        aria-label={playLabel(isPlaying)}
+        title={playLabel(isPlaying)}
         disabled={!isReady}
         onClick={togglePlay}
       >
@@ -110,6 +110,23 @@ export function Transport({ preview }: { preview: Preview }) {
       <Scrubber scenes={scenes} duration={duration} time={time} onSeek={seek} />
     </div>
   );
+}
+
+function playLabel(isPlaying: boolean) {
+  if (isPlaying) {
+    return "Pause (Space)";
+  }
+
+  return "Play (Space)";
+}
+
+/** Shift moves the playhead 5 s a key press instead of 1 s. */
+function seekStep(isLarge: boolean) {
+  if (isLarge) {
+    return 5;
+  }
+
+  return 1;
 }
 
 type ScrubberProps = { scenes: TimelineScene[]; duration: number; time: number; onSeek: (time: number) => void };
@@ -150,7 +167,7 @@ function Scrubber({ scenes, duration, time, onSeek }: ScrubberProps) {
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const step = event.shiftKey ? 5 : 1;
+    const step = seekStep(event.shiftKey);
     const targets: Record<string, number> = { ArrowLeft: time - step, ArrowRight: time + step, Home: 0, End: duration };
     const target = targets[event.key];
 

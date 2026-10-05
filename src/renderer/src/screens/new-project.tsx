@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowLeftIcon, AudioLinesIcon, CheckIcon, CircleAlertIcon, LoaderCircleIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@renderer/components/ui/button";
-import { core, orpc, queryClient } from "@renderer/core/connection";
+import { closeProject, core, orpc, queryClient, rememberOpenProject } from "@renderer/core/connection";
 import { useGeneration } from "@renderer/editor/generation";
 import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
@@ -45,6 +45,13 @@ export function NewProject() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [droppedVoiceover]);
 
+  useEffect(() => {
+    // A rename moves the folder a restarted core opens the Project from.
+    if (project) {
+      rememberOpenProject(project);
+    }
+  }, [project]);
+
   useCloseOnLeave(project?.id);
 
   /** The editor follows the generation and keeps the Project open. */
@@ -59,20 +66,38 @@ export function NewProject() {
         <Button variant="ghost" size="icon-sm" aria-label="Back to Home" onClick={openHome}>
           <ArrowLeftIcon />
         </Button>
-        <h1 className="min-w-0 truncate text-app-body font-medium">{openedProject ? project?.name : "New Project"}</h1>
+        <h1 className="min-w-0 truncate text-app-body font-medium">{screenTitle(openedProject, project)}</h1>
         {project ? <SavedStatus isSaving={savesRunning > 0} /> : null}
       </div>
       {project ? (
         <ProjectEditor
           project={project}
           onProject={setProject}
-          onSaving={(isSaving) => setSavesRunning((running) => running + (isSaving ? 1 : -1))}
+          onSaving={(isSaving) => setSavesRunning((running) => running + savesChange(isSaving))}
           onGenerating={() => openGenerating(project)}
         />
       ) : null}
-      {project ? null : <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} />}
+      {!project ? <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} /> : null}
     </div>
   );
+}
+
+/** A Project opened from Home goes by its name; a new one is "New Project" until it is made. */
+function screenTitle(openedProject: Project | undefined, project: Project | undefined) {
+  if (!openedProject) {
+    return "New Project";
+  }
+
+  return project?.name;
+}
+
+/** A save starting adds one to those running; one ending takes one away. */
+function savesChange(isSaving: boolean) {
+  if (isSaving) {
+    return 1;
+  }
+
+  return -1;
 }
 
 /**
@@ -87,7 +112,7 @@ function useCloseOnLeave(projectId: string | undefined) {
 
     return () => {
       if (useNavigation.getState().screen !== "editor") {
-        void safe(core.project.close({ projectId })).then(() => queryClient.invalidateQueries({ queryKey: orpc.project.list.key() }));
+        void closeProject(projectId).then(() => queryClient.invalidateQueries({ queryKey: orpc.project.list.key() }));
       }
     };
   }, [projectId]);

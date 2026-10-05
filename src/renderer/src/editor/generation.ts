@@ -1,6 +1,8 @@
 import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
-import { core, orpc, queryClient } from "@renderer/core/connection";
+import { useToast } from "@renderer/components/toast";
+import { closeProject, core, orpc, queryClient, rememberOpenProject, useCoreConnection } from "@renderer/core/connection";
+import { errorMessage } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import type { Format, GenerationError, GenerationStatus, GenerationStop, OpenedVideo, Project, StylePreset, VideoRef } from "../../../contract";
@@ -42,6 +44,8 @@ type GenerationStore = {
   showFormat: (format: Format) => void;
   /** Listens to the generation again after losing it; the core kept it going. */
   reconnect: () => void;
+  /** Follows the video again in a core restarted after a crash, which has opened the Project again. */
+  followRestartedCore: () => void;
   /** Plays the open Format's newest saved Version again, such as one a Revision just saved. */
   reopen: () => void;
   /** Stops the run; finished Scenes are kept and the rest become flagged fallbacks. */
@@ -49,6 +53,8 @@ type GenerationStore = {
   /** Regenerates flagged fallback units: these, or every flagged one. */
   retry: (units?: string[]) => Promise<void>;
   setReconnectOpen: (isOpen: boolean) => void;
+  /** Opens the Reconnect prompt after Claude's login failed mid-run: a generation's, a Retry's, a restyle's or a Revision's. */
+  askToReconnect: () => void;
   /** Back to the Project screen, keeping the Project open, after a stop before there was a video. */
   backToProject: () => void;
   /** Stops following and releases the Project, when the creator leaves the editor. */
@@ -83,9 +89,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
         }
 
         if (status.stopped?.cause === "authentication" && before?.stopped?.cause !== "authentication") {
-          // The login is checked again, so the prompt shows where it stands now.
-          void queryClient.invalidateQueries({ queryKey: orpc.connection.status.queryKey() });
-          set({ isReconnectOpen: true });
+          get().askToReconnect();
         }
 
         // A stopped restyle is discarded: the saved Version plays again in place of its partial preview.
@@ -100,7 +104,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       }
     })().catch((error: unknown) => {
       if (!current.signal.aborted) {
-        set({ lostError: error instanceof Error ? error.message : String(error) });
+        set({ lostError: errorMessage(error) });
       }
     });
   }
@@ -156,6 +160,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
     isReconnectOpen: false,
     follow: (project, video, opened) => {
       useOpenVideo.getState().open({ ...project, isStored: true }, opened?.preview);
+      rememberOpenProject(project);
       followed = project;
       show(video, opened);
     },
@@ -176,6 +181,22 @@ export const useGeneration = create<GenerationStore>((set, get) => {
 
       if (video) {
         listen(video);
+      }
+    },
+    followRestartedCore: () => {
+      const { video } = get();
+
+      if (!video) {
+        return;
+      }
+
+      // The old run went with the old core: opening the Project saved it by Stop's rules, and the old core's preview is gone.
+      set({ status: undefined, isStopping: false });
+      listen(video);
+      void openStored(video);
+
+      if (useCoreConnection.getState().recovered?.some(({ format }) => format === video.format)) {
+        useToast.getState().show({ text: RECOVERED_TEXT });
       }
     },
     reopen: () => {
@@ -211,6 +232,11 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       }
     },
     setReconnectOpen: (isOpen) => set({ isReconnectOpen: isOpen }),
+    askToReconnect: () => {
+      // The login is checked again, so the prompt shows where it stands now.
+      void queryClient.invalidateQueries({ queryKey: orpc.connection.status.queryKey() });
+      set({ isReconnectOpen: true });
+    },
     backToProject: () => {
       const project = followed;
       unfollow();
@@ -223,10 +249,18 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       const { projectId, isStored } = useOpenVideo.getState();
       unfollow();
       if (isStored) {
-        void safe(core.project.close({ projectId }));
+        void closeProject(projectId);
       }
     },
   };
+});
+
+const RECOVERED_TEXT = "MotionBrief's core restarted while this video was being generated. Its finished Scenes are saved; the rest are flagged fallbacks to Retry.";
+
+useCoreConnection.subscribe(({ restarts }, before) => {
+  if (restarts !== before.restarts) {
+    useGeneration.getState().followRestartedCore();
+  }
 });
 
 /** Whether the generation is still writing the video, so it isn't complete yet. */
@@ -251,19 +285,24 @@ function openErrorMessage(error: unknown) {
   return projectErrorMessage(error);
 }
 
-/** One sentence on why a generation ended without a video. */
-export function generationErrorMessage(error: GenerationError) {
-  switch (error.code) {
-    case "STORYBOARD_INVALID": {
-      const [first] = error.issues;
+/** One sentence on why a generation ended without a video, per error code. */
+const GENERATION_ERRORS = {
+  STORYBOARD_INVALID: ({ issues: [first] }) => `The agent couldn't write a valid Storyboard after 2 retries${firstIssue(first)}`,
+  AGENT_FAILED: ({ error }) => `The agent couldn't run: ${error.message}`,
+  FILE_FAILED: ({ path, message }) => `Couldn't save to ${path || "the Project folder"}: ${message}`,
+} satisfies { [Code in GenerationError["code"]]: (error: Extract<GenerationError, { code: Code }>) => string };
 
-      return `The agent couldn't write a valid Storyboard after 2 retries${first ? `: ${first.message}` : "."}`;
-    }
-    case "AGENT_FAILED":
-      return `The agent couldn't run: ${error.error.message}`;
-    case "FILE_FAILED":
-      return `Couldn't save to ${error.path || "the Project folder"}: ${error.message}`;
+export function generationErrorMessage(error: GenerationError) {
+  // The table is keyed by code, so each entry receives the error of its own code.
+  return (GENERATION_ERRORS[error.code] as (error: GenerationError) => string)(error);
+}
+
+function firstIssue(issue: { message: string } | undefined) {
+  if (!issue) {
+    return ".";
   }
+
+  return `: ${issue.message}`;
 }
 
 const RETRY_MESSAGES: Record<string, string> = {

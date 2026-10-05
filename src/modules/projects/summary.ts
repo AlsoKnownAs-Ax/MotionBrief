@@ -20,19 +20,35 @@ export async function summarize(dir: string, projectsDir: string): Promise<Proje
   }
 
   const [{ bytes, modifiedAt }, videos] = await Promise.all([sizeOf(dir), videosOf(dir)]);
-  const chosen = document.format ? [document.format] : [];
 
   return {
     path: dir,
     name: basename(dir),
-    // Before its first video, the Format it will be generated in.
-    formats: videos.length > 0 ? videos.map(({ format }) => format) : chosen,
+    formats: formatsOf(videos, document.format),
     duration: document.voiceover?.duration,
     versions: videos.reduce((total, { versions }) => total + versions, 0),
     bytes,
     modifiedAt,
-    location: samePath(dirname(dir), projectsDir) ? undefined : dirname(dir),
+    location: locationOf(dir, projectsDir),
   };
+}
+
+/** The Formats it has videos in; before its first video, the Format it will be generated in. */
+function formatsOf(videos: { format: Format }[], chosen: Format | undefined): Format[] {
+  if (videos.length > 0) {
+    return videos.map(({ format }) => format);
+  }
+
+  return [chosen].filter((format) => format !== undefined);
+}
+
+/** The folder it is in, unless that is the default Projects folder. */
+function locationOf(dir: string, projectsDir: string) {
+  if (samePath(dirname(dir), projectsDir)) {
+    return undefined;
+  }
+
+  return dirname(dir);
 }
 
 /** Every file's size and the newest change, leaving out the lock, which only says the Project is open. */
@@ -57,5 +73,5 @@ async function videosOf(dir: string) {
     }),
   );
 
-  return videos.flatMap(({ format, versions }) => (versions === undefined ? [] : [{ format, versions }]));
+  return videos.filter((video): video is { format: Format; versions: number } => video.versions !== undefined);
 }

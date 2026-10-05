@@ -75,6 +75,15 @@ ${treatments.css}
   };
 }
 
+/** The timeline the unit plays: stepped through MB.quantize at a Motion frame rate, or as Scene code wrote it. */
+function playedTimeline(fps: number, duration: number) {
+  if (fps <= 0) {
+    return "tl";
+  }
+
+  return `MB.quantize(tl, ${duration})`;
+}
+
 /**
  * A unit's composition: the frame's CSS and background around the agent's code, which runs in a
  * paused GSAP timeline as long as the unit, with `at` bound to the unit's anchors. Stepped Motion
@@ -83,7 +92,7 @@ ${treatments.css}
  */
 export function wrapUnit({ unit, format, style, code }: { unit: UnitTiming; format: Format; style: FrameStyle; code: UnitCode }) {
   const { width, height } = FRAME_SIZES[format];
-  const timeline = motionDefaults(style.motion).fps > 0 ? `MB.quantize(tl, ${unit.duration})` : "tl";
+  const timeline = playedTimeline(motionDefaults(style.motion).fps, unit.duration);
   const owned = [
     { adds: Object.keys(unit.sceneStarts).length > 1, js: `  MB.camera(tl, "${unit.id}");` },
     { adds: unit.carryIn !== undefined, js: `  MB.carry(tl, "${unit.id}");` },

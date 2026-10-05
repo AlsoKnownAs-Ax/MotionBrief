@@ -1,7 +1,7 @@
 import { isDefinedError, safe } from "@orpc/client";
 import { create } from "zustand";
 import { useToast } from "@renderer/components/toast";
-import { core } from "@renderer/core/connection";
+import { closeProject, core } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import type { FrameUpdate, Project, VideoRef } from "../../../contract";
 import { useGeneration } from "./generation";
@@ -57,7 +57,7 @@ export async function openStoredVideo(project: Project): Promise<"opened" | "no-
 
   if (error) {
     useToast.getState().show({ text: openErrorMessage(error) });
-    void safe(core.project.close({ projectId: project.id }));
+    void closeProject(project.id);
 
     return "failed";
   }

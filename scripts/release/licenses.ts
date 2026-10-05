@@ -89,13 +89,37 @@ export function formatNotices(notices: Notice[]) {
   const sorted = [...unique.values()].sort((a, b) => a.name.localeCompare(b.name) || (a.version ?? "").localeCompare(b.version ?? ""));
   const rule = "=".repeat(80);
   const sections = sorted.map(({ name, version, license, files }) => {
-    const heading = [version ? `${name} ${version}` : name, license && `License: ${license}`].filter(Boolean).join("\n");
-    const texts = files.length > 0 ? files.map(({ path, text }) => (path ? `--- ${path}\n\n${text}` : text)) : ["(The package ships no license file.)"];
+    const heading = [nameAndVersion(name, version), license && `License: ${license}`].filter(Boolean).join("\n");
 
-    return `${rule}\n${heading}\n${rule}\n\n${texts.join("\n\n")}\n`;
+    return `${rule}\n${heading}\n${rule}\n\n${licenseTexts(files).join("\n\n")}\n`;
   });
 
   return `MotionBrief bundles the software below. Each part keeps its own license.\n\n${sections.join("\n")}`;
+}
+
+/** A package's license files, each headed by its path when it has one. */
+function licenseTexts(files: Notice["files"]) {
+  if (files.length === 0) {
+    return ["(The package ships no license file.)"];
+  }
+
+  return files.map(headedText);
+}
+
+function headedText({ path, text }: Notice["files"][number]) {
+  if (!path) {
+    return text;
+  }
+
+  return `--- ${path}\n\n${text}`;
+}
+
+function nameAndVersion(name: string, version: string | undefined) {
+  if (!version) {
+    return name;
+  }
+
+  return `${name} ${version}`;
 }
 
 type PnpmLicenses = Record<string, { paths: string[] }[]>;

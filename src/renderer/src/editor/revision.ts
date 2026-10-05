@@ -2,8 +2,19 @@ import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
 import { costLabel } from "@renderer/new-project/generate-bar";
-import type { ChatEntry, ChatRequestState, ChatStatus, RevisionError, RevisionStatus, TimelineScene, VideoRef, WordFixOffer } from "../../../contract";
-import { useGeneration } from "./generation";
+import type {
+  ChatEntry,
+  ChatRequestState,
+  ChatStatus,
+  ConnectorError,
+  GenerationStop,
+  RevisionError,
+  RevisionStatus,
+  TimelineScene,
+  VideoRef,
+  WordFixOffer,
+} from "../../../contract";
+import { stopHeadline, useGeneration } from "./generation";
 import { sceneName } from "./labels";
 import { useOpenVideo, type SavedWordFix } from "./open-video";
 
@@ -18,6 +29,8 @@ export type ChatMessage = {
   isQueued?: boolean;
   /** A note that something went wrong, rather than one for information. */
   isProblem?: boolean;
+  /** A note that Claude's login failed, which offers Reconnect. */
+  canReconnect?: boolean;
 };
 
 type RevisionStore = {
@@ -115,6 +128,11 @@ export const useRevision = create<RevisionStore>((set, get) => {
         for await (const status of await core.video.revision(followed, { signal: controller.signal })) {
           const before = get().status;
           set({ status });
+
+          // A failed login stopped the Revision: reconnect before sending it again.
+          if (isLoginStop(status) && !isLoginStop(before)) {
+            useGeneration.getState().askToReconnect();
+          }
 
           // The new Version plays as `video.open` builds it: with the video's Captions choice and its review notes.
           if (status.state === "done" && before?.state !== "done" && status.version !== undefined) {
@@ -220,12 +238,35 @@ export function nameOf(scenes: TimelineScene[], sceneId: string) {
   return sceneName(scene);
 }
 
-function stoppedText(error: RevisionError | undefined) {
-  if (error?.code === "AGENT_FAILED" && error.error.code === "COST_CAP") {
-    return "Cost cap reached. The video is as it was.";
+/** The connector errors that stop a Revision as Stop does, by the stop they read as. */
+const STOPPED_BY: Partial<Record<ConnectorError["code"], GenerationStop["cause"]>> = {
+  COST_CAP: "cost-cap",
+  PLAN_LIMIT: "plan-limit",
+  AUTHENTICATION_FAILED: "authentication",
+};
+
+/** Why a Revision stopped, such as "Plan limit reached, resets at 15:00"; the creator's own Stop otherwise. */
+function stopOf(error: RevisionError | undefined): GenerationStop {
+  if (error?.code !== "AGENT_FAILED") {
+    return { cause: "stopped" };
   }
 
-  return "Stopped. The video is as it was.";
+  return { cause: STOPPED_BY[error.error.code] ?? "stopped", resetsAt: error.error.resetsAt };
+}
+
+/** A Revision stopped by a failed login: Reconnect, then send the request again. */
+export function isLoginStop(status: Pick<RevisionStatus, "state" | "error"> | undefined) {
+  return status?.state === "stopped" && stopOf(status.error).cause === "authentication";
+}
+
+function stoppedLine(entry: ChatEntry): NewMessage {
+  const text = `${stopHeadline(stopOf(entry.error))}. The video is as it was.`;
+
+  if (isLoginStop({ state: "stopped", error: entry.error })) {
+    return { role: "note", isProblem: true, text, canReconnect: true };
+  }
+
+  return { role: "note", text };
 }
 
 type NewMessage = Omit<ChatMessage, "id">;
@@ -241,7 +282,7 @@ const OUTCOMES = {
     ...notApplied.map((sceneId) => ({ role: "note" as const, isProblem: true, text: `Couldn't apply to ${nameOf(scenes, sceneId)}; it keeps its previous code.` })),
   ],
   failed: ({ error }) => [{ role: "note", isProblem: true, text: failureText(error) }],
-  stopped: ({ error }) => [{ role: "note", text: stoppedText(error) }],
+  stopped: (entry) => [stoppedLine(entry)],
   closed: () => [{ role: "note", text: "MotionBrief closed before this Revision finished. The video is as it was." }],
   refused: ({ refused }) => [{ role: "note", isProblem: true, text: REFUSALS[refused ?? ""] ?? "This request couldn't run." }],
 } satisfies Record<ChatRequestState, (entry: ChatEntry, scenes: TimelineScene[]) => NewMessage[]>;
@@ -265,9 +306,15 @@ function entryLines(entry: ChatEntry, scenes: TimelineScene[]): NewMessage[] {
 
   const state = entry.state ?? "queued";
 
-  const approved: NewMessage[] = entry.approvedUsd ? [{ role: "event", text: `Approved about ${costLabel(entry.approvedUsd)}` }] : [];
+  return [{ role: "creator", text: entry.message ?? "", scope: entry.scope, isQueued: state === "queued" }, ...approvedLines(entry), ...OUTCOMES[state](entry, scenes)];
+}
 
-  return [{ role: "creator", text: entry.message ?? "", scope: entry.scope, isQueued: state === "queued" }, ...approved, ...OUTCOMES[state](entry, scenes)];
+function approvedLines({ approvedUsd }: ChatEntry): NewMessage[] {
+  if (!approvedUsd) {
+    return [];
+  }
+
+  return [{ role: "event", text: `Approved about ${costLabel(approvedUsd)}` }];
 }
 
 function failureText(error: RevisionError | undefined) {

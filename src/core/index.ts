@@ -48,13 +48,19 @@ process.parentPort.on("message", ({ data, ports }) => {
     return;
   }
 
-  if (!request.hold) {
-    core.exports.release();
-  }
-
-  const running = request.hold ? core.exports.hold() : 0;
+  const running = holdOrRelease(request.hold);
   process.parentPort.postMessage({ channel: EXPORTS_HOLD_CHANNEL, id: request.id, running } satisfies ExportsHoldResponse);
 });
+
+/** Holds new exports and answers how many still run, or lets them start again; none are held then. */
+function holdOrRelease(hold: boolean) {
+  if (!hold) {
+    core.exports.release();
+    return 0;
+  }
+
+  return core.exports.hold();
+}
 
 function optionalFlagValue(flag: string) {
   return process.argv.find((arg) => arg.startsWith(flag))?.slice(flag.length);

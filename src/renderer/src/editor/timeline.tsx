@@ -5,7 +5,7 @@ import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
-import { cn } from "@renderer/lib/utils";
+import { cn, rovingTabIndex } from "@renderer/lib/utils";
 import type { Preview, RevisionStatus, TimelineScene, TimelineWord, VideoTimeline, WordFixOffer } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } from "./labels";
@@ -270,15 +270,24 @@ function Ruler({ duration, px, onSeek }: { duration: number; px: number; onSeek:
         return (
           <span
             key={second}
-            className={cn("absolute bottom-0 w-px", isLabelled ? "h-2 bg-[#555]" : "h-1 bg-[#333]")}
+            className={cn("absolute bottom-0 w-px", tickClass(isLabelled))}
             style={{ left: second * px }}
           >
-            {isLabelled && <span className="absolute bottom-[9px] left-1 text-[11px] text-ink-muted tabular-nums">{formatTime(second)}</span>}
+            {isLabelled ? <span className="absolute bottom-[9px] left-1 text-[11px] text-ink-muted tabular-nums">{formatTime(second)}</span> : null}
           </span>
         );
       })}
     </div>
   );
+}
+
+/** A labelled tick stands taller and brighter. */
+function tickClass(isLabelled: boolean) {
+  if (isLabelled) {
+    return "h-2 bg-[#555]";
+  }
+
+  return "h-1 bg-[#333]";
 }
 
 /** Seeks to the pointer while it drags across the ruler. */
@@ -317,11 +326,11 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, isSelected, is
   const status = cardStatus(scene, isRevising);
   const showsMeta = width > thumbWidth + 88;
   // Without room beside the thumbnail, the status badge sits on it.
-  const badge = status.badge && (
+  const badge = status.badge ? (
     <Badge status={status.badge} pulse={status.badge === "working"} className={cn(!showsMeta && "absolute top-1 left-1")}>
-      {(showsMeta || thumbWidth > 72) && status.badgeLabel}
+      {showsMeta || thumbWidth > 72 ? status.badgeLabel : null}
     </Badge>
-  );
+  ) : null;
 
   return (
     <button
@@ -336,17 +345,17 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, isSelected, is
       style={{ left: scene.start * px, width, top, height }}
       onClick={(event) => onSelect(event.shiftKey || event.ctrlKey || event.metaKey)}
     >
-      {thumbWidth > 8 && (
+      {thumbWidth > 8 ? (
         <span className="relative shrink-0 overflow-hidden rounded-sm bg-[#111]" style={{ width: thumbWidth, height: thumbWidth / aspect }}>
           {thumbnail ? (
             <img src={thumbnail} alt="" className={cn("block size-full object-cover", isRevising && "opacity-45")} />
           ) : (
             <span className="block size-full animate-pulse bg-surface-2" />
           )}
-          {!showsMeta && badge}
+          {!showsMeta ? badge : null}
         </span>
-      )}
-      {showsMeta && (
+      ) : null}
+      {showsMeta ? (
         <span className="flex min-w-0 flex-col items-start gap-[5px]">
           <span className="max-w-full truncate text-app-xs font-medium">
             <span className="text-ink-muted tabular-nums">{scene.number}</span> {SCENE_TYPE_LABELS[scene.type]}
@@ -354,7 +363,7 @@ function SceneCard({ scene, timeline, px, top, height, thumbnail, isSelected, is
           {badge}
           {scene.note ? <span className="max-w-full truncate text-app-xs text-ink-muted">{scene.note}</span> : null}
         </span>
-      )}
+      ) : null}
     </button>
   );
 }
@@ -461,7 +470,7 @@ function TransitionMarker({ scene, px, top }: { scene: TimelineScene; px: number
       role="img"
       aria-label={description}
       title={description}
-      className="absolute z-[2] -mt-[9px] -ml-[9px] grid size-[18px] place-items-center rounded-full bg-surface-3 text-[#cfcfcf] shadow-[0_0_0_2px_#0b0b0b]"
+      className="absolute z-[2] -mt-[9px] -ml-[9px] grid size-[18px] place-items-center rounded-full bg-surface-3 text-ink shadow-[0_0_0_2px_#0b0b0b]"
       style={{ left: scene.start * px - 1.5, top }}
     >
       <Icon className="size-2.5" aria-hidden="true" />
@@ -562,7 +571,7 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
             key={phrase[0]}
             className={cn(
               "absolute flex h-full items-center whitespace-nowrap",
-              isEditing ? "z-[6] overflow-visible" : "overflow-hidden [mask-image:linear-gradient(90deg,#000_calc(100%-16px),transparent)]",
+              phraseClass(isEditing),
             )}
             style={{ left: first.start * px, width: Math.max(8, (nextStart - first.start) * px - 4) }}
           >
@@ -584,9 +593,9 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
                     }
                   }}
                   type="button"
-                  tabIndex={wordIndex === focused ? 0 : -1}
-                  aria-current={wordIndex === current ? "true" : undefined}
-                  title={wordFixes[wordIndex] ? `Fixed from "${words[wordIndex]!.text}"` : undefined}
+                  tabIndex={rovingTabIndex(wordIndex === focused)}
+                  aria-current={wordIndex === current || undefined}
+                  title={fixedTitle(wordFixes[wordIndex], words[wordIndex]!.text)}
                   className={cn(
                     "h-[22px] shrink-0 cursor-pointer rounded-[5px] px-0.5 text-app-xs leading-[22px] text-ink-muted hover:bg-surface-2 hover:text-ink",
                     wordFixes[wordIndex] !== undefined && "text-ink underline decoration-dotted underline-offset-[3px]",
@@ -597,6 +606,7 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
                   onDoubleClick={() => setEditing(wordIndex)}
                   onKeyDown={(event) => {
                     const moves: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 };
+                    const ends: Record<string, number> = { Home: 0, End: words.length - 1 };
 
                     if (event.key === "F2") {
                       event.preventDefault();
@@ -604,9 +614,9 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
                     } else if (moves[event.key] !== undefined) {
                       event.preventDefault();
                       moveFocus(wordIndex + moves[event.key]!);
-                    } else if (event.key === "Home" || event.key === "End") {
+                    } else if (ends[event.key] !== undefined) {
                       event.preventDefault();
-                      moveFocus(event.key === "Home" ? 0 : words.length - 1);
+                      moveFocus(ends[event.key]!);
                     }
                   }}
                 >
@@ -619,6 +629,24 @@ function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: 
       })}
     </div>
   );
+}
+
+/** A phrase being edited spills over its neighbours; the others fade out where they run into the next. */
+function phraseClass(isEditing: boolean) {
+  if (isEditing) {
+    return "z-[6] overflow-visible";
+  }
+
+  return "overflow-hidden [mask-image:linear-gradient(90deg,#000_calc(100%-16px),transparent)]";
+}
+
+/** A fixed word's tooltip names what whisper-cli heard. */
+function fixedTitle(fix: string | undefined, heard: string) {
+  if (!fix) {
+    return undefined;
+  }
+
+  return `Fixed from "${heard}"`;
 }
 
 /** The playhead across the ruler, the Scenes and the words; while playing, the pane scrolls to keep it in view. */

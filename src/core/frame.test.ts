@@ -496,7 +496,7 @@ describe("the frame, in a headless browser", () => {
   describe("anchors after a Transcript change", () => {
     let frame: OpenFrame | undefined;
     // "browser" is now spoken 0.4 s later; the Scene code stays the same.
-    const later = { ...transcript, words: transcript.words.map((word, index) => (index === 1 ? { ...word, start: 0.95 } : word)) };
+    const later = { ...transcript, words: transcript.words.with(1, { ...transcript.words[1]!, start: 0.95 }) };
 
     beforeAll(async () => {
       frame = await openFrame(storyboard, later, { s01: await unitCode("s01"), s02: await unitCode("s02") });

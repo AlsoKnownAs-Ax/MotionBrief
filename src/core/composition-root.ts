@@ -121,7 +121,7 @@ export function createCore({
   const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
   const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
   const history = createHistory({ projects, revisions, generation, clock });
-  const sample = sampleDir ? sampleProject(sampleDir) : undefined;
+  const sample = sampleIn(sampleDir);
 
   return {
     router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, usage, settings, history }),
@@ -132,6 +132,15 @@ export function createCore({
     /** For main only, before it restarts into an app update: see the exporter's hold(). */
     exports: { hold: exporter.hold, release: exporter.release },
   };
+}
+
+/** The fixture Project, in development builds that name its folder. */
+function sampleIn(sampleDir: string | undefined) {
+  if (!sampleDir) {
+    return undefined;
+  }
+
+  return sampleProject(sampleDir);
 }
 
 const noTrash: Trash = async () => {

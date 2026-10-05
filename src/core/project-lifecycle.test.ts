@@ -12,6 +12,9 @@ import { serveCore } from "./serve";
 import { voiceover } from "./test-support/media";
 import { fakeWhisper, whisperFixture } from "./test-support/whisper";
 
+/** The kind of folder link each platform makes without admin rights; a directory symlink where it isn't listed. */
+const LINK_TYPES: Partial<Record<NodeJS.Platform, "junction" | "dir">> = { win32: "junction" };
+
 let shared: string;
 /** A short Voiceover, made once: FFmpeg takes a while. */
 let sourceVoiceover: string;
@@ -225,7 +228,7 @@ describe("Project lifecycle", { timeout: 30_000 }, () => {
       const created = await createProject(app.window("w1"));
       const alias = join(elsewhere, "Alias");
       // A junction needs no admin rights on Windows; elsewhere it is a plain directory symlink.
-      await symlink(created.path, alias, process.platform === "win32" ? "junction" : "dir");
+      await symlink(created.path, alias, LINK_TYPES[process.platform] ?? "dir");
       await app.window("w1").project.open({ path: created.path });
 
       await expect(app.window("w2").project.open({ path: alias })).rejects.toMatchObject({ code: "ALREADY_OPEN" });

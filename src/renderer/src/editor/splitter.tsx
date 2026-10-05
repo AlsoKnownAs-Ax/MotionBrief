@@ -23,7 +23,8 @@ type SplitterProps = {
  */
 export function Splitter({ axis, label, value, min, max, growsTowardsStart = false, onChange, onReset }: SplitterProps) {
   const clamp = (next: number) => Math.round(Math.max(min, Math.min(max, next)));
-  const direction = growsTowardsStart ? -1 : 1;
+  const direction = directionOf(growsTowardsStart);
+  const { positionOf, back, forward, orientation, handleClass, lineClass } = AXES[axis];
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>) {
     if (event.button !== 0) {
@@ -31,14 +32,13 @@ export function Splitter({ axis, label, value, min, max, growsTowardsStart = fal
     }
 
     const handle = event.currentTarget;
-    const start = axis === "x" ? event.clientX : event.clientY;
+    const start = positionOf(event);
     const startValue = value;
 
     handle.setPointerCapture(event.pointerId);
     document.body.dataset.resizing = axis;
     handle.onpointermove = (move) => {
-      const position = axis === "x" ? move.clientX : move.clientY;
-      onChange(clamp(startValue + direction * (position - start)));
+      onChange(clamp(startValue + direction * (positionOf(move) - start)));
     };
     handle.onpointerup = () => {
       handle.onpointermove = null;
@@ -48,12 +48,13 @@ export function Splitter({ axis, label, value, min, max, growsTowardsStart = fal
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>) {
-    const [back, forward] = axis === "x" ? ["ArrowLeft", "ArrowRight"] : ["ArrowUp", "ArrowDown"];
     const steps: Record<string, number> = { [back]: -direction * KEY_STEP, [forward]: direction * KEY_STEP };
+    const limits: Record<string, number> = { Home: min, End: max };
+    const limit = limits[event.key];
 
-    if (event.key === "Home" || event.key === "End") {
+    if (limit !== undefined) {
       event.preventDefault();
-      onChange(event.key === "Home" ? min : max);
+      onChange(limit);
       return;
     }
 
@@ -70,15 +71,12 @@ export function Splitter({ axis, label, value, min, max, growsTowardsStart = fal
       role="separator"
       tabIndex={0}
       aria-label={label}
-      aria-orientation={axis === "x" ? "vertical" : "horizontal"}
+      aria-orientation={orientation}
       aria-valuenow={Math.round(value)}
       aria-valuemin={min}
       aria-valuemax={max}
       title="Drag to resize. Double-click to reset."
-      className={cn(
-        "group relative z-10 shrink-0 touch-none outline-none",
-        axis === "x" ? "-mx-1 w-[9px] cursor-col-resize" : "-my-1 h-[9px] cursor-row-resize",
-      )}
+      className={cn("group relative z-10 shrink-0 touch-none outline-none", handleClass)}
       onPointerDown={onPointerDown}
       onKeyDown={onKeyDown}
       onDoubleClick={onReset}
@@ -87,9 +85,48 @@ export function Splitter({ axis, label, value, min, max, growsTowardsStart = fal
         aria-hidden="true"
         className={cn(
           "absolute bg-hairline-soft transition-colors group-hover:bg-ink-muted/50 group-focus-visible:bg-primary group-active:bg-primary",
-          axis === "x" ? "inset-y-0 left-1 w-px" : "inset-x-0 top-1 h-px",
+          lineClass,
         )}
       />
     </div>
   );
+}
+
+type Axis = {
+  positionOf: (event: { clientX: number; clientY: number }) => number;
+  /** The arrow keys that move the divider towards the start, and towards the end. */
+  back: string;
+  forward: string;
+  /** The divider's own orientation: across the axis it sizes. */
+  orientation: "vertical" | "horizontal";
+  handleClass: string;
+  lineClass: string;
+};
+
+const AXES = {
+  x: {
+    positionOf: ({ clientX }) => clientX,
+    back: "ArrowLeft",
+    forward: "ArrowRight",
+    orientation: "vertical",
+    handleClass: "-mx-1 w-[9px] cursor-col-resize",
+    lineClass: "inset-y-0 left-1 w-px",
+  },
+  y: {
+    positionOf: ({ clientY }) => clientY,
+    back: "ArrowUp",
+    forward: "ArrowDown",
+    orientation: "horizontal",
+    handleClass: "-my-1 h-[9px] cursor-row-resize",
+    lineClass: "inset-x-0 top-1 h-px",
+  },
+} satisfies Record<SplitterProps["axis"], Axis>;
+
+/** Dragging towards the start grows a pane after the divider, and shrinks one before it. */
+function directionOf(growsTowardsStart: boolean) {
+  if (growsTowardsStart) {
+    return -1;
+  }
+
+  return 1;
 }

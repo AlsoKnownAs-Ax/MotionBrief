@@ -111,11 +111,28 @@ function PresetForm({ preset, onDone }: { preset: StylePreset; onDone: () => voi
           Cancel
         </Button>
         <Button variant="primary" disabled={!parsed.success || isBlocked || save.isPending} onClick={() => parsed.data && save.mutate(parsed.data, { onSuccess: onDone })}>
-          {save.isPending ? "Saving…" : "Save"}
+          {saveLabel(save.isPending)}
         </Button>
       </div>
     </>
   );
+}
+
+function saveLabel(isSaving: boolean) {
+  if (isSaving) {
+    return "Saving…";
+  }
+
+  return "Save";
+}
+
+/** The list with `item` in it, or without it. */
+function toggled<T>(list: T[], item: T, isIn: boolean): T[] {
+  if (isIn) {
+    return [...list, item];
+  }
+
+  return list.filter((other) => other !== item);
 }
 
 function footerMessage({ error, issue, isBlocked }: { error: unknown; issue?: string; isBlocked: boolean }) {
@@ -156,10 +173,21 @@ function PaletteSection({ palette, onChange }: { palette: Palette; onChange: (pa
   }
 
   function setFill(role: AccentRole, isFill: boolean) {
-    const next = isFill ? [...fills, role] : fills.filter((fill) => fill !== role);
+    const next = toggled(fills, role, isFill);
 
     onChange({ ...palette, fills: AccentRoleSchema.options.filter((option) => next.includes(option)) });
   }
+
+  /** An accent can be kept to fills; other roles can't. */
+  function fillOf(role: PaletteRole): FillToggle | undefined {
+    if (!isAccent(role)) {
+      return undefined;
+    }
+
+    return { isFill: fills.includes(role), onChange: (isFill) => setFill(role, isFill) };
+  }
+
+  const isBundled = palettes.some(({ name }) => name === palette.name);
 
   return (
     <Section title="Palette" help="Start from a bundled Palette, then change any role. Mark an accent fill only when it sits behind text rather than being text.">
@@ -167,8 +195,8 @@ function PaletteSection({ palette, onChange }: { palette: Palette; onChange: (pa
         {(id) => (
           <Select
             id={id}
-            value={palettes.some(({ name }) => name === palette.name) ? palette.name : ""}
-            options={[...(palettes.some(({ name }) => name === palette.name) ? [] : [{ value: "", label: "Your own colors" }]), ...palettes.map(({ name, mode }) => ({ value: name, label: `${name} · ${mode}` }))]}
+            value={startingPalette(palette.name, isBundled)}
+            options={[...ownColorsOption(isBundled), ...palettes.map(({ name, mode }) => ({ value: name, label: `${name} · ${mode}` }))]}
             onChange={startFrom}
           />
         )}
@@ -193,7 +221,7 @@ function PaletteSection({ palette, onChange }: { palette: Palette; onChange: (pa
             role={role}
             value={palette.colors[role]}
             onChange={(color) => onChange({ ...palette, name: customName(palette.name, palettes), colors: { ...palette.colors, [role]: color } })}
-            fill={isAccent(role) ? { isFill: fills.includes(role), onChange: (isFill) => setFill(role, isFill) } : undefined}
+            fill={fillOf(role)}
           />
         ))}
       </div>
@@ -203,7 +231,29 @@ function PaletteSection({ palette, onChange }: { palette: Palette; onChange: (pa
 
 /** Once a bundled Palette's colors change it is the creator's own, and named so. */
 function customName(name: string, palettes: Palette[]) {
-  return palettes.some((palette) => palette.name === name) ? `${name} (edited)`.slice(0, 40) : name;
+  if (!palettes.some((palette) => palette.name === name)) {
+    return name;
+  }
+
+  return `${name} (edited)`.slice(0, 40);
+}
+
+/** The bundled Palette the colors start from; none once they are the creator's own. */
+function startingPalette(name: string, isBundled: boolean) {
+  if (!isBundled) {
+    return "";
+  }
+
+  return name;
+}
+
+/** "Your own colors" is offered only while the colors are the creator's own. */
+function ownColorsOption(isBundled: boolean) {
+  if (isBundled) {
+    return [];
+  }
+
+  return [{ value: "", label: "Your own colors" }];
 }
 
 function isAccent(role: PaletteRole): role is AccentRole {
@@ -328,7 +378,7 @@ function DirectionSection({ value, onChange }: { value: string; onChange: (direc
 
 function TransitionsPicker({ value, onChange }: { value: PresetTransition[]; onChange: (transitions: PresetTransition[]) => void }) {
   function toggle(transition: PresetTransition) {
-    const next = value.includes(transition) ? value.filter((candidate) => candidate !== transition) : [...value, transition];
+    const next = toggled(value, transition, !value.includes(transition));
 
     onChange(TRANSITION_OPTIONS.map((option) => option.value).filter((option) => next.includes(option)));
   }
@@ -349,7 +399,7 @@ function TransitionsPicker({ value, onChange }: { value: PresetTransition[]; onC
             onClick={() => toggle(option.value)}
             className={cn(
               "h-control-sm rounded-pill px-3 text-app-sm text-ink-muted outline-none transition-colors hover:text-ink focus-visible:shadow-[0_0_0_1px_var(--brand)] disabled:cursor-not-allowed",
-              isOn ? "bg-surface-3 text-ink shadow-[0_0_0_1px_var(--brand)]" : "bg-surface-2",
+              transitionClass(isOn),
             )}
           >
             {option.label}
@@ -360,6 +410,14 @@ function TransitionsPicker({ value, onChange }: { value: PresetTransition[]; onC
   );
 }
 
+function transitionClass(isOn: boolean) {
+  if (isOn) {
+    return "bg-surface-3 text-ink shadow-[0_0_0_1px_var(--brand)]";
+  }
+
+  return "bg-surface-2";
+}
+
 function SampleView({ preset }: { preset: StylePreset }) {
   return (
     <figure className="flex flex-col gap-2">
@@ -368,6 +426,12 @@ function SampleView({ preset }: { preset: StylePreset }) {
     </figure>
   );
 }
+
+/** How each kind of contrast finding is badged: one that blocks saving, or a warning. */
+const LEVEL_BADGES = {
+  block: { status: "fallback", label: "Blocks saving" },
+  warn: { status: "flagged", label: "Warning" },
+} as const satisfies Record<ContrastFinding["level"], { status: string; label: string }>;
 
 function ContrastReport({ findings }: { findings: ContrastFinding[] }) {
   if (findings.length === 0) {
@@ -387,8 +451,8 @@ function ContrastReport({ findings }: { findings: ContrastFinding[] }) {
       <ul className="flex flex-col gap-2">
         {findings.map((finding) => (
           <li key={`${finding.use}-${finding.role}-${finding.against}`} className="flex flex-col gap-1">
-            <Badge status={finding.level === "block" ? "fallback" : "flagged"} className="self-start">
-              {finding.level === "block" ? "Blocks saving" : "Warning"}
+            <Badge status={LEVEL_BADGES[finding.level].status} className="self-start">
+              {LEVEL_BADGES[finding.level].label}
             </Badge>
             <p className="text-app-xs text-ink-muted">{findingMessage(finding)}</p>
           </li>

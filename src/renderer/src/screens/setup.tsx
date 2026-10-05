@@ -64,7 +64,7 @@ export function Setup() {
           <StepCard key={step.id} step={step} number={index + 1} />
         ))}
         <div className="flex items-center justify-end gap-3.5">
-          {allDone ? null : <span className="text-app-xs text-ink-muted">Unfinished steps stay on Home’s checklist.</span>}
+          {!allDone ? <span className="text-app-xs text-ink-muted">Unfinished steps stay on Home’s checklist.</span> : null}
           <Button variant={continueVariant(allDone)} onClick={openHome}>
             Continue to Home
           </Button>

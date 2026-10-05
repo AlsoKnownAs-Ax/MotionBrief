@@ -77,6 +77,13 @@ export type ProjectsError =
 /** The window asking, so each window has at most one open Project. Absent for callers that aren't windows. */
 export type Caller = { connection?: string };
 
+export type OpenOptions = {
+  /** Take any lock: the creator's "Open anyway". */
+  force?: boolean;
+  /** Take only a lock left on this computer by a holder that is gone, as after the core restarted. */
+  reclaim?: boolean;
+};
+
 export type NewProject = {
   voiceoverPath: string;
   name?: string;
@@ -234,14 +241,14 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
    * Opens a Project folder for a window. Refuses a newer schema without touching anything, asks before taking a lock
    * held elsewhere, migrates an older schema after backing up its documents, and gives a copied folder its own id.
    */
-  async function openFolder(path: string, { force = false } = {}, caller: Caller = {}): Promise<Result<OpenedProject, ProjectsError>> {
+  async function openFolder(path: string, options: OpenOptions = {}, caller: Caller = {}): Promise<Result<OpenedProject, ProjectsError>> {
     const dir = resolve(path);
     const key = await folderKey(dir);
 
-    return exclusive(key, () => openExclusively(dir, key, force, caller));
+    return exclusive(key, () => openExclusively(dir, key, options, caller));
   }
 
-  async function openExclusively(dir: string, key: string, force: boolean, { connection }: Caller): Promise<Result<OpenedProject, ProjectsError>> {
+  async function openExclusively(dir: string, key: string, { force, reclaim }: OpenOptions, { connection }: Caller): Promise<Result<OpenedProject, ProjectsError>> {
     const current = openAt(key);
 
     if (current && connection !== undefined && current.owner === connection) {
@@ -264,7 +271,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
 
     const lock = await readLock(dir);
 
-    if (lock && !lock.isOurs && !force) {
+    if (lock && !lock.isOurs && !force && !(reclaim && isAbandoned(lock))) {
       return { data: null, error: lockedError(dir, lock) };
     }
 
@@ -1126,6 +1133,11 @@ function sumUsage(before: UsageTotals | undefined, used: UsageTotals): UsageTota
   }
 
   return { ...tokens, costUsd: (before?.costUsd ?? 0) + (used.costUsd ?? 0) };
+}
+
+/** Left on this computer by a MotionBrief, or a core, that is gone. */
+function isAbandoned({ isThisComputer, isStale }: Lock) {
+  return isThisComputer && isStale;
 }
 
 function lockedError(dir: string, { host, isThisComputer, isStale, lockedAt }: Lock): ProjectsError {

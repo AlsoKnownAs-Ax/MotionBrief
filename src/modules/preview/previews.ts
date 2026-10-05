@@ -21,6 +21,27 @@ export type PreviewError =
   | { code: "UNKNOWN_UNIT"; unit: string; units: string[] }
   | { code: "VOICEOVER_MISSING"; path: string };
 
+const PREVIEW_ERRORS = {
+  VOICEOVER_MISSING: (error) => `The Voiceover isn't at ${error.path} any more.`,
+  INVALID_STORYBOARD: (error) => error.issues.map((issue) => issue.message).join(" "),
+  UNKNOWN_UNIT: (error) => `The Storyboard has no unit ${error.unit}.`,
+} satisfies { [Code in PreviewError["code"]]: (error: Extract<PreviewError, { code: Code }>) => string };
+
+/** One sentence on why a video couldn't be shown, as a run's status says it. */
+export function previewErrorMessage(error: PreviewError): string {
+  // The table is keyed by code, so each entry receives the error of its own code.
+  return (PREVIEW_ERRORS[error.code] as (error: PreviewError) => string)(error);
+}
+
+/** The file's stats; none for a page without a Voiceover, or a Voiceover that isn't there. */
+async function statOf(path: string | undefined) {
+  if (!path) {
+    return undefined;
+  }
+
+  return stat(path).catch(() => undefined);
+}
+
 export type ThumbnailsError = { code: "PREVIEW_NOT_FOUND"; id: string } | { code: "CHROME_MISSING"; path: string } | FramePageError;
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
@@ -61,7 +82,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
       return { data: null, error: { code: "UNKNOWN_UNIT", unit: unknown, units } };
     }
 
-    const voiceover = source.voiceover ? await stat(source.voiceover).catch(() => undefined) : undefined;
+    const voiceover = await statOf(source.voiceover);
 
     if (source.voiceover && !voiceover?.isFile()) {
       return { data: null, error: { code: "VOICEOVER_MISSING", path: source.voiceover } };

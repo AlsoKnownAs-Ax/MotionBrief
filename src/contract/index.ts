@@ -295,17 +295,19 @@ export const ExportErrorSchema = z.discriminatedUnion("code", [
   z.object({ code: z.literal("UPDATING") }),
 ]);
 
+export const ExportStageSchema = z.enum(["preparing", "capturing", "encoding", "finishing"]);
+
 /** Where an export stands: rendering through its stages, then saved or failed. */
-export const ExportStatusSchema = z.discriminatedUnion("state", [
-  z.object({
-    state: z.literal("rendering"),
-    stage: z.enum(["preparing", "capturing", "encoding", "finishing"]),
-    /** 0 to 1, across every stage. */
-    progress: z.number().min(0).max(1),
-  }),
-  z.object({ state: z.literal("done"), path: z.string() }),
-  z.object({ state: z.literal("failed"), error: ExportErrorSchema }),
-]);
+export const ExportStatusSchema = z.object({
+  state: z.enum(["rendering", "done", "failed"]),
+  /** While rendering. */
+  stage: ExportStageSchema.optional(),
+  /** 0 to 1, across every stage, while rendering. */
+  progress: z.number().min(0).max(1).optional(),
+  /** Where the MP4 was saved, once done. */
+  path: z.string().optional(),
+  error: ExportErrorSchema.optional(),
+});
 
 export const AuthMethodSchema = z.enum(["subscription", "api-key"]);
 
@@ -705,9 +707,9 @@ export const OpenedVideoSchema = z.object({
 /**
  * What made a Version: a first generation; the re-check after a frame major update, which flagged units that no
  * longer pass; a Retry of flagged units; a Revision; a Restore of an earlier Version; a Style tab swap, re-rendered
- * with no agent; or a restyle, which regenerated every unit.
+ * with no agent; a restyle, which regenerated every unit; or a regeneration from scratch, a new Storyboard and every unit.
  */
-export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore", "style", "restyle"]);
+export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore", "style", "restyle", "regeneration"]);
 
 /**
  * What a change in the Style tab costs: nothing, when it changes nothing; a `swap` (Palette, typography, caption style,
@@ -1006,7 +1008,18 @@ export const coreContract = {
      * an older schema forward after backing up its documents, and gives a copied folder its own id. A Project without
      * a saved Transcript starts transcribing; one with a Transcript, word fixes and all, is never transcribed again.
      */
-    open: oc.errors(PROJECT_ERRORS).input(LockedPathInput).output(OpenedProjectSchema),
+    open: oc
+      .errors(PROJECT_ERRORS)
+      .input(
+        LockedPathInput.extend({
+          /**
+           * Opens it again after the core restarted: takes a lock left on this computer by a holder that is gone, such as
+           * the crashed core, without asking. Any other lock still answers PROJECT_LOCKED.
+           */
+          reclaim: z.boolean().optional(),
+        }),
+      )
+      .output(OpenedProjectSchema),
     /** Renames a closed Project, which renames its folder. A lock left by anyone else needs `force`, as open does. */
     rename: oc.errors(PROJECT_ERRORS).input(LockedPathInput.extend({ name: z.string() })).output(ProjectSummarySchema),
     /** Copies a Project's folder beside it. The copy keeps the id until it is first opened, which gives it its own. */
@@ -1140,6 +1153,34 @@ export const coreContract = {
         VideoRefSchema.extend({
           /** The creator approved the estimate. Ignored on a subscription, which never asks. */
           approved: z.boolean().optional(),
+        }),
+      ),
+    /**
+     * Regenerates a generated video from scratch: a new Storyboard and every unit, in its current Style Preset snapshot
+     * and Captions. It always needs `confirmed`, which on an API key also approves its cost. The current Version plays
+     * until it completes and saves the next Version; cut short (Stop, the cost cap, a plan limit, a failed login, a crash)
+     * it is discarded, as a restyle is. It starts and returns at once; progress streams through `generation`.
+     */
+    regenerate: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        /** The video has no Version yet: Generate it instead. */
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+        /** A generation, Retry, Revision or Restore is running; regenerate once it ends. */
+        BUSY: { data: z.object({ projectId: z.string() }) },
+        /** Ask the creator, then regenerate again with `confirmed`; `costUsd` on an API key, priced like a first generation. */
+        REGENERATE_UNCONFIRMED: { data: z.object({ costUsd: CostRangeSchema.optional() }) },
+      })
+      .input(
+        VideoRefSchema.extend({
+          /** The creator confirmed the regeneration, and on an API key its cost. */
+          confirmed: z.boolean().optional(),
         }),
       ),
     /** Streams the video's generation now and after every change, until the window stops listening. */
@@ -1313,6 +1354,7 @@ export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
 export type VideoRef = z.infer<typeof VideoRefSchema>;
 export type ExportError = z.infer<typeof ExportErrorSchema>;
 export type ExportStatus = z.infer<typeof ExportStatusSchema>;
+export type ExportStage = z.infer<typeof ExportStageSchema>;
 export type AuthMethod = z.infer<typeof AuthMethodSchema>;
 export type ConnectorError = z.infer<typeof ConnectorErrorSchema>;
 export type ConnectionStatus = z.infer<typeof ConnectionStatusSchema>;

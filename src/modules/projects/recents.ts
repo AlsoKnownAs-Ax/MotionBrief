@@ -48,14 +48,31 @@ export function createRecents(appDataDir: string) {
         { path: projectPath, id },
         ...recents
           .filter((recent) => !samePath(recent.path, projectPath))
-          .map((recent) => (id !== undefined && recent.id === id ? { path: recent.path } : recent)),
+          .map((recent) => withoutId(recent, id)),
       ]),
-    moved: (from: string, to: string) => change((recents) => recents.map((recent) => (samePath(recent.path, from) ? { ...recent, path: to } : recent))),
+    moved: (from: string, to: string) => change((recents) => recents.map((recent) => movedTo(recent, from, to))),
     forget: (projectPaths: string[]) => change((recents) => recents.filter((recent) => !projectPaths.some((gone) => samePath(recent.path, gone)))),
   };
 }
 
 export type Recents = ReturnType<typeof createRecents>;
+
+/** Another folder that owned `id` owns it no longer: the folder just remembered does. */
+function withoutId(recent: Recent, id: string | undefined): Recent {
+  if (id === undefined || recent.id !== id) {
+    return recent;
+  }
+
+  return { path: recent.path };
+}
+
+function movedTo(recent: Recent, from: string, to: string): Recent {
+  if (!samePath(recent.path, from)) {
+    return recent;
+  }
+
+  return { ...recent, path: to };
+}
 
 function parseJson(text: string): unknown {
   try {

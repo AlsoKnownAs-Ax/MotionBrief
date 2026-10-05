@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
-import type { GenerateError, Generation, OpenVideoError, RetryError, StyleChangeError } from "../generation";
+import type { GenerateError, Generation, OpenVideoError, RegenerateError, RetryError, StyleChangeError } from "../generation";
 import type { History, HistoryError } from "../history";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
@@ -200,7 +200,9 @@ export function createCoreRouter({
     },
     project: {
       list: api.project.list.handler(() => projects.list()),
-      open: api.project.open.handler(async ({ input: { path, force }, context }) => dataOrThrow(await projects.open(path, { force }, context))),
+      open: api.project.open.handler(async ({ input: { path, force, reclaim }, context }) =>
+        dataOrThrow(await projects.open(path, { force, reclaim }, context)),
+      ),
       rename: api.project.rename.handler(async ({ input: { path, name, force } }) => dataOrThrow(await projects.rename(path, name, { force }))),
       duplicate: api.project.duplicate.handler(async ({ input }) => dataOrThrow(await projects.duplicate(input.path))),
       delete: api.project.delete.handler(async ({ input: { path, force } }) => {
@@ -223,6 +225,9 @@ export function createCoreRouter({
       changeStyle: api.video.changeStyle.handler(async ({ input: { projectId, format, ...request } }) => dataOrThrow(await generation.changeStyle({ projectId, format }, request))),
       generate: api.video.generate.handler(async ({ input }) => {
         dataOrThrow(await generation.start(input));
+      }),
+      regenerate: api.video.regenerate.handler(async ({ input: { confirmed, ...video } }) => {
+        dataOrThrow(await generation.regenerate(video, confirmed ?? false));
       }),
       generation: api.video.generation.handler(async ({ input, signal }) => dataOrThrow(await generation.watch(input, signal))),
       revise: api.video.revise.handler(async ({ input: { projectId, format, ...request } }) => {
@@ -278,7 +283,7 @@ type CodedResult =
   | { data: unknown; error: null }
   | {
       data: null;
-      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | ReviseError | UsageError | SettingsError | HistoryError;
+      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | UsageError | SettingsError | HistoryError;
     };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */

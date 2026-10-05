@@ -42,9 +42,17 @@ function fillsLine({ palette: { fills = [] } }: StylePreset): string[] {
   }
 
   const roles = fills.map((role) => `var(--${role})`).join(" and ");
-  const [fill, it] = fills.length === 1 ? ["a fill", "it is"] : ["fills", "they are"];
+  const [fill, it] = fillWords(fills.length);
 
   return [`Palette: use ${roles} only as ${fill} behind var(--ink) text, never as text, icons or lines; ${it} too faint on the background to read.`];
+}
+
+function fillWords(count: number): [string, string] {
+  if (count === 1) {
+    return ["a fill", "it is"];
+  }
+
+  return ["fills", "they are"];
 }
 
 const TRANSITION_NOTES: Partial<Record<TransitionType, string>> = {
@@ -56,7 +64,11 @@ function transitionsLine({ transitions }: StylePreset): string {
   const allowed = transitionTypesFor(transitions).map((type) => {
     const note = TRANSITION_NOTES[type];
 
-    return note ? `"${type}" (${note})` : `"${type}"`;
+    if (!note) {
+      return `"${type}"`;
+    }
+
+    return `"${type}" (${note})`;
   });
 
   return `Transitions: use only ${allowed.join(", ")}. The Assembler draws them; Scene code never does.`;
@@ -101,11 +113,21 @@ function treatmentsLine({ surface, radius, connector, line, texture, icons }: Tr
     `${SURFACES[surface]} cards (.mb-card) with ${radius} px corners`,
     `${connector.style} connectors`,
     ICONS[icons],
-    line === "sketchy" ? "hand-drawn outlines" : "clean lines",
-    texture === "none" ? "no texture" : `a ${texture.replace("-", " ")} texture`,
+    LINES[line],
+    textureWords(texture),
   ];
 
   return `Treatments, all drawn by the frame (never restyle them): ${parts.join(", ")}.`;
+}
+
+const LINES = { sketchy: "hand-drawn outlines", clean: "clean lines" } satisfies Record<Treatments["line"], string>;
+
+function textureWords(texture: Treatments["texture"]) {
+  if (texture === "none") {
+    return "no texture";
+  }
+
+  return `a ${texture.replace("-", " ")} texture`;
 }
 
 function range([low, high]: [number, number]): string {

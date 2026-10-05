@@ -67,7 +67,11 @@ export function createTurnMapper() {
       }
 
       return message.message.content.flatMap((block) => {
-        const path = block.type === "tool_result" && !block.is_error ? pendingWrites.get(block.tool_use_id) : undefined;
+        if (block.type !== "tool_result" || block.is_error) {
+          return [];
+        }
+
+        const path = pendingWrites.get(block.tool_use_id);
 
         if (!path) {
           return [];

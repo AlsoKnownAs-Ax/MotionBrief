@@ -1,7 +1,8 @@
 import type { RenderJob } from "@hyperframes/producer";
-import type { ExportStatus } from "../../contract";
+import type { ExportStage, ExportStatus } from "../../contract";
 
-type Rendering = Extract<ExportStatus, { state: "rendering" }>;
+/** An export's status while it renders: always with its stage and progress. */
+type Rendering = ExportStatus & { state: "rendering"; stage: ExportStage; progress: number };
 
 export type RenderOutcome = { code: "DONE" } | { code: "CANCELLED" } | { code: "RENDER_FAILED"; message: string };
 
@@ -102,7 +103,7 @@ export async function* renderMp4({ pageDir, output, chromePath, ffmpegPath, ffpr
     }
 
     if (error !== undefined) {
-      return { code: "RENDER_FAILED", message: error instanceof Error ? error.message : String(error) };
+      return { code: "RENDER_FAILED", message: messageOf(error) };
     }
 
     return { code: "DONE" };
@@ -112,4 +113,12 @@ export async function* renderMp4({ pageDir, output, chromePath, ffmpegPath, ffpr
     abort();
     await settled;
   }
+}
+
+function messageOf(error: unknown) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
 }

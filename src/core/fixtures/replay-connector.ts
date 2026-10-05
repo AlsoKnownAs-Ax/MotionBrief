@@ -24,9 +24,7 @@ const NO_TURN_LEFT: AgentEvent[] = [{ type: "turn-completed", status: "failed", 
  * turns until a test releases them.
  */
 export function createReplayConnector(script: ReplayScript, status: ConnectionStatus = { isConnected: true, method: "api-key" }) {
-  const shared = Array.isArray(script) ? [...script] : undefined;
-  /** Each label's turns left, shared by its sessions: a later session (a Retry) replays the turns after the earlier one's. */
-  const byLabel = new Map(Array.isArray(script) ? [] : Object.entries(script).map(([label, turns]) => [label, [...turns]]));
+  const { shared, byLabel } = turnsOf(script);
   const asked: ReplayedTurn[] = [];
   const held = new Map<string, PromiseWithResolvers<void>>();
   // The labels of the sessions open now, and what was open each time one started.
@@ -128,6 +126,23 @@ async function runHostTool(options: SessionOptions, call: Extract<AgentEvent, { 
   }
 
   const { success, data, error } = z.object(tool.input).safeParse(call.input);
-  const result = success ? await tool.run(data) : { text: error.message, isError: true };
-  turn.toolResults.push({ name: tool.name, result });
+
+  if (!success) {
+    turn.toolResults.push({ name: tool.name, result: { text: error.message, isError: true } });
+    return;
+  }
+
+  turn.toolResults.push({ name: tool.name, result: await tool.run(data) });
+}
+
+/**
+ * A script's turns: one list every session shares, or each label's turns left, shared by that label's sessions (a later
+ * session, such as a Retry's, replays the turns after the earlier one's).
+ */
+function turnsOf(script: ReplayScript): { shared?: AgentEvent[][]; byLabel: Map<string, AgentEvent[][]> } {
+  if (Array.isArray(script)) {
+    return { shared: [...script], byLabel: new Map() };
+  }
+
+  return { byLabel: new Map(Object.entries(script).map(([label, turns]) => [label, [...turns]])) };
 }

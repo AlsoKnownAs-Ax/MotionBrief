@@ -9,6 +9,7 @@ import type { AgentEvent } from "../modules/connector";
 import { bundledPreset } from "../modules/style";
 import { createCore } from "./composition-root";
 import { createReplayConnector, type ReplayScript } from "./fixtures/replay-connector";
+import { follow } from "./test-support/generation";
 import { voiceover } from "./test-support/media";
 import { fakeWhisper, whisperFixture } from "./test-support/whisper";
 
@@ -52,6 +53,11 @@ function submitsPatch({ scenes, remove = [], captions, instructions = [], summar
 /** A turn in which the Revision agent only replies. */
 function replies(text: string): AgentEvent[] {
   return [{ type: "turn-completed", status: "completed", text }];
+}
+
+/** A turn the connector ends with an error, such as a plan limit or a failed login. */
+function failsWith(error: Extract<AgentEvent, { type: "turn-completed" }>["error"]): AgentEvent[] {
+  return [{ type: "turn-completed", status: "failed", error }];
 }
 
 function submitsCode(code: UnitCode): AgentEvent[] {
@@ -619,6 +625,56 @@ describe("a Revision", () => {
     },
     RUN_TIMEOUT_MS,
   );
+
+  it(
+    "stops as Stop does when Claude's login fails while it regenerates Scenes, interrupting the others and saving nothing",
+    async () => {
+      const s03 = scene(storyboard, "s03");
+      (s03.content.caption as { text: string }).text = "Instant";
+      const { core, replay, project, video } = await connect({
+        revision: [
+          submitsPatch({ scenes: [s03], instructions: [{ scene: "s01", text: "Make the headline twice as big" }], summary: "Shortened the stat's caption." }),
+        ],
+        "scene-code s01": [failsWith({ code: "AUTHENTICATION_FAILED", message: "Log in" })],
+      });
+      await generatedGood(project);
+      replay.hold("scene-code s03");
+      const { ended } = await revise(core, video, "Shorter caption, bigger hook", ["s01", "s03"]);
+      await expect.poll(() => replay.sessions().open).toBe(0);
+
+      expect(ended).toMatchObject({ state: "stopped", error: { code: "AGENT_FAILED", error: { code: "AUTHENTICATION_FAILED" } } });
+      expect(ended.notApplied).toBeUndefined();
+      expect(await versions(project)).toEqual(["1.json"]);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it("stops when the plan limit is reached while planning, saying when the plan resets, and pauses the queue behind it", async () => {
+    const resetsAt = Date.UTC(2026, 9, 5, 15, 0);
+    const { core, replay, project, video } = await connect({
+      revision: [failsWith({ code: "PLAN_LIMIT", message: "The Claude plan's usage limit was reached", resetsAt })],
+    });
+    await generatedGood(project);
+    replay.hold("revision");
+    const chat = await follow((signal) => core.video.chat(video, { signal }));
+
+    await core.video.send({ ...video, message: "One", scope: [] });
+    await core.video.send({ ...video, message: "Two", scope: [] });
+    replay.release("revision");
+    const paused = await chat.until(({ entries }) => entries[0]?.state === "stopped");
+    chat.stop();
+
+    expect(paused.isPaused).toBe(true);
+    expect(paused.entries.map(({ message, state }) => [message, state])).toEqual([
+      ["One", "stopped"],
+      ["Two", "queued"],
+    ]);
+    expect(paused.entries[0]?.error).toEqual({ code: "AGENT_FAILED", error: { code: "PLAN_LIMIT", message: "The Claude plan's usage limit was reached", resetsAt } });
+    expect(replay.askedOf("revision")).toHaveLength(1);
+    expect(await versions(project)).toEqual(["1.json"]);
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
 
   it("is too late to stop once it is saving its Version, and ends done", async () => {
     const s01 = scene(storyboard, "s01");

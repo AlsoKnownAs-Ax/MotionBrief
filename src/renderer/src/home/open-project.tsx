@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { useToast } from "@renderer/components/toast";
 import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
-import { core, orpc, queryClient } from "@renderer/core/connection";
+import { core, orpc, queryClient, rememberOpenProject } from "@renderer/core/connection";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
 import { openStoredVideo } from "@renderer/editor/stored-video";
 import { useNavigation } from "@renderer/navigation";
@@ -56,6 +56,7 @@ export async function openProject(path: string, { force = false } = {}) {
   }
 
   const { project, backupPath, recovered } = opened;
+  rememberOpenProject(project);
 
   if (backupPath) {
     useToast.getState().show({ text: `Updated "${project.name}" for this version of MotionBrief. Its old files are in ${backupPath}.` });
@@ -184,8 +185,21 @@ function TooNewPrompt({ project }: { project: TooNewProject }) {
 }
 
 function tooNewMessage({ name, appVersion }: TooNewProject, currentVersion?: string) {
-  const savedBy = appVersion ? `MotionBrief ${appVersion}` : "a newer MotionBrief";
-  const current = currentVersion ? `This is version ${currentVersion}, which` : "This version";
+  return `"${name}" was saved by ${savedBy(appVersion)}. ${thisVersion(currentVersion)} can't open it without risking your work.`;
+}
 
-  return `"${name}" was saved by ${savedBy}. ${current} can't open it without risking your work.`;
+function savedBy(appVersion: string | undefined) {
+  if (!appVersion) {
+    return "a newer MotionBrief";
+  }
+
+  return `MotionBrief ${appVersion}`;
+}
+
+function thisVersion(currentVersion: string | undefined) {
+  if (!currentVersion) {
+    return "This version";
+  }
+
+  return `This is version ${currentVersion}, which`;
 }

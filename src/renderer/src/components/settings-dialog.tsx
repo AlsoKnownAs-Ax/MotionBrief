@@ -13,7 +13,7 @@ import { PresetSettings } from "@renderer/style/preset-settings";
 import { useSetUpdateChannel, useUpdateState } from "@renderer/updates/update";
 import { CostSettings, ModelSettings } from "@renderer/usage/usage-settings";
 import type { CacheStatus, ConnectionStatus } from "../../../contract";
-import type { UpdateState } from "../../../shared/ipc";
+import type { UpdateChannel, UpdateState } from "../../../shared/ipc";
 
 export const useSettingsDialog = create<{ isOpen: boolean; setIsOpen: (isOpen: boolean) => void }>((set) => ({
   isOpen: false,
@@ -209,7 +209,7 @@ function cacheLabel(status: CacheStatus | undefined) {
 function UpdateSettings() {
   const { data: update } = useUpdateState();
   const setChannel = useSetUpdateChannel();
-  const isBeta = update?.channel === "beta";
+  const channel = update?.channel ?? "stable";
 
   return (
     <section aria-labelledby="settings-updates" className="flex flex-col gap-1">
@@ -219,8 +219,8 @@ function UpdateSettings() {
       <dl className="flex flex-col">
         <Row label="Channel">
           <span className="text-app-sm text-ink-muted">{channelLabel(update)}</span>
-          <Button variant="ghost" size="sm" disabled={!update || setChannel.isPending} onClick={() => setChannel.mutate(isBeta ? "stable" : "beta")}>
-            {isBeta ? "Leave beta" : "Join beta"}
+          <Button variant="ghost" size="sm" disabled={!update || setChannel.isPending} onClick={() => setChannel.mutate(CHANNEL_SWITCHES[channel].to)}>
+            {CHANNEL_SWITCHES[channel].label}
           </Button>
         </Row>
       </dl>
@@ -228,6 +228,12 @@ function UpdateSettings() {
     </section>
   );
 }
+
+/** The channel button switches to the other channel. */
+const CHANNEL_SWITCHES = {
+  stable: { to: "beta", label: "Join beta" },
+  beta: { to: "stable", label: "Leave beta" },
+} satisfies Record<UpdateChannel, { to: UpdateChannel; label: string }>;
 
 function channelLabel(update: UpdateState | undefined) {
   if (!update) {
@@ -244,6 +250,10 @@ function channelLabel(update: UpdateState | undefined) {
 function updatesNote(update: UpdateState | undefined) {
   if (update && !update.isEnabled) {
     return "Development builds don't update.";
+  }
+
+  if (update?.stagedBeta) {
+    return `Beta ${update.stagedBeta} was already set to install before you left beta, so it installs when MotionBrief quits. Stable updates follow from then on.`;
   }
 
   if (update?.channel === "beta") {

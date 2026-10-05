@@ -24,10 +24,18 @@ export function PresetSettings() {
         ))}
       </ul>
       <p className="text-app-xs text-ink-muted">
-        {error ? presetErrorMessage(error) : "Duplicate a Preset to make your own. Videos keep the look they were made with."}
+        {presetsNote(error)}
       </p>
     </section>
   );
+}
+
+function presetsNote(error: unknown) {
+  if (error) {
+    return presetErrorMessage(error);
+  }
+
+  return "Duplicate a Preset to make your own. Videos keep the look they were made with.";
 }
 
 type PresetRowProps = { preset: ListedPreset; onDuplicate: () => void; onRemove: () => void; isBusy: boolean };
@@ -60,7 +68,7 @@ function PresetRow({ preset, onDuplicate, onRemove, isBusy }: PresetRowProps) {
       <Button variant="ghost" size="sm" disabled={isBusy} onClick={onDuplicate}>
         Duplicate
       </Button>
-      {preset.readOnly ? null : (
+      {!preset.readOnly ? (
         <>
           <Button variant="ghost" size="sm" onClick={() => edit(preset.id)}>
             Edit
@@ -69,7 +77,7 @@ function PresetRow({ preset, onDuplicate, onRemove, isBusy }: PresetRowProps) {
             Delete
           </Button>
         </>
-      )}
+      ) : null}
     </li>
   );
 }

@@ -28,7 +28,11 @@ export function checkContrast({ colors, fills = [] }: Palette): ContrastFinding[
   const finding = (level: ContrastFinding["level"], use: ContrastFinding["use"], role: PaletteRole, against: PaletteRole, minimum: number) => {
     const ratio = contrastRatio(colors[role], colors[against]);
 
-    return ratio < minimum ? [{ level, use, role, against, ratio: round(ratio), minimum }] : [];
+    if (ratio < minimum) {
+      return [{ level, use, role, against, ratio: round(ratio), minimum }];
+    }
+
+    return [];
   };
 
   const text = TEXT_ROLES.flatMap((role) => GROUNDS.flatMap((ground) => finding("block", "text", role, ground, TEXT_MINIMUM)));
@@ -61,7 +65,11 @@ function luminance(hex: string): number {
 function linear(channel: number): number {
   const c = channel / 255;
 
-  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  if (c <= 0.04045) {
+    return c / 12.92;
+  }
+
+  return ((c + 0.055) / 1.055) ** 2.4;
 }
 
 /** Ratios are shown to two decimals but compared unrounded, as WCAG asks: 2.998:1 fails 3:1. */

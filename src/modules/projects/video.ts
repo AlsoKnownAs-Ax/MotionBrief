@@ -35,8 +35,12 @@ export async function readVideo(projectDir: string, format: Format): Promise<Res
   const path = join(videoDir(projectDir, format), VIDEO_FILE);
   const { data: text, error } = await fileStep(path, () => readFile(path, "utf8"));
 
+  if (error?.message.includes("ENOENT")) {
+    return { data: {}, error: null };
+  }
+
   if (error) {
-    return error.message.includes("ENOENT") ? { data: {}, error: null } : { data: null, error };
+    return { data: null, error };
   }
 
   const { success, data: document, error: parseError } = VideoDocumentSchema.safeParse(parseJson(text));
