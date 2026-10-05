@@ -130,6 +130,11 @@ export type UpdateState = {
   isEnabled: boolean;
   /** The version downloaded and waiting for a restart. */
   readyVersion?: string;
+  /**
+   * macOS only: the beta that was already handed to the system installer when the creator left beta. It still installs
+   * on quit, so it stays the ready version; stable takes over from the next update.
+   */
+  stagedBeta?: string;
   /** An export is running in some window, so the app won't restart yet. */
   isExporting: boolean;
 };

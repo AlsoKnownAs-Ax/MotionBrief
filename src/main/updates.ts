@@ -8,6 +8,11 @@ export type UpdateBackend = {
   onDownloaded: (listener: (version: string) => void) => void;
   /** Whether quitting the app installs the staged update. */
   setInstallOnQuit: (install: boolean) => void;
+  /**
+   * A downloaded update is handed to the system installer (Squirrel.Mac on macOS), which installs it on quit whatever
+   * `setInstallOnQuit` says: once staged, it can't be taken back.
+   */
+  stagesNatively: boolean;
   quitAndInstall: () => void;
 };
 
@@ -40,8 +45,10 @@ const ABANDON_AFTER_MS = 30_000;
 /**
  * App updates: checked and downloaded in the background, installed on "Restart to update" or on quit. A
  * staged update only counts while it fits the channel, so a beta downloaded before leaving beta (or still
- * downloading then) is never installed on the stable channel. Restarting first holds the core's exports and
- * goes ahead only when none runs.
+ * downloading then) is never installed on the stable channel. Where the system installer already holds a
+ * staged beta (macOS), it installs on quit regardless: it stays the ready version and the state says so,
+ * and stable takes over from the next update. Restarting first holds the core's exports and goes ahead only
+ * when none runs.
  */
 export async function createUpdates({ backend, isEnabled, currentVersion, store, exports, onChange, abandonAfterMs = ABANDON_AFTER_MS }: UpdatesOptions) {
   let channel = (await store.load()) ?? defaultChannel(currentVersion);
@@ -50,7 +57,16 @@ export async function createUpdates({ backend, isEnabled, currentVersion, store,
   let isRestarting = false;
 
   function readyVersion() {
-    if (staged && fitsChannel(staged, channel)) {
+    if (staged && (fitsChannel(staged, channel) || backend.stagesNatively)) {
+      return staged;
+    }
+
+    return undefined;
+  }
+
+  /** A beta the system installer holds after the creator left beta: it still installs on quit. */
+  function stagedBeta() {
+    if (staged && !fitsChannel(staged, channel) && backend.stagesNatively) {
       return staged;
     }
 
@@ -59,8 +75,9 @@ export async function createUpdates({ backend, isEnabled, currentVersion, store,
 
   function state(): UpdateState {
     const version = readyVersion();
+    const beta = stagedBeta();
 
-    return { channel, isEnabled, isExporting: runningExports > 0, ...(version && { readyVersion: version }) };
+    return { channel, isEnabled, isExporting: runningExports > 0, ...(version && { readyVersion: version }), ...(beta && { stagedBeta: beta }) };
   }
 
   /**

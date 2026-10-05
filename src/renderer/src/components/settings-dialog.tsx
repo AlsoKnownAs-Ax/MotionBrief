@@ -246,6 +246,10 @@ function updatesNote(update: UpdateState | undefined) {
     return "Development builds don't update.";
   }
 
+  if (update?.stagedBeta) {
+    return `Beta ${update.stagedBeta} was already set to install before you left beta, so it installs when MotionBrief quits. Stable updates follow from then on.`;
+  }
+
   if (update?.channel === "beta") {
     return "You get beta versions early, as well as every stable release. Leaving beta keeps this version until a newer stable one is out.";
   }
