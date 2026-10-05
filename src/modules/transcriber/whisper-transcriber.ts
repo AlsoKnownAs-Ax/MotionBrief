@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFile, rm, writeFile } from "node:fs/promises";
+import { z } from "zod";
 import type { Transcript, TranscriptWord } from "../../contract";
 import type { Cache, CacheError } from "../cache";
 import type { Media, MediaError, TimeRange } from "../media";
@@ -220,16 +221,23 @@ function mediaError(error: MediaError | CacheError): TranscriberError {
   return { code: "VOICEOVER_UNREADABLE", message: error.detail };
 }
 
+const CachedRawSchema = z.object({ json: z.string(), log: z.string() }) satisfies z.ZodType<RawWhisperOutput>;
+
 /** A cached entry that isn't raw output any more is treated as a miss. */
 function parseRaw(text: string): RawWhisperOutput | undefined {
+  const { success, data: raw } = CachedRawSchema.safeParse(parseJson(text));
+
+  if (!success) {
+    return undefined;
+  }
+
+  return { json: raw.json, log: raw.log };
+}
+
+/** JSON.parse throws on text that isn't JSON; that is a cache miss too. */
+function parseJson(text: string): unknown {
   try {
-    const raw = JSON.parse(text) as Partial<RawWhisperOutput>;
-
-    if (typeof raw.json !== "string" || typeof raw.log !== "string") {
-      return undefined;
-    }
-
-    return { json: raw.json, log: raw.log };
+    return JSON.parse(text);
   } catch {
     return undefined;
   }
