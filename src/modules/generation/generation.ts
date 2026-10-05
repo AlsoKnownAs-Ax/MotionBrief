@@ -1,0 +1,1394 @@
+import { randomUUID } from "node:crypto";
+import type {
+  CheckFinding,
+  ConnectorError,
+  CostRange,
+  Format,
+  FrameUpdate,
+  GenerationEstimate,
+  GenerationPreviewError,
+  GenerationStatus,
+  GenerationStop,
+  GenerationUnit,
+  OpenedVideo,
+  RoleModels,
+  StyleChanged,
+  StyleChangeKind,
+  StylePreset,
+  Transcript,
+  UnitCode,
+  UnitWork,
+  VersionOrigin,
+  VideoRef,
+} from "../../contract";
+import { FormatSchema, StylePresetSchema } from "../../contract";
+import { planUnits, type Unit } from "../assembler";
+import type { Checker } from "../checker";
+import type { Connector } from "../connector";
+import { FRAME_CONTRACT_VERSION } from "../frame";
+import { previewErrorMessage, type PreviewError, type Previews, type Stills } from "../preview";
+import {
+  createStatusStore,
+  type Flag,
+  type Projects,
+  type ProjectsError,
+  type ProjectVideo,
+  type StoredVideo,
+  type Version,
+  type VersionError,
+  type VideoContent,
+  type VideoDocumentError,
+} from "../projects";
+import { DEFAULT_MODELS } from "../settings";
+import { StoryboardSchema, validateStoryboard, type Storyboard } from "../storyboard";
+import { classifyStyleChange, describeStyleChange, listPresets, presetBrief, storyboardRules, type CaptionsChange, type PresetBrief } from "../style";
+import type { Clock } from "../system";
+import type { Usage, UsageRun } from "../usage";
+import { writeStoryboard, writeUnitCode, type StoryboardError, type UnitOutcome } from "./agents";
+import { failingUnits, needsRecheck } from "./frame-update";
+import { reviewUnit } from "./review";
+
+export { DEFAULT_MODELS };
+
+export type Models = RoleModels;
+
+/** Captions are on by default in vertical and off in horizontal, until the creator chooses for the video. */
+const CAPTIONS_BY_DEFAULT = { vertical: true, horizontal: false } satisfies Record<Format, boolean>;
+
+/** Scene-code subagents running at once. */
+const PARALLEL_UNITS = 4;
+
+/** Spike numbers per minute of Voiceover with the default models (#7): 7-9 minutes of work. Usage prices it. */
+const MINUTES_PER_MINUTE = { low: 7, high: 9 };
+
+/** Why a unit a run didn't finish plays as its flagged fallback Scene, by what stopped the run. */
+const STOP_REASONS = {
+  stopped: "Generation was stopped before this Scene was finished.",
+  "plan-limit": "The Claude plan's usage limit was reached before this Scene was finished.",
+  "cost-cap": "The run reached your cost cap before this Scene was finished.",
+  authentication: "Claude's login failed before this Scene was finished.",
+  closed: "The Project was closed before this Scene was finished.",
+} satisfies Record<GenerationStop["cause"], string>;
+
+export type GenerationOptions = {
+  connector: Connector;
+  checker: Checker;
+  previews: Previews;
+  /** The Renderer's stills of a unit, for its visual review. */
+  stills: Stills;
+  projects: Projects;
+  clock: Clock;
+  /** Where agent sessions get their workspace folders. */
+  workDir: string;
+  /** Counts what a run's agents use, prices the next one and stops one at the creator's cap. */
+  usage: Usage;
+  /** The model per agent role Settings choose; read as a run starts, so a change applies to the next run. */
+  models?: () => Promise<Models>;
+};
+
+export type GenerateError =
+  | Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }>
+  | { code: "TRANSCRIPT_NOT_READY"; projectId: string }
+  | { code: "GENERATING"; projectId: string }
+  | { code: "ALREADY_GENERATED"; version: number }
+  | { code: "UNKNOWN_STYLE_PRESET"; stylePreset: string }
+  | { code: "APPROVAL_REQUIRED"; costUsd: CostRange };
+
+type Result<T, E> = { data: T; error: null } | { data: null; error: E };
+
+export type Generation = ReturnType<typeof createGeneration>;
+
+const IDLE: GenerationStatus = { state: "idle", units: [] };
+
+type StatusStore = ReturnType<typeof createStatusStore<GenerationStatus>>;
+
+/** A first generation or a Retry in progress: one per video at a time. */
+type Run = {
+  /** Recorded with its progress and Version, so a crash recovery never saves the same run twice. */
+  id: string;
+  controller: AbortController;
+  /** Its agents start their sessions through it, so what they use is counted and the cap can stop them. */
+  usage: UsageRun;
+  /** The models Settings chose as it started. */
+  models: Models;
+  /** What stopped it, once something has. */
+  stopped?: GenerationStop;
+  /** Settles once the run has ended and saved what it keeps. */
+  done: Promise<void>;
+};
+
+/**
+ * Generation: a video's first generation, from the Project's Transcript to Version 1. The Storyboard
+ * agent plans it; once the Storyboard is valid, parallel subagents write each unit's Scene code, the
+ * Checker drives their retries, and a unit that keeps failing plays as its flagged fallback Scene.
+ * Every finished unit is stored at once and the video plays as they finish. There is no approval
+ * between the Storyboard and the Scenes, and nothing starts until Generate is pressed.
+ *
+ * Stop, a subscription plan limit, a failed login and closing the Project all end a run the same way:
+ * finished units are kept and the rest become flagged fallbacks in a saved Version. Flagged units are
+ * only ever regenerated by Retry.
+ */
+export function createGeneration({ connector, checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS }: GenerationOptions) {
+  const videos = new Map<string, StatusStore>();
+  const runs = new Map<string, Run>();
+  /** The last open or Retry start queued on each video. */
+  const steps = new Map<string, Promise<unknown>>();
+
+  // A closing Project stops its runs and waits for them to save, so their paid work outlives the window.
+  projects.whenClosing(async (projectId) => {
+    const closing = [...runs].filter(([key]) => key.startsWith(`${projectId} `)).map(([, run]) => run);
+    closing.forEach((run) => halt(run, { cause: "closed" }));
+    await Promise.all(closing.map(({ done }) => done));
+  });
+
+  function storeOf({ projectId, format }: VideoRef) {
+    const key = `${projectId} ${format}`;
+    const store = videos.get(key) ?? createStatusStore<GenerationStatus>(IDLE);
+    videos.set(key, store);
+
+    return { key, store };
+  }
+
+  /** Starts `work` as the video's run, holding its reservation until it ends; a run that throws fails with the error. */
+  function begin(ref: VideoRef, store: StatusStore, release: () => void, started: Pick<Run, "usage" | "models">, work: (run: Run) => Promise<void>) {
+    const { key } = storeOf(ref);
+    const run: Run = { id: randomUUID(), controller: new AbortController(), done: Promise.resolve(), ...started };
+    runs.set(key, run);
+    run.done = work(run)
+      .catch((cause: unknown) => store.update({ state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
+      .finally(() => {
+        if (runs.get(key) === run) {
+          runs.delete(key);
+        }
+      })
+      .then(() => run.usage.finish({ completed: store.get().state === "done" && !run.stopped }))
+      .finally(() => {
+        release();
+        ended.forEach((listener) => listener(ref));
+      });
+  }
+
+  /** Told whenever a video's run ends, however it ended. */
+  const ended: ((ref: VideoRef) => void)[] = [];
+
+  /** Calls `listener` whenever a video's first generation, Retry or restyle ends, or a swap is saved, such as to run what queued behind it. */
+  function whenEnded(listener: (ref: VideoRef) => void) {
+    ended.push(listener);
+  }
+
+  /** Whether a first generation or Retry of the video is running. */
+  function isRunning(ref: VideoRef) {
+    return runs.has(storeOf(ref).key);
+  }
+
+  /** Ends a run early: the turns running now are interrupted, and nothing else starts. The first stop wins. */
+  function halt(run: Run, stop: GenerationStop) {
+    if (run.controller.signal.aborted) {
+      return;
+    }
+
+    run.stopped = stop;
+    run.controller.abort();
+  }
+
+  async function estimate({ projectId, format }: VideoRef): Promise<Result<GenerationEstimate, GenerateError>> {
+    const { data: video, error } = await projects.video(projectId, format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const { duration } = video.project.voiceover;
+    const minutes = duration / 60;
+    const low = Math.max(1, Math.round(minutes * MINUTES_PER_MINUTE.low));
+    const span = { low, high: Math.max(low, Math.ceil(minutes * MINUTES_PER_MINUTE.high)) };
+
+    if ((await connector.status()).method !== "api-key") {
+      return { data: { minutes: span, needsApproval: false }, error: null };
+    }
+
+    return { data: { minutes: span, costUsd: await usage.estimateCost(duration), needsApproval: await usage.needsApproval() }, error: null };
+  }
+
+  /**
+   * Starts generating the video; its progress streams through `watch`. On an API key with approval on, it starts only
+   * once the creator `approved` the estimate.
+   */
+  async function start({ approved = false, ...ref }: VideoRef & { approved?: boolean }): Promise<Result<null, GenerateError>> {
+    const { projectId, format } = ref;
+    const { data: video, error } = await projects.video(projectId, format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const { key, store } = storeOf(ref);
+    const { data: preset, error: presetError } = await presetFor(video, format);
+    const { data: choice, error: choiceError } = await projects.captionsChoice(projectId, format);
+
+    if (runs.has(key)) {
+      return { data: null, error: { code: "GENERATING", projectId } };
+    }
+
+    if (video.version !== undefined) {
+      return { data: null, error: { code: "ALREADY_GENERATED", version: video.version } };
+    }
+
+    if (!video.transcript) {
+      return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
+    }
+
+    if (presetError) {
+      return { data: null, error: presetError };
+    }
+
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
+    }
+
+    const { duration } = video.project.voiceover;
+
+    if (!approved && (await usage.needsApproval())) {
+      return { data: null, error: { code: "APPROVAL_REQUIRED", costUsd: await usage.estimateCost(duration) } };
+    }
+
+    const chosen = await models();
+
+    // Checked again: Generate may have been pressed twice while the approval and models were looked up.
+    if (runs.has(key)) {
+      return { data: null, error: { code: "GENERATING", projectId } };
+    }
+
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const release = projects.reserve(projectId, format);
+
+    if (!release) {
+      return { data: null, error: { code: "GENERATING", projectId } };
+    }
+
+    store.set({ state: "planning", units: [] });
+    const transcript = video.transcript;
+    const captions = choice ?? CAPTIONS_BY_DEFAULT[format];
+    const started = { usage: usage.startRun(ref, { voiceoverSeconds: duration }), models: chosen };
+    begin(ref, store, release, started, (run) => generate({ run, ref, transcript, preset, captions, store, origin: "generation" }));
+
+    return { data: null, error: null };
+  }
+
+  /**
+   * Regenerates a generated video from scratch once confirmed: a new Storyboard and every unit, in the current Version's
+   * Style Preset snapshot and Captions. The current Version plays until it completes; cut short, it is discarded.
+   */
+  function regenerate(ref: VideoRef, isConfirmed: boolean): Promise<Result<null, OpenVideoError | RegenerateError>> {
+    // In turn with opens and Retry starts, so a re-check never saves a Version under it.
+    return exclusive(storeOf(ref).key, () => startRegeneration(ref, isConfirmed));
+  }
+
+  /** Reserves the video before reading the Version it regenerates, so no other job saves one meanwhile. */
+  async function startRegeneration(ref: VideoRef, isConfirmed: boolean): Promise<Result<null, OpenVideoError | RegenerateError>> {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "BUSY", projectId: ref.projectId } };
+    }
+
+    const started = await regenerateReserved(ref, isConfirmed, release);
+
+    if (started.error) {
+      release();
+    }
+
+    return started;
+  }
+
+  async function regenerateReserved(ref: VideoRef, isConfirmed: boolean, release: () => void): Promise<Result<null, OpenVideoError | RegenerateError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { transcript, stored } = saved;
+
+    if (!isConfirmed) {
+      return { data: null, error: { code: "REGENERATE_UNCONFIRMED", costUsd: await wholeVideoCost(transcript.duration) } };
+    }
+
+    const chosen = await models();
+
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(ref.projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId: ref.projectId } };
+    }
+
+    const { store } = storeOf(ref);
+    const job = { ref, transcript, preset: stored.version.preset, captions: shownCaptions(stored.version), store, origin: "regeneration" as const };
+    store.set({ state: "planning", units: [] });
+    begin(ref, store, release, { usage: usage.startRun(ref), models: chosen }, (run) => generate({ ...job, run }));
+
+    return { data: null, error: null };
+  }
+
+  /**
+   * The Style Preset a video is generated in. The Project's other Format, once it has a video, passes on
+   * its current Preset snapshot, so both videos look alike; a Project's first video uses its Style Preset.
+   */
+  async function presetFor(video: ProjectVideo, format: Format): Promise<Result<StylePreset, GenerateError>> {
+    const sibling = FormatSchema.options.find((other) => other !== format) ?? format;
+    const { data: stored, error } = await projects.storedVideo(video.project.id, sibling);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    if (stored) {
+      return { data: stored.version.preset, error: null };
+    }
+
+    const listed = listPresets().find(({ id }) => id === video.project.stylePreset);
+
+    if (!listed) {
+      return { data: null, error: { code: "UNKNOWN_STYLE_PRESET", stylePreset: video.project.stylePreset } };
+    }
+
+    return { data: StylePresetSchema.parse(listed), error: null };
+  }
+
+  /**
+   * Turns the video's Captions on or off. Before its first Version that is only the choice its generation takes; a
+   * generated video's switch is a swap, a new Version re-rendered with no agent run.
+   */
+  async function setCaptions(ref: VideoRef, captions: boolean): Promise<Result<OpenedVideo, OpenVideoError | StyleChangeError>> {
+    const { data: stored, error } = await projects.storedVideo(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: versionError(error) };
+    }
+
+    if (stored) {
+      const { data: changed, error: changeError } = await changeStyle(ref, { captions });
+
+      if (changeError) {
+        return { data: null, error: changeError };
+      }
+
+      return { data: changed.video ?? {}, error: null };
+    }
+
+    const { error: choiceError } = await projects.chooseCaptions(ref.projectId, ref.format, captions);
+
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
+    }
+
+    return open(ref);
+  }
+
+  /**
+   * Changes the video's look from the Style tab: the Style Preset snapshot it is drawn in, and Captions on or off. A
+   * swap saves the next Version at once, re-rendered with no agent, and answers with the video as it now plays. A
+   * restyle needs the creator's confirmation, then starts a run that regenerates every unit; it streams through `watch`.
+   */
+  async function changeStyle(ref: VideoRef, request: StyleRequest): Promise<Result<StyleChanged, OpenVideoError | StyleChangeError>> {
+    // In turn with opens and Retry starts, so a re-check never saves a Version under a style change.
+    const { data: change, error } = await exclusive(storeOf(ref).key, () => startStyleChange(ref, request));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    if (change === "restyle") {
+      return { data: { change }, error: null };
+    }
+
+    const { data: video, error: openError } = await open(ref);
+
+    if (openError) {
+      return { data: null, error: openError };
+    }
+
+    return { data: { change, video }, error: null };
+  }
+
+  /** Reserves the video before reading the Version a style change starts from, so no other job saves one meanwhile. */
+  async function startStyleChange(ref: VideoRef, request: StyleRequest): Promise<Result<StyleChangeKind, OpenVideoError | StyleChangeError>> {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "BUSY", projectId: ref.projectId } };
+    }
+
+    const changed = await changeReserved(ref, request, release);
+
+    // A restyle's run holds the reservation until it ends; anything else is done with it now.
+    if (changed.data !== "restyle") {
+      release();
+    }
+
+    // What queued behind a swap can run now, as after a run.
+    if (changed.data === "swap") {
+      ended.forEach((listener) => listener(ref));
+    }
+
+    return changed;
+  }
+
+  async function changeReserved(ref: VideoRef, request: StyleRequest, release: () => void): Promise<Result<StyleChangeKind, OpenVideoError | StyleChangeError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { version } = saved.stored;
+    const shown = shownCaptions(version);
+    const preset = request.preset ?? version.preset;
+    const captions = { before: shown, after: request.captions ?? shown };
+    const change = classifyStyleChange(version.preset, preset, captions);
+    const style = describeStyleChange(version.preset, preset, captions);
+
+    if (change === "none") {
+      return { data: change, error: null };
+    }
+
+    if (change === "swap") {
+      return swap(ref, version, preset, captions, style);
+    }
+
+    return restyle(ref, saved, { preset, captions, style, isConfirmed: request.confirmed ?? false }, release);
+  }
+
+  /** Saves the swap as the next Version: the same Storyboard and unit code, drawn in the new Palette, typography or Captions. */
+  async function swap(ref: VideoRef, version: Version, preset: StylePreset, captions: CaptionsChange, style: string): Promise<Result<"swap", OpenVideoError>> {
+    const createdAt = new Date(clock.now()).toISOString();
+    const content = { ...contentOf(version), preset, showsCaptions: captions.after };
+    const { error } = await projects.saveVersion(ref.projectId, ref.format, { ...content, origin: "style", style, createdAt });
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    return { data: "swap", error: null };
+  }
+
+  type Restyle = { preset: StylePreset; captions: CaptionsChange; style: string; isConfirmed: boolean };
+
+  /**
+   * Starts regenerating every unit in the new Preset, once confirmed. The Storyboard is kept while the new Preset's
+   * allowed Transitions and Canvas preference still allow it; otherwise the Storyboard agent plans it again.
+   */
+  async function restyle(ref: VideoRef, saved: SavedVideo, { preset, captions, style, isConfirmed }: Restyle, release: () => void): Promise<Result<"restyle", OpenVideoError | StyleChangeError>> {
+    const { projectId, format } = ref;
+    const { transcript, stored } = saved;
+    const { version } = stored;
+    const { success, data: storyboard } = StoryboardSchema.safeParse(version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "INVALID_VERSION", path: format, message: `Version ${version.version} has no valid Storyboard` } };
+    }
+
+    const { error: unfit } = validateStoryboard(storyboard, transcript, storyboardRules(preset, { format, captions: version.captions }));
+
+    if (!isConfirmed) {
+      return { data: null, error: { code: "RESTYLE_UNCONFIRMED", replans: unfit !== null, costUsd: await wholeVideoCost(transcript.duration) } };
+    }
+
+    const chosen = await models();
+
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { store } = storeOf(ref);
+    const kept = keptStoryboard(storyboard, unfit === null);
+    const job = { ref, transcript, preset, storyboard: kept, writtenFor: version.captions, shows: captions.after, style, store };
+    store.set({ state: firstRestyleState(kept), units: [] });
+    begin(ref, store, release, { usage: usage.startRun(ref), models: chosen }, (run) => restyleRun({ ...job, run }));
+
+    return { data: "restyle", error: null };
+  }
+
+  type RestyleRun = {
+    run: Run;
+    ref: VideoRef;
+    transcript: Transcript;
+    preset: StylePreset;
+    /** The kept Storyboard; absent when the new Preset rules it out and it is planned again. */
+    storyboard?: Storyboard;
+    /** Whether the kept Storyboard is written for Captions. */
+    writtenFor: boolean;
+    /** Whether the video shows Captions. */
+    shows: boolean;
+    style: string;
+    store: StatusStore;
+  };
+
+  async function restyleRun({ run, ref, transcript, preset, storyboard, writtenFor, shows, style, store }: RestyleRun) {
+    const restyled = { run, ref, transcript, preset, store, origin: "restyle" as const, showsCaptions: shows, style };
+
+    if (storyboard) {
+      return writeVideo({ ...restyled, storyboard, captions: writtenFor });
+    }
+
+    // Planned again, the Storyboard is written for Captions as the video shows them.
+    const { data: planned, error } = await planStoryboard(run, ref, transcript, preset, shows);
+
+    if (error) {
+      store.set(endedBeforeStoryboard(run, error));
+      return;
+    }
+
+    await writeVideo({ ...restyled, storyboard: planned, captions: shows });
+  }
+
+  /** On an API key, what a restyle or regeneration is estimated to cost: about a first generation. A subscription isn't billed per run. */
+  async function wholeVideoCost(voiceoverSeconds: number): Promise<CostRange | undefined> {
+    if ((await connector.status()).method !== "api-key") {
+      return undefined;
+    }
+
+    return usage.estimateCost(voiceoverSeconds);
+  }
+
+  type GenerateRun = { run: Run; ref: VideoRef; transcript: Transcript; preset: StylePreset; captions: boolean; store: StatusStore };
+
+  /** Plans a Storyboard and writes every unit: a first generation, or a regeneration from scratch. */
+  async function generate({ origin, ...job }: GenerateRun & { origin: Extract<VersionOrigin, "generation" | "regeneration"> }) {
+    const { run, ref, transcript, preset, captions, store } = job;
+    const { data: storyboard, error } = await planStoryboard(run, ref, transcript, preset, captions);
+
+    if (error) {
+      store.set(endedBeforeStoryboard(run, error));
+      return;
+    }
+
+    await writeVideo({ ...job, storyboard, origin });
+  }
+
+  /** The Storyboard agent's validated Storyboard for the video in `preset`, written for Captions on or off. */
+  function planStoryboard(run: Run, { format }: VideoRef, transcript: Transcript, preset: StylePreset, captions: boolean) {
+    return writeStoryboard({
+      connector: run.usage.connector("storyboard"),
+      workDir,
+      signal: run.controller.signal,
+      model: run.models.storyboard,
+      transcript,
+      rules: storyboardRules(preset, { format, captions }),
+      brief: presetBrief(preset, format),
+    });
+  }
+
+  type VideoRun = GenerateRun & {
+    storyboard: Storyboard;
+    origin: Extract<VersionOrigin, "generation" | "restyle" | "regeneration">;
+    /** Whether the video shows Captions, when that differs from what the Storyboard is written for. */
+    showsCaptions?: boolean;
+    /** What a restyle changed, for its Version. */
+    style?: string;
+  };
+
+  /**
+   * Writes every unit of a valid Storyboard, as a first generation, a restyle or a regeneration does, and saves them as
+   * the next Version.
+   */
+  async function writeVideo({ run, ref, transcript, preset, captions, storyboard, store, origin, showsCaptions, style }: VideoRun) {
+    const { projectId, format } = ref;
+    const rules = storyboardRules(preset, { format, captions });
+    const brief = presetBrief(preset, format);
+    const units = planUnits(storyboard, transcript);
+    const planned = units.map(({ id }) => id);
+    const startedAt = new Date(clock.now()).toISOString();
+    const content: VideoContent = { storyboard, preset, captions, showsCaptions, units: {}, flags: [], models: run.models, frameContractVersion: FRAME_CONTRACT_VERSION };
+    const record = { runId: run.id, origin, startedAt, planned };
+    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: "queued", attempts: 0 }]));
+    const code: Record<string, UnitCode> = {};
+    const notes: Record<string, string> = {};
+    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store });
+
+    /**
+     * Saved after each unit, so a quit or crash keeps a first generation's finished units. A restyle or regeneration
+     * keeps no record: one cut short is discarded, so the video stays at the Version it had.
+     */
+    async function saveRecord(): Promise<Result<null, ProjectsError>> {
+      if (replacesVersion(origin)) {
+        return { data: null, error: null };
+      }
+
+      return projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), ...record });
+    }
+
+    const { error: recordError } = await saveRecord();
+
+    if (recordError) {
+      return failed(publish, fileErrorOf(recordError));
+    }
+
+    await publish({ state: "writing" });
+    const fileError = await writeUnits({ run, ref, storyboard, transcript, rules, preset, brief, units, content, code, notes, publish, save: saveRecord });
+
+    if (fileError) {
+      return failed(publish, fileError);
+    }
+
+    // A stopped restyle or regeneration (Stop, the cost cap, a plan limit, a failed login, a closed Project) is
+    // discarded, as a stopped Revision is: half a new video would replace a whole one.
+    if (replacesVersion(origin) && run.stopped) {
+      store.set({ state: "idle", units: [], stopped: run.stopped });
+      return;
+    }
+
+    const { data: version, error: versionError } = await projects.saveVersion(projectId, format, {
+      ...inUnitOrder(content, units),
+      origin,
+      style,
+      runId: run.id,
+      createdAt: new Date(clock.now()).toISOString(),
+    });
+
+    if (versionError) {
+      return failed(publish, fileErrorOf(versionError));
+    }
+
+    await publish({ state: "done", version, stopped: run.stopped });
+  }
+
+  /**
+   * Regenerates flagged units of the video's newest Version with the Scene-code model, each by its own subagent
+   * and checked, reviewed and retried as in a first generation: `units`, or every flagged fallback. Never runs on its
+   * own: only when the creator asks. Progress streams through `watch`.
+   */
+  function retry(ref: VideoRef, units?: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+    // In turn with opens, so a re-check never saves a Version under a Retry starting from the one before it.
+    return exclusive(storeOf(ref).key, () => startRetry(ref, units));
+  }
+
+  /** Reserves the video before reading the Version a Retry starts from, so no other job saves one meanwhile. */
+  async function startRetry(ref: VideoRef, requested?: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "GENERATING", projectId: ref.projectId } };
+    }
+
+    const started = await startReserved(ref, release, requested);
+
+    if (started.error) {
+      release();
+    }
+
+    return started;
+  }
+
+  async function startReserved(ref: VideoRef, release: () => void, requested?: string[]): Promise<Result<null, OpenVideoError | RetryError>> {
+    const { projectId } = ref;
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { store } = storeOf(ref);
+
+    const { version } = saved.stored;
+    const flagged = version.flags.map(({ unit }) => unit);
+    const fallbacks = version.flags.filter(({ kind }) => kind === "fallback").map(({ unit }) => unit);
+    const wanted = [...new Set(requested ?? fallbacks)];
+    const notFlagged = wanted.filter((unit) => !flagged.includes(unit));
+
+    if (wanted.length === 0 || notFlagged.length > 0) {
+      return { data: null, error: { code: "NOT_FLAGGED", units: notFlagged } };
+    }
+
+    const { success, data: storyboard } = StoryboardSchema.safeParse(version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "INVALID_VERSION", path: ref.format, message: `Version ${version.version} has no valid Storyboard` } };
+    }
+
+    const chosen = await models();
+
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    store.set({ state: "writing", units: [] });
+    begin(ref, store, release, { usage: usage.startRun(ref), models: chosen }, (run) => retryUnits({ run, ref, saved, storyboard, wanted, store }));
+
+    return { data: null, error: null };
+  }
+
+  type RetryRun = { run: Run; ref: VideoRef; saved: SavedVideo; storyboard: Storyboard; wanted: string[]; store: StatusStore };
+
+  async function retryUnits({ run, ref, saved, storyboard, wanted, store }: RetryRun) {
+    const { projectId, format } = ref;
+    const { transcript, stored } = saved;
+    const { version: current } = stored;
+    const { preset, captions } = current;
+    const rules = storyboardRules(preset, { format, captions });
+    const brief = presetBrief(preset, format);
+    const units = planUnits(storyboard, transcript);
+    const targets = units.filter(({ id }) => wanted.includes(id));
+    // Flags stay until their unit is redone, so a crash keeps the old flag of a unit still being retried.
+    const content: VideoContent = { ...contentOf(current), units: { ...current.units }, flags: [...current.flags], models: { ...current.models, sceneCode: run.models.sceneCode, visualReview: run.models.visualReview } };
+    const code: Record<string, UnitCode> = { ...stored.code };
+    const notes = reviewNotes(current.flags.filter(({ unit }) => !wanted.includes(unit)));
+    const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: retryStatus(id, wanted, code, notes), attempts: 0 }]));
+    const publish = publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store });
+    // Passing code is a new object; a unit that failed again keeps the code it had, or none.
+    const hasPassed = () => targets.some(({ id }) => code[id] !== stored.code[id]);
+    const record = { runId: run.id, origin: "retry" as const, startedAt: new Date(clock.now()).toISOString(), planned: units.map(({ id }) => id) };
+
+    // Recorded once a unit passes, so a crash keeps it; until then there is nothing to keep.
+    async function saveRecord(): Promise<Result<null, ProjectsError>> {
+      if (!hasPassed()) {
+        return { data: null, error: null };
+      }
+
+      return projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), ...record });
+    }
+
+    await publish({ state: "writing" });
+    const fileError = await writeUnits({
+      run,
+      ref,
+      storyboard,
+      transcript,
+      rules,
+      preset,
+      brief,
+      units: targets,
+      content,
+      code,
+      notes,
+      previousNotes: reviewNotes(current.flags),
+      publish,
+      save: saveRecord,
+    });
+
+    if (fileError) {
+      return failed(publish, fileError);
+    }
+
+    // Only units that now pass change the video; otherwise it stays at its Version.
+    if (!hasPassed()) {
+      await publish({ state: "done", version: current.version, stopped: run.stopped });
+      return;
+    }
+
+    const { data: version, error: versionError } = await projects.saveVersion(projectId, format, {
+      ...inUnitOrder(content, units),
+      origin: "retry",
+      runId: run.id,
+      createdAt: new Date(clock.now()).toISOString(),
+    });
+
+    if (versionError) {
+      return failed(publish, fileErrorOf(versionError));
+    }
+
+    await publish({ state: "done", version, stopped: run.stopped });
+  }
+
+  type UnitsJob = {
+    run: Run;
+    ref: VideoRef;
+    storyboard: Storyboard;
+    transcript: Transcript;
+    rules: ReturnType<typeof storyboardRules>;
+    preset: StylePreset;
+    brief: PresetBrief;
+    units: Unit[];
+    /** Updated as units finish: their hashes, and flags for those that play as fallbacks or carry a review note. */
+    content: VideoContent;
+    code: Record<string, UnitCode>;
+    /** The review notes of units that play their code, updated as units finish. */
+    notes: Record<string, string>;
+    /** A Retry's units' review notes in the Version it started from: one whose Retry fails keeps its code and note. */
+    previousNotes?: Record<string, string>;
+    publish: Publish;
+    /** Saves the run's progress after each unit. */
+    save: () => Promise<Result<null, ProjectsError>>;
+  };
+
+  /**
+   * Writes the units' Scene code, 4 at a time, reviewing and storing each as it passes. A plan limit or failed login
+   * stops the run; once stopped, units still unfinished become flagged fallbacks without being asked of an agent.
+   */
+  async function writeUnits({ run, ref, storyboard, transcript, rules, preset, brief, units, content, code, notes, previousNotes = {}, publish, save }: UnitsJob) {
+    const { signal } = run.controller;
+    const { models } = run;
+    const baseline = await baselineOf(signal, storyboard, transcript, rules, preset);
+
+    /** The unit's code by its subagent; a unit not started before the run stopped is never asked of one. */
+    async function write(unit: Unit): Promise<UnitOutcome> {
+      // The cap is a Stop: units not started when it is reached are never asked of an agent.
+      if (run.usage.isCapped()) {
+        halt(run, { cause: "cost-cap" });
+      }
+
+      if (signal.aborted) {
+        return { code: null, attempts: 0, reason: "" };
+      }
+
+      return writeUnitCode({
+        connector: run.usage.connector("sceneCode"),
+        workDir,
+        signal,
+        model: models.sceneCode,
+        checker,
+        storyboard,
+        transcript,
+        rules,
+        preset,
+        brief,
+        unit,
+        baseline,
+        review: (passing) =>
+          reviewUnit({ connector: run.usage.connector("visualReview"), workDir, signal, model: models.visualReview, stills, storyboard, transcript, rules, preset, brief, unit, code: passing }),
+        onProgress: (status, attempts) => void publish({}, { id: unit.id, status, attempts }),
+      });
+    }
+
+    /** Stores passing code, or flags the unit. Flags are read after any wait, since other units change them meanwhile. */
+    async function keep(unit: Unit, outcome: UnitOutcome): Promise<FileFailure | undefined> {
+      const stop = stopAfter(outcome);
+
+      // Passing code whose review hit a failed login or plan limit is kept, and the run ends as Stop does.
+      if (stop) {
+        halt(run, stop);
+      }
+
+      if (!outcome.code) {
+        const previousNote = previousNotes[unit.id];
+
+        // A unit retried for its review note keeps the code it played, with its note, rather than becoming a fallback.
+        if (code[unit.id] && previousNote !== undefined) {
+          notes[unit.id] = previousNote;
+          content.flags = withFlag(content.flags, { unit: unit.id, kind: "review-note", reason: previousNote });
+
+          return undefined;
+        }
+
+        content.flags = withFlag(content.flags, { unit: unit.id, kind: "fallback", reason: stopReason(run, outcome.reason) });
+
+        return undefined;
+      }
+
+      const { data: hash, error } = await projects.writeUnit(ref.projectId, ref.format, outcome.code);
+
+      if (error) {
+        return fileErrorOf(error);
+      }
+
+      code[unit.id] = outcome.code;
+      content.units[unit.id] = hash;
+
+      if (outcome.note) {
+        notes[unit.id] = outcome.note;
+        content.flags = withFlag(content.flags, { unit: unit.id, kind: "review-note", reason: outcome.note });
+      } else {
+        delete notes[unit.id];
+        content.flags = content.flags.filter((flag) => flag.unit !== unit.id);
+      }
+
+      return undefined;
+    }
+
+    const results = await inParallel(units, PARALLEL_UNITS, async (unit): Promise<FileFailure | undefined> => {
+      const outcome = await write(unit);
+      const keepError = await keep(unit, outcome);
+
+      if (keepError) {
+        return keepError;
+      }
+
+      const saved = await save();
+      await publish({}, { id: unit.id, status: playingStatus(unit.id, code, notes), attempts: outcome.attempts });
+
+      if (saved.error) {
+        return fileErrorOf(saved.error);
+      }
+
+      return undefined;
+    });
+
+    return results.find((result) => result !== undefined);
+  }
+
+  /**
+   * Publishes the video's status with a preview of it so far: units with code play it, the rest play
+   * as the Storyboard animatic, or as fallback Scenes once they've failed. One at a time, in order.
+   */
+  function publisher({ ref, storyboard, transcript, rules, preset, code, notes, progress, store }: PublishContext): Publish {
+    let last = Promise.resolve();
+
+    return (change: Partial<GenerationStatus>, unit?: GenerationUnit) => {
+      if (unit) {
+        progress.set(unit.id, unit);
+      }
+
+      last = last.then(async () => {
+        const units = [...progress.values()];
+        const pending = Object.fromEntries(units.filter(({ status }) => isWork(status)).map(({ id, status }) => [id, status as UnitWork]));
+        const { data: video } = await projects.video(ref.projectId, ref.format);
+        const source = { storyboard, transcript, rules, preset, code: { ...code }, pending, notes: { ...notes }, voiceover: video?.voiceoverPath };
+        const { preview, previewError } = await previews.open(source).then(
+          ({ data, error }) => ({ preview: data, previewError: previewErrorOf(error) }),
+          (cause: unknown) => ({ preview: null, previewError: thrown(cause) }),
+        );
+
+        store.set({ ...store.get(), ...change, units, preview: preview ?? store.get().preview, previewError });
+      });
+
+      return last;
+    };
+  }
+
+  /** The page's findings without unit code, unless the run has stopped and no unit will be checked. */
+  async function baselineOf(signal: AbortSignal, ...page: Parameters<typeof pageFindings>): Promise<CheckFinding[]> {
+    if (signal.aborted) {
+      return [];
+    }
+
+    return pageFindings(...page);
+  }
+
+  /** The Checker's findings on the page with every unit as its fallback Scene; none when it can't run, so every page-wide finding counts. */
+  async function pageFindings(storyboard: Storyboard, transcript: Transcript, rules: ReturnType<typeof storyboardRules>, preset: StylePreset): Promise<CheckFinding[]> {
+    const { data: report } = await checker.check({ storyboard, transcript, rules, preset, code: {} });
+
+    return report?.findings ?? [];
+  }
+
+  /** Stops the video's run, if one is going, and resolves once it has saved what it keeps. */
+  async function stop(ref: VideoRef): Promise<Result<null, GenerateError>> {
+    const { error } = await projects.video(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const run = runs.get(storeOf(ref).key);
+
+    if (run) {
+      halt(run, { cause: "stopped" });
+      await run.done;
+    }
+
+    return { data: null, error: null };
+  }
+
+  /** Streams the generation of a video of an open Project: `idle` until Generate is pressed. */
+  async function watch(ref: VideoRef, signal?: AbortSignal): Promise<Result<AsyncGenerator<GenerationStatus>, GenerateError>> {
+    const { error } = await projects.video(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    return { data: storeOf(ref).store.watch(signal), error: null };
+  }
+
+  /**
+   * Opens a saved video at its newest Version, with the Project's current Transcript so word fixes made since show
+   * in it, and Captions as the Version shows them. Units written against an older frame major are checked again
+   * first, with no agent: those that fail become flagged fallbacks in a new Version, and none is regenerated. A
+   * Format without a video answers with no Version, and the Captions choice its generation will take.
+   */
+  async function open(ref: VideoRef): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { data: checked, error } = await exclusive(storeOf(ref).key, () => openChecked(ref));
+
+    if (error?.code === "NO_VIDEO") {
+      return openUngenerated(ref);
+    }
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { transcript, voiceoverPath, version, code, frameUpdate } = checked;
+    const captions = shownCaptions(version);
+    // The Storyboard is checked by the rules it was written to; Captions turned on since are only drawn.
+    const rules = storyboardRules(version.preset, { format: ref.format, captions: version.captions });
+    const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, notes: reviewNotes(version.flags), voiceover: voiceoverPath, captions };
+    const { data: preview, error: previewError } = await previews.open(source);
+
+    if (previewError) {
+      return { data: null, error: previewError };
+    }
+
+    return { data: { version: version.version, captions, preset: version.preset, preview, frameUpdate }, error: null };
+  }
+
+  /** A Format without a video: only the Captions choice its first generation will take. */
+  async function openUngenerated(ref: VideoRef): Promise<Result<OpenedVideo, OpenVideoError>> {
+    const { data: choice, error } = await projects.captionsChoice(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    return { data: { captions: choice }, error: null };
+  }
+
+  /**
+   * The newest Version, read and re-checked one open at a time per video, so two opens can't both re-check it and
+   * each save a Version. A finished run's status is reset, so the window following it gets this Version's
+   * preview instead of the run's last one; a run still going keeps streaming.
+   */
+  async function openChecked(ref: VideoRef): Promise<Result<SavedVideo & Rechecked, OpenVideoError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: checked, error: checkError } = await recheck(ref, saved.transcript, saved.stored);
+
+    if (checkError) {
+      return { data: null, error: checkError };
+    }
+
+    const { key, store } = storeOf(ref);
+
+    if (!runs.has(key)) {
+      store.set(IDLE);
+    }
+
+    return { data: { ...saved, ...checked }, error: null };
+  }
+
+  /** Runs one open or Retry start of a video at a time, each after the one before. */
+  function exclusive<T>(key: string, step: () => Promise<T>): Promise<T> {
+    const done = (steps.get(key) ?? Promise.resolve()).then(step);
+    const settled = done.catch(() => undefined);
+    steps.set(key, settled);
+    void settled.then(() => {
+      if (steps.get(key) === settled) {
+        steps.delete(key);
+      }
+    });
+
+    return done;
+  }
+
+  /** The video's newest Version with what it plays from; one with no Version yet has no video. */
+  async function savedVideo({ projectId, format }: VideoRef): Promise<Result<SavedVideo, OpenVideoError>> {
+    const { data: video, error } = await projects.video(projectId, format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const { data: stored, error: storedError } = await projects.storedVideo(projectId, format);
+
+    if (storedError) {
+      return { data: null, error: versionError(storedError) };
+    }
+
+    if (!stored) {
+      return { data: null, error: { code: "NO_VIDEO", format } };
+    }
+
+    if (!video.transcript) {
+      return { data: null, error: { code: "TRANSCRIPT_NOT_READY", projectId } };
+    }
+
+    return { data: { transcript: video.transcript, voiceoverPath: video.voiceoverPath, stored }, error: null };
+  }
+
+  /**
+   * Checks again units written against another frame major, unless they already passed this one. When the Checker
+   * can't run, the video opens as saved and is checked on a later open.
+   */
+  async function recheck(ref: VideoRef, transcript: Transcript, { version, code, frameChecked }: StoredVideo): Promise<Result<Rechecked, OpenVideoError>> {
+    const { projectId, format } = ref;
+    const isChecked = frameChecked?.version === version.version && !needsRecheck(frameChecked.frameContractVersion);
+
+    if (!needsRecheck(version.frameContractVersion) || isChecked || runs.has(storeOf(ref).key)) {
+      return { data: { version, code }, error: null };
+    }
+
+    const rules = storyboardRules(version.preset, { format, captions: version.captions });
+    const { data: failing, error } = await failingUnits(checker, { storyboard: version.storyboard, transcript, rules, preset: version.preset, code });
+
+    if (error) {
+      return { data: { version, code }, error: null };
+    }
+
+    if (failing.size === 0) {
+      const { error: rememberError } = await projects.rememberFrameCheck(projectId, format, { version: version.version, frameContractVersion: FRAME_CONTRACT_VERSION });
+
+      if (rememberError) {
+        return { data: null, error: versionError(rememberError) };
+      }
+
+      return { data: { version, code }, error: null };
+    }
+
+    const kept = Object.fromEntries(Object.entries(version.units).filter(([unit]) => !failing.has(unit)));
+    // A failing unit's review note goes with its code: it plays as a fallback now.
+    const passingFlags = version.flags.filter((flag) => !failing.has(flag.unit));
+    const flags = [...passingFlags, ...[...failing].map(([unit, reason]): Flag => ({ unit, kind: "fallback", reason }))];
+    const content: VideoContent = { ...contentOf(version), units: kept, flags, frameContractVersion: FRAME_CONTRACT_VERSION };
+    const createdAt = new Date(clock.now()).toISOString();
+    const { data: number, error: saveError } = await projects.saveVersion(projectId, format, { ...content, origin: "frame-update", createdAt });
+
+    if (saveError) {
+      return { data: null, error: projectError(saveError) };
+    }
+
+    return {
+      data: {
+        version: { ...content, version: number, origin: "frame-update", createdAt },
+        code: Object.fromEntries(Object.entries(code).filter(([unit]) => !failing.has(unit))),
+        frameUpdate: { previous: version.frameContractVersion, frameContractVersion: FRAME_CONTRACT_VERSION, units: [...failing.keys()] },
+      },
+      error: null,
+    };
+  }
+
+  return { estimate, start, regenerate, stop, retry, watch, open, setCaptions, changeStyle, isRunning, whenEnded };
+}
+
+export type RegenerateError = { code: "BUSY"; projectId: string } | { code: "REGENERATE_UNCONFIRMED"; costUsd?: CostRange };
+
+/** A run that replaces a whole existing video: kept only once complete, never recovered after a crash. */
+function replacesVersion(origin: VersionOrigin) {
+  return origin === "restyle" || origin === "regeneration";
+}
+
+/** A change from the Style tab: the snapshot to draw the video in, Captions on or off, and whether a restyle is confirmed. */
+export type StyleRequest = { preset?: StylePreset; captions?: boolean; confirmed?: boolean };
+
+export type StyleChangeError = { code: "BUSY"; projectId: string } | { code: "RESTYLE_UNCONFIRMED"; replans: boolean; costUsd?: CostRange };
+
+/**
+ * Whether a generated video shows Captions: as its Version was saved, so a Version is all it takes to play one as
+ * it was. The video's Captions choice only decides a first generation.
+ */
+export function shownCaptions(version: Pick<Version, "captions" | "showsCaptions">): boolean {
+  return version.showsCaptions ?? version.captions;
+}
+
+/** A restyle keeps the Storyboard while the new Preset still allows it. */
+function keptStoryboard(storyboard: Storyboard, isAllowed: boolean): Storyboard | undefined {
+  if (!isAllowed) {
+    return undefined;
+  }
+
+  return storyboard;
+}
+
+/** A restyle that plans the Storyboard again starts planning; one that keeps it starts writing units. */
+function firstRestyleState(kept: Storyboard | undefined): GenerationStatus["state"] {
+  if (!kept) {
+    return "planning";
+  }
+
+  return "writing";
+}
+
+type Publish = (change: Partial<GenerationStatus>, unit?: GenerationUnit) => Promise<void>;
+
+type SavedVideo = { transcript: Transcript; voiceoverPath: string; stored: StoredVideo };
+
+type Rechecked = { version: Version; code: Record<string, UnitCode>; frameUpdate?: FrameUpdate };
+
+export type OpenVideoError =
+  | Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" | "TRANSCRIPT_NOT_READY" }>
+  | { code: "NO_VIDEO"; format: Format }
+  | { code: "INVALID_VERSION"; path: string; message: string }
+  | PreviewError;
+
+export type RetryError = { code: "GENERATING"; projectId: string } | { code: "NOT_FLAGGED"; units: string[] };
+
+type PublishContext = {
+  ref: VideoRef;
+  storyboard: Storyboard;
+  transcript: Transcript;
+  rules: ReturnType<typeof storyboardRules>;
+  preset: StylePreset;
+  code: Record<string, UnitCode>;
+  notes: Record<string, string>;
+  progress: Map<string, GenerationUnit>;
+  store: StatusStore;
+};
+
+type FileFailure = { path: string; message: string };
+
+/** The connector errors that end the whole run as Stop does, rather than fail one unit. */
+function stopOf(error: ConnectorError): GenerationStop | undefined {
+  if (error.code === "PLAN_LIMIT") {
+    return { cause: "plan-limit", resetsAt: error.resetsAt };
+  }
+
+  if (error.code === "COST_CAP") {
+    return { cause: "cost-cap" };
+  }
+
+  if (error.code === "AUTHENTICATION_FAILED") {
+    return { cause: "authentication" };
+  }
+
+  return undefined;
+}
+
+/** A unit whose agent hit an error that ends the whole run says why; any other failure stops only the unit. */
+function stopAfter({ error }: UnitOutcome): GenerationStop | undefined {
+  if (!error) {
+    return undefined;
+  }
+
+  return stopOf(error);
+}
+
+/** A unit the run didn't finish is flagged with why the run stopped, rather than its own last failure. */
+function stopReason(run: Run, reason: string): string {
+  if (!run.stopped) {
+    return reason;
+  }
+
+  return STOP_REASONS[run.stopped.cause];
+}
+
+/**
+ * How a run that never got a valid Storyboard ends: a stop leaves the Project as it was, ready to Generate again;
+ * anything else fails with its error.
+ */
+function endedBeforeStoryboard(run: Run, error: StoryboardError): GenerationStatus {
+  const stopped = run.stopped ?? connectorStop(error);
+
+  if (stopped) {
+    return { state: "idle", units: [], stopped };
+  }
+
+  return { state: "failed", units: [], error };
+}
+
+function connectorStop(error: StoryboardError): GenerationStop | undefined {
+  if (error.code !== "AGENT_FAILED") {
+    return undefined;
+  }
+
+  return stopOf(error.error);
+}
+
+/** The unit's flag in place of any it had. */
+function withFlag(flags: Flag[], flag: Flag): Flag[] {
+  return [...flags.filter(({ unit }) => unit !== flag.unit), flag];
+}
+
+/** How a unit starts a Retry: waiting to be rewritten, or as it plays. */
+function retryStatus(id: string, wanted: string[], code: Record<string, UnitCode>, notes: Record<string, string>): GenerationUnit["status"] {
+  if (wanted.includes(id)) {
+    return "queued";
+  }
+
+  return playingStatus(id, code, notes);
+}
+
+/** A unit plays its code, flagged when it has a review note, or its fallback Scene. */
+function playingStatus(id: string, code: Record<string, UnitCode>, notes: Record<string, string>): GenerationUnit["status"] {
+  if (code[id] && notes[id]) {
+    return "flagged";
+  }
+
+  if (code[id]) {
+    return "ready";
+  }
+
+  return "fallback";
+}
+
+/** The review notes among a Version's flags, by unit; a fallback flag is not one. */
+function reviewNotes(flags: Flag[]): Record<string, string> {
+  return Object.fromEntries(flags.filter(({ kind }) => kind === "review-note").map(({ unit, reason }) => [unit, reason]));
+}
+
+/** What a Version plays and how it was made, without what makes it a Version. */
+function contentOf({ storyboard, preset, captions, showsCaptions, units, flags, models, frameContractVersion }: Version): VideoContent {
+  return { storyboard, preset, captions, showsCaptions, units, flags, models, frameContractVersion };
+}
+
+function versionError(error: ProjectsError | VersionError): OpenVideoError {
+  if (error.code === "INVALID_DOCUMENT") {
+    return { code: "INVALID_VERSION", path: error.path, message: error.message };
+  }
+
+  return projectError(error);
+}
+
+function failed(publish: Publish, { path, message }: FileFailure) {
+  return publish({ state: "failed", error: { code: "FILE_FAILED", path, message } });
+}
+
+function isWork(status: GenerationUnit["status"]): boolean {
+  return status === "queued" || status === "writing" || status === "checking";
+}
+
+/** Units finish in any order; the files list them in the Storyboard's, so the same video always saves the same. */
+function inUnitOrder(content: VideoContent, units: Unit[]): VideoContent {
+  const order = (id: string) => units.findIndex((unit) => unit.id === id);
+  const hashes = units.map(({ id }) => [id, content.units[id]] as const).filter((entry): entry is readonly [string, string] => Boolean(entry[1]));
+
+  return { ...content, units: Object.fromEntries(hashes), flags: [...content.flags].sort((a, b) => order(a.unit) - order(b.unit)) };
+}
+
+function fileErrorOf(error: ProjectsError): FileFailure {
+  if (error.code === "FILE_FAILED") {
+    return { path: error.path, message: error.message };
+  }
+
+  return { path: "", message: error.code };
+}
+
+function projectError(error: ProjectsError | VideoDocumentError | VersionError): Extract<GenerateError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
+  if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
+    return error;
+  }
+
+  return { code: "FILE_FAILED", path: "", message: error.code };
+}
+
+function thrown(cause: unknown): GenerationPreviewError {
+  return { code: "PREVIEW_FAILED", message: messageOf(cause) };
+}
+
+function messageOf(cause: unknown) {
+  if (cause instanceof Error) {
+    return cause.message;
+  }
+
+  return String(cause);
+}
+
+function previewErrorOf(error: PreviewError | null): GenerationPreviewError | undefined {
+  if (!error) {
+    return undefined;
+  }
+
+  return { code: error.code, message: previewErrorMessage(error) };
+}
+
+/** Runs `work` on every item, at most `limit` at once, and resolves with the results in order. */
+export async function inParallel<T, R>(items: T[], limit: number, work: (item: T) => Promise<R>): Promise<R[]> {
+  const results: R[] = [];
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await work(items[index] as T);
+    }
+  };
+
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+
+  return results;
+}

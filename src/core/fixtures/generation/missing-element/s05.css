@@ -1,0 +1,2 @@
+/* Every try leaves out the call to action, which the anchor contract needs. */
+.outro { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }

@@ -120,6 +120,7 @@ const PINNERS = {
   "whisper-cli": (context) => pinReleaseAssets("whisper-cli", context),
   claude: pinClaude,
   "whisper-model": pinWhisperModel,
+  "whisper-vad-model": pinVadModel,
 } satisfies { [Name in DepName]: (context: PinContext) => Promise<Result<Manifest[Name], PinError>> };
 
 /** `version` is a Chrome for Testing version; pick the one the pinned Puppeteer expects. */
@@ -331,6 +332,25 @@ async function pinWhisperModel({ version, sources, workDir, log }: PinContext): 
   }
 
   return { data: { version, url, sha256, size: stats.size }, error: null };
+}
+
+const VAD_MODEL = { repo: "ggml-org/whisper-vad", file: "ggml-silero-v6.2.0.bin" };
+
+/** `version` is a full commit of the Hugging Face repo, like the Whisper model's. */
+async function pinVadModel({ version, sources, workDir, log }: PinContext): Promise<Result<Manifest["whisper-vad-model"], PinError>> {
+  if (!/^[0-9a-f]{40}$/.test(version)) {
+    return invalidVersion("whisper-vad-model", version, `a full Hugging Face commit of ${VAD_MODEL.repo}`);
+  }
+
+  const url = `${sources.huggingFace}/${VAD_MODEL.repo}/resolve/${version}/${VAD_MODEL.file}`;
+  log(`Hashing ${url}`);
+  const { data: sha256, error } = await download(url, join(workDir, VAD_MODEL.file));
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  return { data: { version, url, sha256 }, error: null };
 }
 
 function invalidVersion(name: DepName, version: string, expected: string) {

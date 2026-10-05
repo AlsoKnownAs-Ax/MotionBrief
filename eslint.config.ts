@@ -24,12 +24,30 @@ const ELECTRON_AND_UI = [
 const HEADLESS = ["core", "module", "contract", "shared"];
 
 export default defineConfig([
-  globalIgnores(["out/", "node_modules/", "vendor/", "prototypes/", ".agents/", ".claude/", ".codex/", ".opencode/", ".impeccable/"]),
+  globalIgnores([
+    "out/",
+    "dist/",
+    "node_modules/",
+    "vendor/",
+    "prototypes/",
+    ".agents/",
+    ".claude/",
+    ".codex/",
+    ".opencode/",
+    ".impeccable/",
+    // Scene code fixtures are agent output, checked by the Checker rather than ESLint.
+    "src/core/fixtures/",
+  ]),
   js.configs.recommended,
   tseslint.configs.recommended,
   {
-    files: ["**/*.{ts,tsx}"],
+    files: ["**/*.{ts,tsx}", "scripts/**/*.mjs"],
     languageOptions: { globals: { ...globals.node } },
+  },
+  {
+    // Scripts the frame and the Checker load into the page.
+    files: ["src/modules/*/runtime/*.js"],
+    languageOptions: { sourceType: "script", globals: { ...globals.browser } },
   },
   {
     files: ["src/renderer/**/*.{ts,tsx}"],

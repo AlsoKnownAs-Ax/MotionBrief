@@ -1,0 +1,2 @@
+.term { display: flex; flex-direction: column; justify-content: center; gap: 36px; }
+.definition { max-width: 24ch; color: var(--muted); }

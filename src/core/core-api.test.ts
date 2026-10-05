@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { MessageChannel } from "node:worker_threads";
 import { createORPCClient } from "@orpc/client";
 import { RPCLink } from "@orpc/client/message-port";
@@ -8,8 +10,11 @@ import type { Clock } from "../modules/system";
 import { createCore, type CoreOptions } from "./composition-root";
 import { serveCore } from "./serve";
 
-function connect(options: CoreOptions) {
-  const { router } = createCore(options);
+/** These tests never touch the transcription model, so nothing is written here. */
+const APP_DATA_DIR = join(tmpdir(), "motionbrief-core-api-test");
+
+function connect(options: Omit<CoreOptions, "appDataDir">) {
+  const { router } = createCore({ ...options, appDataDir: APP_DATA_DIR });
 
   return createRouterClient(router);
 }
@@ -37,9 +42,9 @@ describe("core API", () => {
   });
 
   it("serves calls and streams over a MessagePort", async () => {
-    const { router } = createCore({ appVersion: "1.2.3", adapters: { clock: manualClock(10_000) } });
+    const served = createCore({ appVersion: "1.2.3", appDataDir: APP_DATA_DIR, adapters: { clock: manualClock(10_000) } });
     const { port1, port2 } = new MessageChannel();
-    serveCore(router, port1);
+    serveCore(served, port1);
     const core: CoreClient = createORPCClient(new RPCLink({ port: port2 }));
     port2.start();
 

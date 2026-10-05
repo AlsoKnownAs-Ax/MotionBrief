@@ -31,9 +31,14 @@ jobs:
       # run proves the pins still match upstream on both platforms. Jobs that need no binaries
       # can set MOTIONBRIEF_SKIP_DEPS=1.
       - run: pnpm install --frozen-lockfile
+        env:
+          # The producer's Puppeteer never fetches a Chrome; exports run the pinned chrome-headless-shell.
+          PUPPETEER_SKIP_DOWNLOAD: "1"
 
       - run: pnpm lint
 
       - run: pnpm typecheck
 
+      # Tier 1 (seams 1 and 2 on hand-written inputs) and tier 2 (the replay corpus, replay-corpus.test.ts), at zero
+      # cost, with the binaries the install above fetched.
       - run: pnpm test

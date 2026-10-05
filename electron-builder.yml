@@ -1,0 +1,75 @@
+# Packaging (spec #23, Packaging and release). Each platform is built on its own OS from the vendor/
+# that postinstall filled from deps.json; `pnpm package` builds and checks first (scripts/release/).
+appId: app.motionbrief.desktop
+productName: MotionBrief
+copyright: Copyright © 2026 MotionBrief contributors
+
+directories:
+  output: dist
+  buildResources: build
+
+# Refuses to pack a vendor/ that doesn't match deps.json for the platform being built (ADR 0002).
+beforePack: ./scripts/release/before-pack.ts
+# Copies Electron's Chromium licenses into out/licenses, before macOS packaging deletes them.
+afterExtract: ./scripts/release/after-extract.ts
+
+files:
+  - out/**
+  - "!out/licenses/**"
+  - "!out/.bundled-packages/**"
+  - vendor/**
+  # Pin files and postinstall's staging folders.
+  - "!vendor/*.sha256"
+  - "!vendor/.*/**"
+  - package.json
+
+# Every executable MotionBrief spawns must sit on disk, outside the archive. Their whole folders are
+# unpacked, since whisper-cli loads its ggml DLLs and chrome-headless-shell its resources from next to it.
+asarUnpack:
+  - vendor/**
+  - node_modules/@anthropic-ai/claude-agent-sdk-*/**
+
+extraResources:
+  - from: out/licenses
+    to: licenses
+
+# No native Node modules to rebuild.
+npmRebuild: false
+
+# The updater's feed. A vX.Y.Z-beta.N version gets beta.yml and is released as a GitHub pre-release; the beta
+# channel reads it, and latest.yml from stable releases (src/main/updater.ts).
+publish:
+  provider: github
+  owner: AlsoKnownAs-Ax
+  repo: MotionBrief
+  releaseType: draft
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # The release gate signs every exe and DLL, except the Claude Code binary, which keeps Anthropic's signature.
+  signExts: [".dll", "!claude.exe"]
+
+# One-click and per-user: installs into %LOCALAPPDATA% without admin rights.
+nsis:
+  oneClick: true
+  perMachine: false
+  differentialPackage: true
+  artifactName: ${productName}-${version}-win-x64-setup.${ext}
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64]
+    # Squirrel.Mac updates from the zip.
+    - target: zip
+      arch: [arm64]
+  category: public.app-category.video
+  artifactName: ${productName}-${version}-mac-arm64.${ext}
+  # The Claude Code binary keeps Anthropic's signature.
+  signIgnore:
+    - /claude-agent-sdk-darwin-arm64/claude$
+
+dmg:
+  artifactName: ${productName}-${version}-mac-arm64.${ext}

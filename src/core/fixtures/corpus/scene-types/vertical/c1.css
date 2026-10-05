@@ -1,0 +1,8 @@
+/* One Canvas, two frame-sized regions stacked: the camera moves down from the diagram to the flow. */
+.world { position: absolute; left: 0; top: 0; width: 1080px; height: 3840px; }
+.region { position: absolute; left: 0; width: 1080px; height: 1920px; }
+.column { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 120px; }
+.node { display: flex; align-items: center; gap: 24px; min-width: 560px; padding: 28px 40px; }
+.node-icon { font-size: 72px; color: var(--accent2); }
+.node-key .node-icon { color: var(--accent); }
+.packet { position: absolute; left: 0; top: 0; padding: 8px 18px; color: var(--ink); background: var(--surface2); }

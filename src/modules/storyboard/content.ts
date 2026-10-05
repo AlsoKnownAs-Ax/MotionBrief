@@ -6,6 +6,8 @@ export type SceneElement = {
   at: number;
   /** Path of the element within the Scene, such as `content.nodes[1]`. */
   field: string;
+  /** The element's own fields, such as its label or text. */
+  value: Record<string, unknown>;
 };
 
 /** Every element of a Scene, in content order. */
@@ -14,7 +16,7 @@ export function elementsOf(scene: Scene): SceneElement[] {
 
   visit(scene.content, "content", (value, field) => {
     if (typeof value.id === "string" && typeof value.at === "number") {
-      elements.push({ id: value.id, at: value.at, field });
+      elements.push({ id: value.id, at: value.at, field, value });
     }
   });
 

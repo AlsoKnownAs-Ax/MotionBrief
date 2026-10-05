@@ -1,0 +1,57 @@
+name: Contact sheet
+
+# Visual regression without pixel gates (spec #23): a PR that touches the frame or the Style Presets gets a contact
+# sheet attached to its run, each Scene Type sample in the 4 bundled Presets and both Formats, for a human to eyeball.
+# It fails only when a sample can't be drawn.
+
+on:
+  pull_request:
+    paths:
+      - src/modules/frame/**
+      - src/modules/style/**
+      - src/modules/assembler/**
+      - src/core/fixtures/corpus/**
+      - src/core/contact-sheet.run.ts
+      - .github/workflows/contact-sheet.yml
+
+concurrency:
+  group: contact-sheet-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  sheet:
+    name: Draw the contact sheet
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      - run: corepack enable
+
+      # Postinstall fetches the pinned chrome-headless-shell the stills are drawn in.
+      - run: pnpm install --frozen-lockfile
+        env:
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+
+      - run: pnpm contact-sheet
+
+      - id: upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: contact-sheet
+          path: out/contact-sheet/
+          compression-level: 0
+
+      - name: Link the sheet from the run summary
+        shell: bash
+        env:
+          URL: ${{ steps.upload.outputs.artifact-url }}
+        run: |
+          echo "### Contact sheet" >> "$GITHUB_STEP_SUMMARY"
+          echo "Each Scene Type sample × 4 Presets × 2 Formats. Download it, unzip and open \`index.html\`: [contact-sheet]($URL)" >> "$GITHUB_STEP_SUMMARY"

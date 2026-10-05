@@ -2,12 +2,26 @@
  * Main process: windows, menus, OS integration, the single-instance lock and the core
  * process lifecycle. Product logic lives in the core, never here.
  */
-import { app, BrowserWindow, ipcMain, Menu } from "electron";
+import { isAbsolute, join } from "node:path";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { z } from "zod";
 import coreEntry from "../core/index?modulePath";
-import { IPC, type ContextMenuItem, type MenuPosition } from "../shared/ipc";
+import {
+  EXPORTS_CHANNEL,
+  IPC,
+  type ChooseFileOptions,
+  type ChooseSavePathOptions,
+  type ContextMenuItem,
+  type ExportsMessage,
+  type MenuPosition,
+} from "../shared/ipc";
+import { handleConnectionStoreMessage } from "./connection-store";
 import { startCoreProcess, type CoreProcess } from "./core-process";
 import { installAppMenu } from "./menu";
+import { coreExportsHold } from "./exports-hold";
+import { handleTrashMessage } from "./trash";
+import { startUpdater } from "./updater";
+import type { Updates } from "./updates";
 import { createWindow } from "./window";
 
 // IPC payloads come from the renderer, so they are checked before use.
@@ -15,6 +29,14 @@ const MenuPositionSchema = z.object({ x: z.number(), y: z.number() }) satisfies 
 const ContextMenuItemsSchema = z.array(
   z.object({ id: z.string(), label: z.string(), enabled: z.boolean().optional() }),
 ) satisfies z.ZodType<ContextMenuItem[]>;
+const ChooseFileOptionsSchema = z.object({
+  title: z.string(),
+  filters: z.array(z.object({ name: z.string(), extensions: z.array(z.string()) })),
+}) satisfies z.ZodType<ChooseFileOptions>;
+const ChooseSavePathOptionsSchema = ChooseFileOptionsSchema.extend({ defaultPath: z.string() }) satisfies z.ZodType<ChooseSavePathOptions>;
+const UpdateChannelSchema = z.enum(["stable", "beta"]);
+// Comes from the core process.
+const ExportsMessageSchema = z.object({ channel: z.literal(EXPORTS_CHANNEL), running: z.number() }) satisfies z.ZodType<ExportsMessage>;
 
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -28,17 +50,53 @@ if (!app.requestSingleInstanceLock()) {
   void app.whenReady().then(start);
 }
 
-function start() {
+async function start() {
+  // The core starts below; nothing is held before then.
+  const exportsHold = coreExportsHold((message) => core.send(message));
+  const updater = await startUpdater({ exports: exportsHold, onChange: (state) => broadcast(IPC.updateChanged, state) });
   const core = startCoreProcess({
     entry: coreEntry,
     appVersion: app.getVersion(),
-    onExit: () => broadcast(IPC.coreExited),
+    appDataDir: app.getPath("userData"),
+    projectsDir: join(app.getPath("documents"), "MotionBrief"),
+    cacheDir: cacheDir(),
+    sampleDir: devOnly(join(app.getAppPath(), "src", "core", "fixtures")),
+    onExit: () => {
+      // Its exports died with it.
+      updater.setRunningExports(0);
+      broadcast(IPC.coreExited);
+    },
     onRestart: () => broadcast(IPC.coreRestarted),
-  });
+    onRequest: async (message) => {
+      if (exportsHold.handle(message)) {
+        return undefined;
+      }
 
-  app.on("before-quit", () => core.stop());
+      const { success, data: exports } = ExportsMessageSchema.safeParse(message);
+
+      if (success) {
+        updater.setRunningExports(exports.running);
+        return undefined;
+      }
+
+      return (await handleConnectionStoreMessage(message)) ?? handleTrashMessage(message);
+    },
+  });
+  let hasStoppedCore = false;
+
+  // The core releases its Project locks before the app quits, so the next launch doesn't find them stale.
+  app.on("before-quit", (event) => {
+    if (hasStoppedCore) {
+      return;
+    }
+
+    event.preventDefault();
+    hasStoppedCore = true;
+    void core.stop().then(() => app.quit());
+  });
   app.on("activate", focusOrCreateWindow);
   handleIpc(core);
+  handleUpdateIpc(updater);
   installAppMenu({ newWindow: createWindow, crashCore: devOnly(() => core.crash()) });
   createWindow();
 }
@@ -69,6 +127,82 @@ function handleIpc(core: CoreProcess) {
 
     return popupContextMenu(window, items);
   });
+
+  ipcMain.handle(IPC.chooseFile, async (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: options } = ChooseFileOptionsSchema.safeParse(payload);
+
+    if (!window || !success) {
+      return null;
+    }
+
+    const { canceled, filePaths } = await dialog.showOpenDialog(window, { ...options, properties: ["openFile"] });
+
+    if (canceled) {
+      return null;
+    }
+
+    return filePaths[0] ?? null;
+  });
+
+  ipcMain.handle(IPC.chooseFolder, async (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: title } = z.string().safeParse(payload);
+
+    if (!window || !success) {
+      return null;
+    }
+
+    const { canceled, filePaths } = await dialog.showOpenDialog(window, { title, properties: ["openDirectory"] });
+
+    if (canceled) {
+      return null;
+    }
+
+    return filePaths[0] ?? null;
+  });
+
+  ipcMain.handle(IPC.chooseSavePath, async (event, payload: unknown) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    const { success, data: options } = ChooseSavePathOptionsSchema.safeParse(payload);
+
+    if (!window || !success) {
+      return null;
+    }
+
+    const defaultPath = inVideos(options.defaultPath);
+    const { canceled, filePath } = await dialog.showSaveDialog(window, { ...options, defaultPath, properties: ["showOverwriteConfirmation", "createDirectory"] });
+
+    if (canceled || !filePath) {
+      return null;
+    }
+
+    return filePath;
+  });
+
+  ipcMain.on(IPC.showInFolder, (_event, payload: unknown) => {
+    const { success, data: path } = z.string().safeParse(payload);
+
+    if (success && isAbsolute(path)) {
+      shell.showItemInFolder(path);
+    }
+  });
+}
+
+function handleUpdateIpc(updater: Updates) {
+  ipcMain.handle(IPC.getUpdateState, () => updater.state());
+
+  ipcMain.handle(IPC.setUpdateChannel, (_event, payload: unknown) => {
+    const { success, data: channel } = UpdateChannelSchema.safeParse(payload);
+
+    if (!success) {
+      return updater.state();
+    }
+
+    return updater.setChannel(channel);
+  });
+
+  ipcMain.handle(IPC.restartToUpdate, () => updater.restart());
 }
 
 /** Resolves to the chosen item's id, or null if the menu closed without a choice. */
@@ -83,8 +217,8 @@ function popupContextMenu(window: BrowserWindow, items: ContextMenuItem[]) {
   });
 }
 
-function broadcast(channel: string) {
-  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel));
+function broadcast(channel: string, ...args: unknown[]) {
+  BrowserWindow.getAllWindows().forEach((window) => window.webContents.send(channel, ...args));
 }
 
 function focusOrCreateWindow() {
@@ -100,6 +234,24 @@ function focusOrCreateWindow() {
   }
 
   window.focus();
+}
+
+/** A suggested save path as given when it is a full path; a bare file name goes in the Videos folder. */
+function inVideos(path: string) {
+  if (isAbsolute(path)) {
+    return path;
+  }
+
+  return join(app.getPath("videos"), path);
+}
+
+/** The OS's place for regenerable files: never roamed or backed up, unlike app data. */
+function cacheDir() {
+  if (process.platform === "darwin") {
+    return join(app.getPath("home"), "Library", "Caches", "MotionBrief");
+  }
+
+  return join(process.env.LOCALAPPDATA ?? app.getPath("temp"), "MotionBrief", "Cache");
 }
 
 function devOnly<T>(value: T) {

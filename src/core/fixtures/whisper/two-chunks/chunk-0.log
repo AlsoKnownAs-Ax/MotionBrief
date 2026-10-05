@@ -1,0 +1,122 @@
+ggml_vulkan: Found 0 Vulkan devices:
+load_backend: loaded Vulkan backend from <repo>\vendor\whisper-cli\ggml-vulkan.dll
+load_backend: loaded CPU backend from <repo>\vendor\whisper-cli\ggml-cpu-cascadelake.dll
+whisper_init_from_file_with_params_no_state: loading model from '<app-data>\app\models\whisper-394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2.bin'
+whisper_init_with_params_no_state: use gpu    = 0
+whisper_init_with_params_no_state: flash attn = 0
+whisper_init_with_params_no_state: gpu_device = 0
+whisper_init_with_params_no_state: dtw        = 1
+whisper_init_with_params_no_state: devices    = 1
+whisper_init_with_params_no_state: backends   = 2
+whisper_model_load: loading model
+whisper_model_load: n_vocab       = 51866
+whisper_model_load: n_audio_ctx   = 1500
+whisper_model_load: n_audio_state = 1280
+whisper_model_load: n_audio_head  = 20
+whisper_model_load: n_audio_layer = 32
+whisper_model_load: n_text_ctx    = 448
+whisper_model_load: n_text_state  = 1280
+whisper_model_load: n_text_head   = 20
+whisper_model_load: n_text_layer  = 4
+whisper_model_load: n_mels        = 128
+whisper_model_load: ftype         = 8
+whisper_model_load: qntvr         = 2
+whisper_model_load: type          = 5 (large v3)
+whisper_model_load: adding 1609 extra tokens
+whisper_model_load: n_langs       = 100
+whisper_model_load:          CPU total size =   573.40 MB
+whisper_model_load: model size    =  573.40 MB
+whisper_backend_init_gpu: no GPU found
+whisper_init_state: kv self size  =   10.49 MB
+whisper_init_state: kv cross size =   31.46 MB
+whisper_init_state: kv pad  size  =    7.86 MB
+whisper_init_state: alignment heads masks size = 480 B
+whisper_init_state: compute buffer (conv)   =   36.15 MB
+whisper_init_state: compute buffer (encode) =  212.31 MB
+whisper_init_state: compute buffer (cross)  =    9.27 MB
+whisper_init_state: compute buffer (decode) =  136.12 MB
+read_audio_data: reading audio data from '<app-data>\cache\.staging\8147d449-28ae-4b83-995e-15577b4b0d76' ...
+read_audio_data: trying to decode with miniaudio
+
+system_info: n_threads = 8 / 16 | WHISPER : VITISAI = 0 | COREML = 0 | OPENVINO = 0 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | AVX512 = 1 | AVX512_VNNI = 1 | OPENMP = 1 | REPACK = 1 | 
+
+main: processing '<app-data>\cache\.staging\8147d449-28ae-4b83-995e-15577b4b0d76' (537255 samples, 33.6 sec), 8 threads, 1 processors, 5 beams + best of 5, lang = auto, task = transcribe, timestamps = 1 ...
+
+whisper_full: VAD is enabled, processing speech segments only
+whisper_vad: VAD is enabled, processing speech segments only
+whisper_vad_init_from_file_with_params: loading VAD model from '<repo>\vendor\whisper-vad-model\model.bin'
+whisper_vad_init_with_params: model type: silero-16k
+whisper_vad_init_with_params: model version: 6.2.0
+whisper_vad_init_with_params: n_encoder_layers = 4
+whisper_vad_init_with_params: encoder_in_channels[0] = 129
+whisper_vad_init_with_params: encoder_in_channels[1] = 128
+whisper_vad_init_with_params: encoder_in_channels[2] = 64
+whisper_vad_init_with_params: encoder_in_channels[3] = 64
+whisper_vad_init_with_params: encoder_out_channels[0] = 128
+whisper_vad_init_with_params: encoder_out_channels[1] = 64
+whisper_vad_init_with_params: encoder_out_channels[2] = 64
+whisper_vad_init_with_params: encoder_out_channels[3] = 128
+whisper_vad_init_with_params: lstm_input_size = 128
+whisper_vad_init_with_params: lstm_hidden_size = 128
+whisper_vad_init_with_params: final_conv_in = 128
+whisper_vad_init_with_params: final_conv_out = 1
+whisper_vad_init_with_params:          CPU total size =     0.88 MB
+whisper_vad_init_with_params: model size    =    0.88 MB
+whisper_backend_init_gpu: no GPU found
+whisper_vad_init_context: compute buffer (VAD)   =    1.60 MB
+whisper_vad_segments_from_samples: detecting speech timestamps in 537255 samples
+whisper_vad_detect_speech_no_reset: detecting speech in 537255 samples
+whisper_vad_detect_speech_no_reset: n_chunks: 1050
+whisper_vad_detect_speech_no_reset: props size: 1050
+whisper_vad_detect_speech_no_reset: chunk_len: 167 < n_window: 512
+whisper_vad_detect_speech_no_reset: vad time = 54.84 ms processing 537255 samples
+whisper_vad_segments_from_probs: detecting speech timestamps using 1050 probabilities
+whisper_vad_segments_from_probs: Merged 0 adjacent segments, now have 10 segments
+whisper_vad_segments_from_probs: Final speech segments after filtering: 10
+whisper_vad_segments_from_probs: VAD segment 0: start = 0.10, end = 2.46 (duration: 2.36)
+whisper_vad_segments_from_probs: VAD segment 1: start = 3.65, end = 6.40 (duration: 2.75)
+whisper_vad_segments_from_probs: VAD segment 2: start = 7.55, end = 10.14 (duration: 2.59)
+whisper_vad_segments_from_probs: VAD segment 3: start = 11.30, end = 12.57 (duration: 1.27)
+whisper_vad_segments_from_probs: VAD segment 4: start = 12.83, end = 15.36 (duration: 2.53)
+whisper_vad_segments_from_probs: VAD segment 5: start = 16.55, end = 18.53 (duration: 1.98)
+whisper_vad_segments_from_probs: VAD segment 6: start = 19.71, end = 22.40 (duration: 2.69)
+whisper_vad_segments_from_probs: VAD segment 7: start = 23.59, end = 26.33 (duration: 2.74)
+whisper_vad_segments_from_probs: VAD segment 8: start = 27.49, end = 29.60 (duration: 2.11)
+whisper_vad_segments_from_probs: VAD segment 9: start = 29.92, end = 31.87 (duration: 1.95)
+whisper_vad: detected 10 speech segments
+whisper_vad: Including segment 0: 0.10 - 2.56 (duration: 2.46)
+whisper_vad: Including segment 1: 3.65 - 6.50 (duration: 2.85)
+whisper_vad: Including segment 2: 7.55 - 10.24 (duration: 2.69)
+whisper_vad: Including segment 3: 11.30 - 12.67 (duration: 1.37)
+whisper_vad: Including segment 4: 12.83 - 15.46 (duration: 2.63)
+whisper_vad: Including segment 5: 16.55 - 18.63 (duration: 2.08)
+whisper_vad: Including segment 6: 19.71 - 22.50 (duration: 2.79)
+whisper_vad: Including segment 7: 23.59 - 26.43 (duration: 2.84)
+whisper_vad: Including segment 8: 27.49 - 29.70 (duration: 2.21)
+whisper_vad: Including segment 9: 29.92 - 31.87 (duration: 1.95)
+whisper_vad: total duration of speech segments: 23.87 seconds
+whisper_vad: vad_segment_info: orig_start: 0.10, orig_end: 2.46, vad_start: 0.00, vad_end: 2.36
+whisper_vad: vad_segment_info: orig_start: 3.65, orig_end: 6.40, vad_start: 2.56, vad_end: 5.31
+whisper_vad: vad_segment_info: orig_start: 7.55, orig_end: 10.14, vad_start: 5.51, vad_end: 8.10
+whisper_vad: vad_segment_info: orig_start: 11.30, orig_end: 12.57, vad_start: 8.30, vad_end: 9.57
+whisper_vad: vad_segment_info: orig_start: 12.83, orig_end: 15.36, vad_start: 9.77, vad_end: 12.30
+whisper_vad: vad_segment_info: orig_start: 16.55, orig_end: 18.53, vad_start: 12.50, vad_end: 14.48
+whisper_vad: vad_segment_info: orig_start: 19.71, orig_end: 22.40, vad_start: 14.68, vad_end: 17.37
+whisper_vad: vad_segment_info: orig_start: 23.59, orig_end: 26.33, vad_start: 17.57, vad_end: 20.31
+whisper_vad: vad_segment_info: orig_start: 27.49, orig_end: 29.60, vad_start: 20.51, vad_end: 22.62
+whisper_vad: vad_segment_info: orig_start: 29.92, orig_end: 31.87, vad_start: 22.82, vad_end: 24.77
+whisper_vad: Created time mapping table with 29 points
+whisper_vad: Reduced audio from 537255 to 396320 samples (26.2% reduction)
+whisper_full_with_state: auto-detected language: en (p = 0.999883)
+whisper_print_progress_callback: progress = 100%
+output_json: saving output to '<app-data>\cache\.staging\8147d449-28ae-4b83-995e-15577b4b0d76.whisper.json'
+
+whisper_print_timings:     load time =   496.67 ms
+whisper_print_timings:     fallbacks =   0 p /   0 h
+whisper_print_timings:      mel time =    10.40 ms
+whisper_print_timings:   sample time =   187.78 ms /   436 runs (     0.43 ms per run)
+whisper_print_timings:   encode time = 19082.74 ms /     2 runs (  9541.37 ms per run)
+whisper_print_timings:   decode time =     7.12 ms /     2 runs (     3.56 ms per run)
+whisper_print_timings:   batchd time =   640.22 ms /   433 runs (     1.48 ms per run)
+whisper_print_timings:   prompt time =   114.00 ms /    89 runs (     1.28 ms per run)
+whisper_print_timings:    total time = 20657.81 ms

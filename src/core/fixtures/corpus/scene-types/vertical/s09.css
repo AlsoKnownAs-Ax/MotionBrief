@@ -1,0 +1,2 @@
+.outro { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 40px; text-align: center; }
+.bell { font-size: 140px; color: var(--accent); }

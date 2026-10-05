@@ -1,0 +1,6 @@
+.editor { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 40px; }
+.window { display: flex; flex-direction: column; gap: 28px; min-width: 1100px; padding: 32px 48px 44px; }
+.tab { align-self: flex-start; }
+.line { margin: 0; white-space: pre; }
+.keyword { color: var(--accent); }
+.note { padding: 12px 28px; border-radius: 999px; background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); }

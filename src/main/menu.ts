@@ -53,6 +53,8 @@ function macAppMenu(): MenuItemConstructorOptions[] {
       submenu: [
         { role: "about" },
         { type: "separator" },
+        settingsItem(),
+        { type: "separator" },
         { role: "services" },
         { type: "separator" },
         { role: "hide" },
@@ -65,12 +67,17 @@ function macAppMenu(): MenuItemConstructorOptions[] {
   ];
 }
 
+function settingsItem(): MenuItemConstructorOptions {
+  return { label: "Settings…", accelerator: accelerator(SHORTCUTS.openSettings), click: () => sendCommand("settings.show") };
+}
+
+/** macOS keeps Settings in the app menu; elsewhere it sits in File, above Exit. */
 function quitItems(): MenuItemConstructorOptions[] {
   if (isMac) {
     return [];
   }
 
-  return [{ type: "separator" }, { role: "quit", label: "Exit" }];
+  return [{ type: "separator" }, settingsItem(), { type: "separator" }, { role: "quit", label: "Exit" }];
 }
 
 function windowMenu(): MenuItemConstructorOptions[] {

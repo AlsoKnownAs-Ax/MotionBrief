@@ -1,0 +1,675 @@
+import { useQuery } from "@tanstack/react-query";
+import { RotateCwIcon, ZoomInIcon, ZoomOutIcon } from "lucide-react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent, type RefObject } from "react";
+import { Badge } from "@renderer/components/ui/badge";
+import { Button } from "@renderer/components/ui/button";
+import { WordEditor } from "@renderer/components/word-editor";
+import { orpc } from "@renderer/core/connection";
+import { cn, rovingTabIndex } from "@renderer/lib/utils";
+import type { Preview, RevisionStatus, TimelineScene, TimelineWord, VideoTimeline, WordFixOffer } from "../../../contract";
+import { isGenerating, useGeneration } from "./generation";
+import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } from "./labels";
+import { useOpenVideo } from "./open-video";
+import { formatTime, usePlayback } from "./playback";
+import { isRevising, nameOf, useRevision } from "./revision";
+
+/** How a Scene a Revision is working on reads, whatever its status in the current Version. */
+const REVISING = { label: "Revising, playing the current Version", badge: "working", badgeLabel: "Revising" } as const;
+
+/** The Scenes a running Revision is working on; none while no Revision runs. */
+const NO_SCENES: string[] = [];
+
+function revisingScenes(status: RevisionStatus | undefined): string[] {
+  if (!isRevising(status)) {
+    return NO_SCENES;
+  }
+
+  return status?.affected ?? NO_SCENES;
+}
+
+function cardStatus(scene: TimelineScene, isRevising: boolean) {
+  if (isRevising) {
+    return REVISING;
+  }
+
+  return SCENE_STATUS[scene.status];
+}
+
+/** What the timeline header says beside the Scene count: a problem, a word fix to carry onto the screen, or a hint. */
+function HeaderNote({ error, offer, scenes }: { error?: string; offer?: WordFixOffer; scenes: TimelineScene[] }) {
+  if (error) {
+    return (
+      <span role="alert" title={error} className="min-w-0 truncate text-app-xs text-status-fallback-ink">
+        {error}
+      </span>
+    );
+  }
+
+  if (offer) {
+    return <WordFixOfferNote offer={offer} scenes={scenes} />;
+  }
+
+  return (
+    <span className="min-w-0 truncate text-app-xs text-ink-muted">
+      Click a Scene to select it for a Revision, Shift-click to add more. Click a word to go to it, double-click to fix it.
+    </span>
+  );
+}
+
+/** Offers the Revision that carries a word fix into the Scenes still showing the old word; Not now changes nothing. */
+function WordFixOfferNote({ offer, scenes }: { offer: WordFixOffer; scenes: TimelineScene[] }) {
+  const carry = useRevision((state) => state.carryWordFix);
+  const dismiss = useRevision((state) => state.dismissWordFix);
+  const isRevisingNow = useRevision((state) => isRevising(state.status));
+  const isGeneratingNow = useGeneration((state) => isGenerating(state.status));
+  const names = offer.scope.map((sceneId) => nameOf(scenes, sceneId)).join(", ");
+  const text = `${offer.from.map((spelling) => `“${spelling}”`).join(" or ")} is still on screen in ${names}.`;
+
+  return (
+    <span role="status" className="flex min-w-0 items-center gap-2">
+      <span title={text} className="min-w-0 truncate text-app-xs text-ink">
+        {text}
+      </span>
+      <Button size="sm" disabled={isRevisingNow || isGeneratingNow} title={`Revise ${names} to say “${offer.to}”`} onClick={() => void carry()}>
+        Carry the fix
+      </Button>
+      <Button size="sm" variant="ghost" onClick={dismiss}>
+        Not now
+      </Button>
+    </span>
+  );
+}
+
+/** Zoom limits, in pixels per second. */
+const MIN_ZOOM = 8;
+const MAX_ZOOM = 240;
+const ZOOM_STEP = 1.4;
+
+/** Rows inside the scrolling area, in pixels. */
+const HEADER = 44;
+const RULER = 22;
+/** Room above the Scene cards for Canvas brackets, when the video has a Canvas. */
+const BRACKETS = 14;
+const WORD_LANE = 26;
+const GAP = 8;
+const SCROLLBAR = 10;
+/** Room after the last second, so the end of the video isn't under the edge. */
+const TAIL = 24;
+
+/**
+ * The Scene timeline: a time ruler, Canvas brackets, a card per Scene sized to its length, Transition
+ * markers, and the Transcript's words.
+ */
+export function Timeline({ preview, height }: { preview: Preview; height: number }) {
+  const { timeline } = preview;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const viewportWidth = useWidth(scrollRef);
+  /** Pixels per second; until the creator zooms, and after Fit, the whole video fits the pane. */
+  const [zoom, setZoom] = useState<number>();
+  const seek = usePlayback((state) => state.seek);
+  const px = zoom ?? clampZoom((viewportWidth - TAIL) / Math.max(timeline.duration, 1));
+  const area = height - HEADER - SCROLLBAR;
+  const canvases = useMemo(() => canvasesOf(timeline.scenes), [timeline.scenes]);
+  const brackets = bracketsHeight(canvases);
+  const cardTop = RULER + GAP + brackets;
+  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP);
+  const wordTop = cardTop + cardHeight + GAP;
+  const thumbnails = useThumbnails(preview.id);
+  const fixError = useOpenVideo((state) => state.fixError);
+  const selection = useRevision((state) => state.selection);
+  const toggleScene = useRevision((state) => state.toggleScene);
+  const revising = useRevision((state) => revisingScenes(state.status));
+  const retryError = useGeneration((state) => state.retryError);
+  const retry = useRetry();
+  const flagged = [...new Set(timeline.scenes.filter(({ status }) => status === "fallback").map(({ unit }) => unit))];
+  const headerError = fixError ?? retryError;
+  const wordFixOffer = useRevision((state) => state.wordFixOffer);
+
+  return (
+    <section aria-label="Scene timeline" className="flex shrink-0 flex-col bg-[#0b0b0b]" style={{ height }}>
+      <header className="flex shrink-0 items-center gap-3.5 pr-3 pl-4 whitespace-nowrap" style={{ height: HEADER }}>
+        <span className="text-app-sm">
+          <span className="font-medium">{timeline.scenes.length} Scenes</span>
+          <span className="text-ink-muted tabular-nums"> · {formatTime(timeline.duration)}</span>
+        </span>
+        <HeaderNote error={headerError} offer={wordFixOffer} scenes={timeline.scenes} />
+        <span className="flex-1" />
+        {retry && flagged.length > 0 ? (
+          <Button
+            size="sm"
+            disabled={!retry.canRetry}
+            title="Regenerate every fallback Scene with the Scene-code model"
+            onClick={() => retry.run()}
+          >
+            <RotateCwIcon />
+            Retry all flagged ({flagged.length})
+          </Button>
+        ) : null}
+        <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
+      </header>
+      <div ref={scrollRef} className="timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+        <div className="relative" style={{ width: timeline.duration * px + TAIL, height: area }}>
+          <Ruler duration={timeline.duration} px={px} onSeek={seek} />
+          {canvases.map((scenes) => (
+            <CanvasBracket key={scenes[0]!.unit} scenes={scenes} px={px} top={RULER + GAP} />
+          ))}
+          {timeline.scenes.map((scene) => (
+            <SceneCard
+              key={scene.id}
+              scene={scene}
+              timeline={timeline}
+              px={px}
+              top={cardTop}
+              height={cardHeight}
+              thumbnail={thumbnails.get(scene.id)}
+              isSelected={selection.includes(scene.id)}
+              isRevising={revising.includes(scene.id)}
+              onSelect={(additive) => {
+                toggleScene(scene.id, additive);
+                seek(scene.start);
+              }}
+            />
+          ))}
+          {retry
+            ? timeline.scenes
+                .filter(({ status }) => status === "fallback")
+                .map((scene) => (
+                  <RetryScene key={scene.id} scene={scene} px={px} top={cardTop} disabled={!retry.canRetry} onRetry={() => retry.run([scene.unit])} />
+                ))
+            : null}
+          {timeline.scenes.map((scene) => (
+            <TransitionMarker key={scene.id} scene={scene} px={px} top={cardTop + cardHeight / 2} />
+          ))}
+          <WordLane words={timeline.words} px={px} top={wordTop} />
+          <Playhead px={px} scrollRef={scrollRef} />
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function clampZoom(zoom: number) {
+  return Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
+}
+
+/** An element's width, kept up to date as its pane resizes. */
+function useWidth(ref: RefObject<HTMLElement | null>) {
+  const [width, setWidth] = useState(0);
+
+  useEffect(() => {
+    const element = ref.current;
+
+    if (!element) {
+      return;
+    }
+
+    const observer = new ResizeObserver(([entry]) => setWidth(entry?.contentRect.width ?? 0));
+    observer.observe(element);
+
+    return () => observer.disconnect();
+  }, [ref]);
+
+  return width;
+}
+
+/** Each Scene's still, by Scene id, as they stream in. */
+function useThumbnails(previewId: string) {
+  const { data } = useQuery(orpc.preview.thumbnails.experimental_streamedOptions({ input: { id: previewId }, staleTime: Infinity, retry: false }));
+
+  return useMemo(() => new Map((data ?? []).map(({ sceneId, image }) => [sceneId, image])), [data]);
+}
+
+function ZoomControls({ zoom, onZoom, onFit }: { zoom: number; onZoom: (zoom: number) => void; onFit: () => void }) {
+  return (
+    <div className="flex items-center gap-0.5">
+      <Button variant="ghost" size="icon-sm" aria-label="Zoom out" title="Zoom out" onClick={() => onZoom(zoom / ZOOM_STEP)}>
+        <ZoomOutIcon />
+      </Button>
+      <input
+        type="range"
+        min={MIN_ZOOM}
+        max={MAX_ZOOM}
+        value={Math.round(zoom)}
+        aria-label="Timeline zoom"
+        className="w-[88px] accent-ink-muted"
+        onChange={(event) => onZoom(Number(event.target.value))}
+      />
+      <Button variant="ghost" size="icon-sm" aria-label="Zoom in" title="Zoom in" onClick={() => onZoom(zoom * ZOOM_STEP)}>
+        <ZoomInIcon />
+      </Button>
+      <Button variant="ghost" size="sm" onClick={onFit}>
+        Fit
+      </Button>
+    </div>
+  );
+}
+
+/** Seconds between ticks, and between labelled ticks, that leave room at this zoom. */
+function tickSteps(px: number) {
+  const steps = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600];
+  const tick = steps.find((step) => step * px >= 10) ?? 600;
+  const label = steps.find((step) => step * px >= 64 && step % tick === 0) ?? 600;
+
+  return { tick, label };
+}
+
+function Ruler({ duration, px, onSeek }: { duration: number; px: number; onSeek: (time: number) => void }) {
+  const { tick, label } = tickSteps(px);
+  const ticks = Array.from({ length: Math.floor(duration / tick) + 1 }, (_, index) => index * tick);
+
+  return (
+    <div
+      aria-hidden="true"
+      className="absolute inset-x-0 top-0 cursor-pointer touch-none border-b border-hairline-soft"
+      style={{ height: RULER }}
+      onPointerDown={(event) => dragToSeek(event, px, onSeek)}
+    >
+      {ticks.map((second) => {
+        const isLabelled = second % label === 0;
+
+        return (
+          <span
+            key={second}
+            className={cn("absolute bottom-0 w-px", tickClass(isLabelled))}
+            style={{ left: second * px }}
+          >
+            {isLabelled ? <span className="absolute bottom-[9px] left-1 text-[11px] text-ink-muted tabular-nums">{formatTime(second)}</span> : null}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A labelled tick stands taller and brighter. */
+function tickClass(isLabelled: boolean) {
+  if (isLabelled) {
+    return "h-2 bg-[#555]";
+  }
+
+  return "h-1 bg-[#333]";
+}
+
+/** Seeks to the pointer while it drags across the ruler. */
+function dragToSeek(event: PointerEvent<HTMLElement>, px: number, onSeek: (time: number) => void) {
+  const ruler = event.currentTarget;
+  const seekTo = (clientX: number) => onSeek((clientX - ruler.getBoundingClientRect().left) / px);
+
+  ruler.setPointerCapture(event.pointerId);
+  seekTo(event.clientX);
+  ruler.onpointermove = (move) => seekTo(move.clientX);
+  ruler.onpointerup = () => {
+    ruler.onpointermove = null;
+    ruler.onpointerup = null;
+  };
+}
+
+type SceneCardProps = {
+  scene: TimelineScene;
+  timeline: VideoTimeline;
+  px: number;
+  top: number;
+  height: number;
+  thumbnail?: string;
+  isSelected: boolean;
+  /** A Revision is working on it; the current Version's Scene plays meanwhile. */
+  isRevising: boolean;
+  /** Selects it, or with Shift or Ctrl adds it to the selection or takes it out. */
+  onSelect: (additive: boolean) => void;
+};
+
+function SceneCard({ scene, timeline, px, top, height, thumbnail, isSelected, isRevising, onSelect }: SceneCardProps) {
+  const width = (scene.end - scene.start) * px - 3;
+  const aspect = timeline.width / timeline.height;
+  const thumbHeight = Math.min(height - 12, 150);
+  const thumbWidth = Math.min(thumbHeight * aspect, width - 12);
+  const status = cardStatus(scene, isRevising);
+  const showsMeta = width > thumbWidth + 88;
+  // Without room beside the thumbnail, the status badge sits on it.
+  const badge = status.badge ? (
+    <Badge status={status.badge} pulse={status.badge === "working"} className={cn(!showsMeta && "absolute top-1 left-1")}>
+      {showsMeta || thumbWidth > 72 ? status.badgeLabel : null}
+    </Badge>
+  ) : null;
+
+  return (
+    <button
+      type="button"
+      title={withNote(`${sceneName(scene)} · ${SCENE_TYPE_LABELS[scene.type]} · ${formatTime(scene.start)} to ${formatTime(scene.end)}`, scene, "\nReview note: ")}
+      aria-label={`${withNote(`${sceneName(scene)}, ${SCENE_TYPE_LABELS[scene.type]}, ${status.label}`, scene)}, from ${formatTime(scene.start)}`}
+      aria-pressed={isSelected}
+      className={cn(
+        "absolute flex items-center gap-2 overflow-hidden rounded-md bg-surface-1 p-1.5 text-left transition-[background-color,box-shadow] hover:bg-surface-2",
+        isSelected && "bg-surface-2 shadow-[inset_0_0_0_2px_var(--primary)]",
+      )}
+      style={{ left: scene.start * px, width, top, height }}
+      onClick={(event) => onSelect(event.shiftKey || event.ctrlKey || event.metaKey)}
+    >
+      {thumbWidth > 8 ? (
+        <span className="relative shrink-0 overflow-hidden rounded-sm bg-[#111]" style={{ width: thumbWidth, height: thumbWidth / aspect }}>
+          {thumbnail ? (
+            <img src={thumbnail} alt="" className={cn("block size-full object-cover", isRevising && "opacity-45")} />
+          ) : (
+            <span className="block size-full animate-pulse bg-surface-2" />
+          )}
+          {!showsMeta ? badge : null}
+        </span>
+      ) : null}
+      {showsMeta ? (
+        <span className="flex min-w-0 flex-col items-start gap-[5px]">
+          <span className="max-w-full truncate text-app-xs font-medium">
+            <span className="text-ink-muted tabular-nums">{scene.number}</span> {SCENE_TYPE_LABELS[scene.type]}
+          </span>
+          {badge}
+          {scene.note ? <span className="max-w-full truncate text-app-xs text-ink-muted">{scene.note}</span> : null}
+        </span>
+      ) : null}
+    </button>
+  );
+}
+
+/** The runs of Scenes that share a Canvas: consecutive Scenes written as one unit. */
+function canvasesOf(scenes: TimelineScene[]): TimelineScene[][] {
+  return scenes
+    .reduce<TimelineScene[][]>((runs, scene) => {
+      const run = runs.at(-1);
+
+      if (run && run[0]!.unit === scene.unit) {
+        run.push(scene);
+
+        return runs;
+      }
+
+      return [...runs, [scene]];
+    }, [])
+    .filter((run) => run.length > 1);
+}
+
+/** The row for Canvas brackets takes room only when the video has a Canvas. */
+function bracketsHeight(canvases: TimelineScene[][]): number {
+  if (canvases.length === 0) {
+    return 0;
+  }
+
+  return BRACKETS;
+}
+
+/** A bracket over the Scenes sharing a Canvas, spanning their cards. */
+function CanvasBracket({ scenes, px, top }: { scenes: TimelineScene[]; px: number; top: number }) {
+  const first = scenes[0]!;
+  const last = scenes.at(-1)!;
+  const description = `Canvas · camera moves across Scenes ${first.number}–${last.number}`;
+
+  return (
+    <div
+      role="img"
+      aria-label={description}
+      title={description}
+      className="absolute h-2.5 rounded-t-[3px] border border-b-0 border-[#4a4a4a]"
+      style={{ left: first.start * px, width: (last.end - first.start) * px - 3, top: top + BRACKETS - 10 }}
+    >
+      <span className="absolute -top-[6px] left-2 max-w-[calc(100%-16px)] truncate bg-[#0b0b0b] px-1.5 text-[11px] leading-[10px] text-ink-muted">
+        {description}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Retry for the video's flagged fallback Scenes: only for a stored Project, and never while a run is going.
+ * Nothing retries them on its own.
+ */
+function useRetry() {
+  const isStored = useOpenVideo((state) => state.isStored);
+  const isRunning = useGeneration((state) => isGenerating(state.status));
+  const retry = useGeneration((state) => state.retry);
+
+  if (!isStored) {
+    return undefined;
+  }
+
+  return { canRetry: !isRunning, run: (units?: string[]) => void retry(units) };
+}
+
+type RetrySceneProps = { scene: TimelineScene; px: number; top: number; disabled: boolean; onRetry: () => void };
+
+/** Retry on a fallback Scene's card: regenerates its unit alone. Beside the card's button, since buttons don't nest. */
+function RetryScene({ scene, px, top, disabled, onRetry }: RetrySceneProps) {
+  const width = (scene.end - scene.start) * px - 3;
+
+  if (width < 36) {
+    return null;
+  }
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      disabled={disabled}
+      aria-label={`Retry ${sceneName(scene)}`}
+      title={`Retry ${sceneName(scene)}: regenerate its Scene code`}
+      className="absolute z-[3] bg-surface-2 hover:bg-surface-3"
+      style={{ left: scene.start * px + width - 30, top: top + 4 }}
+      onClick={onRetry}
+    >
+      <RotateCwIcon />
+    </Button>
+  );
+}
+
+function TransitionMarker({ scene, px, top }: { scene: TimelineScene; px: number; top: number }) {
+  if (!scene.transitionIn) {
+    return null;
+  }
+
+  const { label, icon: Icon } = TRANSITIONS[scene.transitionIn];
+  const description = `${label} into ${sceneName(scene)}`;
+
+  return (
+    <span
+      role="img"
+      aria-label={description}
+      title={description}
+      className="absolute z-[2] -mt-[9px] -ml-[9px] grid size-[18px] place-items-center rounded-full bg-surface-3 text-ink shadow-[0_0_0_2px_#0b0b0b]"
+      style={{ left: scene.start * px - 1.5, top }}
+    >
+      <Icon className="size-2.5" aria-hidden="true" />
+    </span>
+  );
+}
+
+/** Words grouped into phrases at punctuation, at most a few words each, so a phrase sits where it is spoken. */
+function phrasesOf(words: TimelineWord[]) {
+  const phrases: number[][] = [];
+  let phrase: number[] = [];
+
+  words.forEach(({ text }, index) => {
+    phrase.push(index);
+
+    if (/[.,;:!?]$/.test(text) || phrase.length >= 4) {
+      phrases.push(phrase);
+      phrase = [];
+    }
+  });
+
+  if (phrase.length > 0) {
+    phrases.push(phrase);
+  }
+
+  return phrases;
+}
+
+/** The index of the word being spoken at `time`, or -1 between words and outside them. */
+function wordAt(words: TimelineWord[], time: number) {
+  let low = 0;
+  let high = words.length - 1;
+
+  while (low <= high) {
+    const middle = (low + high) >> 1;
+    const word = words[middle]!;
+
+    if (time < word.start) {
+      high = middle - 1;
+    } else if (time >= word.end) {
+      low = middle + 1;
+    } else {
+      return middle;
+    }
+  }
+
+  return -1;
+}
+
+/**
+ * The Transcript's words under the Scenes. Click a word to go to it; double-click it, or press F2,
+ * to fix its text. Arrow keys move between words.
+ */
+function WordLane({ words, px, top }: { words: TimelineWord[]; px: number; top: number }) {
+  const phrases = useMemo(() => phrasesOf(words), [words]);
+  const current = usePlayback((state) => wordAt(words, state.time));
+  const seek = usePlayback((state) => state.seek);
+  const { wordFixes, fixWord } = useOpenVideo();
+  const [focused, setFocused] = useState(0);
+  const [editing, setEditing] = useState<number>();
+  const buttons = useRef(new Map<number, HTMLButtonElement>());
+  const returnFocusTo = useRef<number>(undefined);
+
+  // A finished edit hands the keyboard back to its word.
+  useEffect(() => {
+    if (editing === undefined && returnFocusTo.current !== undefined) {
+      buttons.current.get(returnFocusTo.current)?.focus();
+      returnFocusTo.current = undefined;
+    }
+  }, [editing]);
+
+  function moveFocus(index: number) {
+    const next = Math.max(0, Math.min(words.length - 1, index));
+
+    setFocused(next);
+    buttons.current.get(next)?.focus();
+    buttons.current.get(next)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+
+  function finishEditing(index: number, text: string | undefined) {
+    if (text !== undefined && text.trim()) {
+      void fixWord(index, text.trim());
+    }
+
+    returnFocusTo.current = index;
+    setEditing(undefined);
+  }
+
+  return (
+    <div role="group" aria-label="Transcript" className="absolute inset-x-0" style={{ top, height: WORD_LANE }}>
+      {phrases.map((phrase, index) => {
+        const first = words[phrase[0]!]!;
+        const nextStart = words[phrases[index + 1]?.[0] ?? -1]?.start ?? first.end;
+        const isEditing = editing !== undefined && phrase.includes(editing);
+
+        return (
+          <div
+            key={phrase[0]}
+            className={cn(
+              "absolute flex h-full items-center whitespace-nowrap",
+              phraseClass(isEditing),
+            )}
+            style={{ left: first.start * px, width: Math.max(8, (nextStart - first.start) * px - 4) }}
+          >
+            {phrase.map((wordIndex) => {
+              const text = wordFixes[wordIndex] ?? words[wordIndex]!.text;
+
+              if (editing === wordIndex) {
+                return <WordEditor key={wordIndex} text={text} className="h-[26px] text-app-xs" onDone={(fixed) => finishEditing(wordIndex, fixed)} />;
+              }
+
+              return (
+                <button
+                  key={wordIndex}
+                  ref={(button) => {
+                    if (button) {
+                      buttons.current.set(wordIndex, button);
+                    } else {
+                      buttons.current.delete(wordIndex);
+                    }
+                  }}
+                  type="button"
+                  tabIndex={rovingTabIndex(wordIndex === focused)}
+                  aria-current={wordIndex === current || undefined}
+                  title={fixedTitle(wordFixes[wordIndex], words[wordIndex]!.text)}
+                  className={cn(
+                    "h-[22px] shrink-0 cursor-pointer rounded-[5px] px-0.5 text-app-xs leading-[22px] text-ink-muted hover:bg-surface-2 hover:text-ink",
+                    wordFixes[wordIndex] !== undefined && "text-ink underline decoration-dotted underline-offset-[3px]",
+                    wordIndex === current && "text-primary hover:text-primary",
+                  )}
+                  onFocus={() => setFocused(wordIndex)}
+                  onClick={() => seek(words[wordIndex]!.start)}
+                  onDoubleClick={() => setEditing(wordIndex)}
+                  onKeyDown={(event) => {
+                    const moves: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 };
+                    const ends: Record<string, number> = { Home: 0, End: words.length - 1 };
+
+                    if (event.key === "F2") {
+                      event.preventDefault();
+                      setEditing(wordIndex);
+                    } else if (moves[event.key] !== undefined) {
+                      event.preventDefault();
+                      moveFocus(wordIndex + moves[event.key]!);
+                    } else if (ends[event.key] !== undefined) {
+                      event.preventDefault();
+                      moveFocus(ends[event.key]!);
+                    }
+                  }}
+                >
+                  {text}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** A phrase being edited spills over its neighbours; the others fade out where they run into the next. */
+function phraseClass(isEditing: boolean) {
+  if (isEditing) {
+    return "z-[6] overflow-visible";
+  }
+
+  return "overflow-hidden [mask-image:linear-gradient(90deg,#000_calc(100%-16px),transparent)]";
+}
+
+/** A fixed word's tooltip names what whisper-cli heard. */
+function fixedTitle(fix: string | undefined, heard: string) {
+  if (!fix) {
+    return undefined;
+  }
+
+  return `Fixed from "${heard}"`;
+}
+
+/** The playhead across the ruler, the Scenes and the words; while playing, the pane scrolls to keep it in view. */
+function Playhead({ px, scrollRef }: { px: number; scrollRef: RefObject<HTMLDivElement | null> }) {
+  const time = usePlayback((state) => state.time);
+  const isPlaying = usePlayback((state) => state.isPlaying);
+  const x = time * px;
+
+  useEffect(() => {
+    const scroll = scrollRef.current;
+
+    if (!scroll || !isPlaying) {
+      return;
+    }
+
+    if (x < scroll.scrollLeft + 40 || x > scroll.scrollLeft + scroll.clientWidth - 120) {
+      scroll.scrollLeft = x - 80;
+    }
+  }, [x, isPlaying, scrollRef]);
+
+  return (
+    <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 z-[5] -ml-px w-0.5 bg-ink" style={{ left: x }}>
+      <span className="absolute top-0 -left-[5px] h-[9px] w-3 bg-ink [clip-path:polygon(0_0,100%_0,50%_100%)]" />
+    </div>
+  );
+}

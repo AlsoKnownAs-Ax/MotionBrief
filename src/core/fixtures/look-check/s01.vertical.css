@@ -1,0 +1,5 @@
+.lc-wrap { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 90px; }
+.lc-diagram { position: relative; display: flex; flex-direction: column; align-items: center; gap: 110px; }
+.lc-node { display: flex; align-items: center; gap: 26px; padding: 30px 40px; min-width: 560px; }
+.lc-icon { font-size: 76px; color: var(--accent2); }
+.lc-key .lc-icon { color: var(--accent); }

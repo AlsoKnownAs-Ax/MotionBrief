@@ -1,6 +1,7 @@
 import type { Format, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
 import { copyOf, elementsOf } from "./content";
 import type { Scene, SceneType, Storyboard, Transition, TransitionType } from "./schema";
+import { sceneTimings } from "./timing";
 
 /** What every check sees: a Storyboard that already fits the schema, and what it is checked against. */
 type CheckInput = {
@@ -121,28 +122,6 @@ const PACING = {
   vertical: { min: 2.5, max: 7 },
 } satisfies Record<Format, { min: number; max: number }>;
 
-/** A Scene starts this long before its first word is spoken. */
-const SCENE_LEAD_SECONDS = 0.25;
-
-/** When each Scene starts and ends on the Voiceover, in seconds. Assumes the spans are valid. */
-function sceneTimes({ storyboard, transcript }: CheckInput) {
-  const starts = storyboard.scenes.map((scene, index) => sceneStart(scene, index, transcript));
-
-  return storyboard.scenes.map((scene, index) => ({
-    scene,
-    start: starts[index] ?? 0,
-    end: starts[index + 1] ?? transcript.duration,
-  }));
-}
-
-function sceneStart(scene: Scene, index: number, transcript: StoryboardTranscript): number {
-  if (index === 0) {
-    return 0;
-  }
-
-  return Math.max(0, (transcript.words[scene.from]?.start ?? 0) - SCENE_LEAD_SECONDS);
-}
-
 /** Each Scene lasts as long as its Format's pacing allows. A lone Scene may be as short as its Voiceover. */
 function checkPacing(input: CheckInput): StoryboardIssue[] {
   if (checkSpans(input).length > 0) {
@@ -152,7 +131,7 @@ function checkPacing(input: CheckInput): StoryboardIssue[] {
   const { min, max } = PACING[input.rules.format];
   const isLone = input.storyboard.scenes.length === 1;
 
-  return sceneTimes(input).flatMap(({ scene, start, end }) => {
+  return sceneTimings(input.storyboard, input.transcript).flatMap(({ scene, start, end }) => {
     const seconds = Math.round((end - start) * 1000) / 1000;
 
     return issuesFor(scene.id, [
@@ -291,6 +270,11 @@ const PRESET_TRANSITION = {
   "carry-over": "carry-over",
   camera: "camera",
 } satisfies Record<TransitionType, PresetTransition>;
+
+/** The Storyboard Transitions a Style Preset's allowed set lets a Storyboard use. */
+export function transitionTypesFor(allowed: PresetTransition[]): TransitionType[] {
+  return (Object.keys(PRESET_TRANSITION) as TransitionType[]).filter((type) => allowed.includes(PRESET_TRANSITION[type]));
+}
 
 /**
  * Every Scene but the last names the Transition into the next one, drawn from the Style Preset's

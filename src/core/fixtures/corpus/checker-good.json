@@ -1,0 +1,11 @@
+{
+  "description": "Hand-written, token-only Scene code for a diagram and a code Scene, deliberate layering and a faint texture included",
+  "frameContractVersion": "1.0.0",
+  "preset": "blueprint",
+  "storyboard": "checker/storyboard.json",
+  "transcript": "checker/transcript.json",
+  "units": {
+    "s01": "checker/good/s01",
+    "s02": "checker/good/s02"
+  }
+}

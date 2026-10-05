@@ -1,0 +1,742 @@
+import type {
+  CheckFinding,
+  ConnectorError,
+  GenerationPreviewError,
+  Preview,
+  RevisionRequest,
+  RevisionStatus,
+  RevisionUnit,
+  RoleModels,
+  SceneStatus,
+  StylePreset,
+  Transcript,
+  UnitCode,
+  VideoRef,
+  WordFixOffer,
+} from "../../contract";
+import type { Checker } from "../checker";
+import type { Connector } from "../connector";
+import { endsRun, inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
+import { previewErrorMessage, type Previews, type Stills } from "../preview";
+import { createStatusStore, type Flag, type Projects, type ProjectsError, type RevisionRecord, type Version, type VersionError } from "../projects";
+import { StoryboardSchema, type Storyboard } from "../storyboard";
+import { presetBrief, storyboardRules } from "../style";
+import { DEFAULT_MODELS } from "../settings";
+import type { Clock } from "../system";
+import type { Usage, UsageRun } from "../usage";
+import { runRevisionAgent } from "./agent";
+import { regenerateRequest } from "./prompts";
+import { planRebuild, type UnitRebuild } from "./rebuild";
+import { wordFixOffer } from "./word-fix";
+
+/** A Revision's roles: the Revision agent, Scene code for regenerated units, and their visual review. */
+export type RevisionModels = Pick<RoleModels, "revision" | "sceneCode" | "visualReview">;
+
+/** Scene-code subagents running at once, as in a first generation. */
+const PARALLEL_UNITS = 4;
+
+/** How many earlier Revisions the agent reads, newest last. */
+const HISTORY = 5;
+
+export type RevisionsOptions = {
+  connector: Connector;
+  checker: Checker;
+  previews: Previews;
+  /** The Renderer's stills of a unit, for the visual review of regenerated units. */
+  stills: Stills;
+  projects: Projects;
+  clock: Clock;
+  /** Where agent sessions get their workspace folders. */
+  workDir: string;
+  /** Counts what a Revision's agents use, asks for approval before regenerating Scenes, and stops one at the cap. */
+  usage: Usage;
+  /** The model per agent role Settings choose; read as a Revision starts, so a change applies to the next one. */
+  models?: () => Promise<RoleModels>;
+};
+
+export type ReviseError =
+  | Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }>
+  | { code: "NOT_GENERATED"; projectId: string }
+  | { code: "REVISING"; projectId: string }
+  | { code: "UNKNOWN_SCENE"; sceneId: string };
+
+export type WordFixOfferError = Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> | { code: "UNKNOWN_WORD"; index: number; words: number };
+
+type Result<T, E> = { data: T; error: null } | { data: null; error: E };
+
+type FileFailed = { code: "FILE_FAILED"; path: string; message: string };
+
+export type Revisions = ReturnType<typeof createRevisions>;
+
+const IDLE: RevisionStatus = { state: "idle", affected: [], units: [] };
+
+/**
+ * The current Version with its units' code, as a Revision starts from it, and whether the video shows Captions, as
+ * the Version was saved.
+ */
+type Current = { version: Version; storyboard: Storyboard; code: Record<string, UnitCode>; captions: boolean };
+
+type Store = ReturnType<typeof createStatusStore<RevisionStatus>>;
+
+/**
+ * A video's running Revision. Once it starts saving its Version it is committing: Stop is too late from then on,
+ * and the Revision ends `done`.
+ */
+type Job = { controller: AbortController; isCommitting: boolean; release: () => void; approve?: () => void };
+
+/** What a regenerated unit ended with: new code, or none; and the flag it carries in the new Version, if any. */
+type Regenerated = { code?: UnitCode; flag?: Flag };
+
+/**
+ * Revisions: a change to a generated video asked for in chat. Each is a fresh run of the Revision agent, which
+ * answers, asks one clarifying question, or hands in a Storyboard patch. Our code then decides what every unit needs
+ * (the rebuild rule), re-renders and checks what only moved in time, regenerates what changed, and saves the result
+ * as the next Version. The current Version plays on meanwhile; Stop, or any failure, leaves it as it was.
+ */
+export function createRevisions({ checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS }: RevisionsOptions) {
+  const videos = new Map<string, Store>();
+  const running = new Map<string, Job>();
+
+  function storeOf({ projectId, format }: VideoRef) {
+    const key = `${projectId} ${format}`;
+    const store = videos.get(key) ?? createStatusStore<RevisionStatus>(IDLE);
+    videos.set(key, store);
+
+    return { key, store };
+  }
+
+  /**
+   * Starts a Revision of the video's current Version; its progress streams through `watch`. The video is reserved
+   * before anything is read, so two requests at once can't both start.
+   */
+  async function start(ref: VideoRef, request: RevisionRequest): Promise<Result<null, ReviseError>> {
+    const { key, store } = storeOf(ref);
+
+    // Reserved before the current Version is read, so no other job saves one under this Revision.
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "REVISING", projectId: ref.projectId } };
+    }
+
+    const job: Job = { controller: new AbortController(), isCommitting: false, release };
+    running.set(key, job);
+    const { data: run, error } = await prepare(ref, request, store, job);
+
+    if (error) {
+      running.delete(key);
+      release();
+
+      return { data: null, error };
+    }
+
+    // Stopped while it was being prepared: nothing runs, and Stop already said it ended.
+    if (job.controller.signal.aborted) {
+      void run.usage.finish({ completed: false });
+
+      return { data: null, error: null };
+    }
+
+    store.set({ state: "revising", request, affected: request.scope, units: [] });
+    void revise(run)
+      .catch((cause: unknown) => publish(run, { state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
+      .finally(() => {
+        // Only a first generation feeds the running cost per Voiceover minute.
+        void run.usage.finish({ completed: false });
+
+        // A stopped Revision already said it ended.
+        if (running.get(key) !== job) {
+          return;
+        }
+
+        running.delete(key);
+        release();
+        ended.forEach((listener) => listener(ref, store.get()));
+      });
+
+    return { data: null, error: null };
+  }
+
+  /** Told whenever a video's Revision ends, with its last status. */
+  const ended: ((ref: VideoRef, status: RevisionStatus) => void)[] = [];
+
+  /** Calls `listener` whenever a video's Revision ends: answered, done, failed or stopped. */
+  function whenEnded(listener: (ref: VideoRef, status: RevisionStatus) => void) {
+    ended.push(listener);
+  }
+
+  /** Whether a Revision of the video is running. */
+  function isRunning(ref: VideoRef) {
+    return running.has(storeOf(ref).key);
+  }
+
+  /** Everything a Revision starts from: the video's Transcript, Voiceover and current Version, and a scope it has. */
+  async function prepare(ref: VideoRef, request: RevisionRequest, store: Store, job: Job): Promise<Result<Run, ReviseError>> {
+    const { projectId, format } = ref;
+    const { data: video, error } = await projects.video(projectId, format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const { data: stored, error: storedError } = await projects.storedVideo(projectId, format);
+
+    if (storedError) {
+      return { data: null, error: projectError(storedError) };
+    }
+
+    if (!stored || !video.transcript) {
+      return { data: null, error: { code: "NOT_GENERATED", projectId } };
+    }
+
+    const { success, data: storyboard, error: parseError } = StoryboardSchema.safeParse(stored.version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "FILE_FAILED", path: `versions/${stored.version.version}.json`, message: parseError.message } };
+    }
+
+    const current: Current = { version: stored.version, code: stored.code, storyboard, captions: shownCaptions(stored.version) };
+
+    const unknown = request.scope.find((sceneId) => !current.storyboard.scenes.some(({ id }) => id === sceneId));
+
+    if (unknown !== undefined) {
+      return { data: null, error: { code: "UNKNOWN_SCENE", sceneId: unknown } };
+    }
+
+    const chosen = await models();
+    const run = usage.startRun(ref);
+
+    return {
+      data: { ref, request, transcript: video.transcript, voiceover: video.voiceoverPath, duration: video.project.voiceover.duration, current, store, job, usage: run, models: chosen },
+      error: null,
+    };
+  }
+
+  /**
+   * Lets a Revision waiting for approval regenerate its Scenes, answering with the cost approved. A Revision that isn't
+   * waiting is left as it is, and Stop discards one that is.
+   */
+  function approve(ref: VideoRef): RevisionStatus["costUsd"] {
+    const { key, store } = storeOf(ref);
+    const waiting = running.get(key)?.approve;
+
+    if (!waiting) {
+      return undefined;
+    }
+
+    const { costUsd } = store.get();
+    waiting();
+
+    return costUsd;
+  }
+
+  /** Stops the video's running Revision and discards it, unless it is already saving its Version. */
+  function stop(ref: VideoRef) {
+    const { key, store } = storeOf(ref);
+    const job = running.get(key);
+
+    if (!job || job.isCommitting) {
+      return;
+    }
+
+    // A stopped Revision never saves, so the video is free at once.
+    running.delete(key);
+    job.controller.abort();
+    job.release();
+    store.update({ state: "stopped", affected: [] });
+    ended.forEach((listener) => listener(ref, store.get()));
+  }
+
+  /** The video's earlier Revisions, oldest first: what each asked for and what it did. */
+  async function history(ref: VideoRef, newest: number): Promise<RevisionRecord[]> {
+    const records: RevisionRecord[] = [];
+    const numbers = Array.from({ length: newest }, (_, index) => newest - index);
+
+    for (const number of numbers) {
+      const { data: stored } = await projects.readVersion(ref.projectId, ref.format, number);
+      records.unshift(...[stored?.version.revision].filter((record) => record !== undefined));
+
+      if (records.length === HISTORY) {
+        break;
+      }
+    }
+
+    return records;
+  }
+
+  type Run = {
+    ref: VideoRef;
+    request: RevisionRequest;
+    transcript: Transcript;
+    voiceover: string;
+    current: Current;
+    store: Store;
+    job: Job;
+    /** The Voiceover's length in seconds, which prices regenerating Scenes. */
+    duration: number;
+    /** Its agents start their sessions through it, so what they use is counted and the cap can stop them. */
+    usage: UsageRun;
+    models: RevisionModels;
+  };
+
+  /** Updates the Revision's status, unless it was stopped: a stopped Revision says nothing more. */
+  function publish({ store, job }: Run, change: Partial<RevisionStatus>) {
+    if (!job.controller.signal.aborted) {
+      store.update(change);
+    }
+  }
+
+  async function revise(run: Run) {
+    const { ref, request, transcript, current, job } = run;
+    const { preset, captions: writtenFor } = current.version;
+    const { captions } = current;
+    const brief = presetBrief(preset, ref.format);
+    const rulesFor = (withCaptions: boolean) => storyboardRules(preset, { format: ref.format, captions: withCaptions });
+    const { data: outcome, error } = await runRevisionAgent({
+      connector: run.usage.connector("revision"),
+      workDir,
+      signal: job.controller.signal,
+      model: run.models.revision,
+      storyboard: current.storyboard,
+      transcript,
+      rulesFor,
+      preset,
+      brief,
+      captions,
+      writtenFor,
+      history: await history(ref, current.version.version),
+      request: request.message,
+      scope: request.scope,
+    });
+
+    if (run.usage.isCapped()) {
+      return capped(run);
+    }
+
+    if (error?.code === "AGENT_FAILED" && endsRun(error.error)) {
+      return halt(run, error.error);
+    }
+
+    if (error) {
+      return publish(run, { state: "failed", affected: [], error });
+    }
+
+    const { storyboard, patch, reply } = outcome;
+
+    if (!storyboard || !patch) {
+      return publish(run, { state: "answered", affected: [], reply });
+    }
+
+    // A Captions switch in the patch shows in its Version from now on, and the Storyboard is written for it.
+    const nextCaptions = patch.captions ?? captions;
+    const instructions = Object.fromEntries(patch.instructions.map(({ scene, text }) => [scene, text]));
+    const plans = planRebuild({ current: current.storyboard, next: storyboard, transcript, instructions, captionsChanged: nextCaptions !== captions });
+
+    // A patch that changes nothing makes no Version: its summary is the reply.
+    if (plans.every(({ rebuild }) => rebuild === "keep")) {
+      return publish(run, { state: "answered", affected: [], reply: patch.summary });
+    }
+
+    await rebuild(run, { storyboard, plans, writtenFor: patch.captions ?? writtenFor, captions: nextCaptions, summary: patch.summary, preset });
+  }
+
+  type Rebuilt = {
+    storyboard: Storyboard;
+    plans: UnitRebuild[];
+    /** Whether the revised Storyboard is written for Captions: its rules. */
+    writtenFor: boolean;
+    /** Whether the revised video shows Captions. */
+    captions: boolean;
+    summary: string;
+    preset: StylePreset;
+  };
+
+  /** Re-renders and regenerates what the rebuild rule says, then saves the next Version. */
+  async function rebuild(run: Run, { storyboard, plans, writtenFor, captions, summary, preset }: Rebuilt) {
+    const { ref, transcript, current, job } = run;
+    const signal = job.controller.signal;
+    const rules = storyboardRules(preset, { format: ref.format, captions: writtenFor });
+    const brief = presetBrief(preset, ref.format);
+    const working = plans.filter(({ rebuild: need }) => need !== "keep");
+    const progress = new Map<string, RevisionUnit>(working.map(({ unit, rebuild: need }) => [unit.id, { id: unit.id, rebuild: rebuildOf(need), status: "queued", attempts: 0 }]));
+    const show = (unit: RevisionUnit) => {
+      progress.set(unit.id, unit);
+      publish(run, { units: [...progress.values()] });
+    };
+    // Every unit starts from its previous code; a unit the patch made, or a fallback, has none.
+    const code: Record<string, UnitCode> = Object.fromEntries(
+      plans.filter(({ previous }) => previous && current.code[previous.id]).map(({ unit, previous }) => [unit.id, current.code[previous!.id]!]),
+    );
+
+    publish(run, { state: "rebuilding", affected: affectedScenes(current.storyboard, plans), units: [...progress.values()], summary });
+
+    // Re-rendered units are checked as they now are; any that fail the contract are regenerated.
+    const rerendered = working.filter(({ rebuild: need }) => need === "rerender").filter(({ unit }) => code[unit.id]);
+    const { data: failing, error: checkError } = await failingUnits(storyboard, transcript, rules, preset, rerendered.map(({ unit }) => unit.id), code);
+
+    if (checkError) {
+      return publish(run, { state: "failed", affected: [], error: checkError });
+    }
+
+    const regenerating = working.filter(({ unit, rebuild: need }) => need === "regenerate" || failing.has(unit.id));
+    const isApproved = await approval(run, regenerating.length / plans.length);
+
+    if (!isApproved) {
+      return;
+    }
+
+    working
+      .filter((plan) => !regenerating.includes(plan))
+      .forEach(({ unit }) => show({ ...progress.get(unit.id)!, status: statusOf(code[unit.id]) }));
+
+    const baseline = await pageFindings(storyboard, transcript, rules, preset, regenerating.length);
+    const regenerated = new Map<string, Regenerated>();
+    const notApplied: string[] = [];
+
+    await inParallel(regenerating, PARALLEL_UNITS, async ({ unit, previous, instructions, isInstructionOnly }) => {
+      const previousCode = previous && current.code[previous.id];
+      const outcome = await writeUnitCode({
+        connector: run.usage.connector("sceneCode"),
+        workDir,
+        signal,
+        model: run.models.sceneCode,
+        checker,
+        storyboard,
+        transcript,
+        rules,
+        preset,
+        brief,
+        unit,
+        baseline,
+        review: (passing) =>
+          reviewUnit({ connector: run.usage.connector("visualReview"), workDir, signal, model: run.models.visualReview, stills, storyboard, transcript, rules, preset, brief, unit, code: passing }),
+        request: regenerateRequest(instructions, previousCode || undefined),
+        onProgress: (status, attempts) => show({ id: unit.id, rebuild: "regenerate", status, attempts }),
+      });
+
+      // A failed login, a plan limit or the cap ends the Revision as Stop does: no other agent would get further.
+      if (endsRun(outcome.error)) {
+        return halt(run, outcome.error);
+      }
+
+      // A tweak that couldn't be made leaves the Scene as it was, not as a fallback.
+      if (!outcome.code && isInstructionOnly) {
+        notApplied.push(...unit.scenes.map(({ id }) => id));
+        show({ id: unit.id, rebuild: "regenerate", status: statusOf(code[unit.id]), attempts: outcome.attempts });
+
+        return;
+      }
+
+      regenerated.set(unit.id, regeneratedOf(unit.id, outcome));
+      show({ id: unit.id, rebuild: "regenerate", status: statusOf(outcome.code ?? undefined), attempts: outcome.attempts });
+    });
+
+    regenerated.forEach((_, id) => delete code[id]);
+    regenerated.forEach(({ code: unitCode }, id) => Object.assign(code, Object.fromEntries([[id, unitCode]].filter(([, value]) => value))));
+
+    if (signal.aborted) {
+      return;
+    }
+
+    // The cap is a Stop: the Revision is discarded and the video stays as it was.
+    if (run.usage.isCapped()) {
+      return capped(run);
+    }
+
+    const { data: units, error: unitsError } = await storeUnits(run, plans, code);
+
+    if (unitsError) {
+      return publish(run, { state: "failed", affected: [], error: unitsError });
+    }
+
+    await commit(run, {
+      storyboard,
+      preset,
+      captions: writtenFor,
+      showsCaptions: captions,
+      units,
+      flags: plans.flatMap(({ unit, previous }) => flagsOf(unit.id, previous?.id, code, regenerated, current.version.flags)),
+      models: { ...current.version.models, ...run.models },
+      frameContractVersion: current.version.frameContractVersion,
+      createdAt: new Date(clock.now()).toISOString(),
+      origin: "revision",
+      revision: { request: run.request.message, scope: run.request.scope, summary, notApplied },
+    }, { storyboard, transcript, rules, preset, code, voiceover: run.voiceover, captions });
+  }
+
+  /**
+   * On an API key with "Approve cost before running" on, a Revision that regenerates Scenes waits after planning for
+   * the creator's approval of their estimated cost: `share` of a first generation. One that only re-renders never asks.
+   * Resolves to whether it goes on; Stop discards a waiting Revision.
+   */
+  async function approval(run: Run, share: number): Promise<boolean> {
+    const { job } = run;
+
+    if (share === 0 || !(await usage.needsApproval())) {
+      return !job.controller.signal.aborted;
+    }
+
+    const costUsd = await usage.estimateCost(run.duration * share);
+    const approved = new Promise<boolean>((resolve) => {
+      job.approve = () => resolve(true);
+      job.controller.signal.addEventListener("abort", () => resolve(false), { once: true });
+    });
+    publish(run, { state: "approval", costUsd });
+    const isApproved = await approved;
+    job.approve = undefined;
+    publish(run, { state: "rebuilding", costUsd: undefined });
+
+    return isApproved && !job.controller.signal.aborted;
+  }
+
+  /** A Revision whose run reached the cost cap ends as stopped, with no Version, the way Stop discards one. */
+  function capped(run: Run) {
+    halt(run, { code: "COST_CAP", message: "Cost cap reached" });
+  }
+
+  /**
+   * Ends the Revision as Stop does, for an error none of its agents would get past (a failed login, a plan limit, the
+   * cost cap): every agent's turn is interrupted, nothing is saved, and the queue behind it pauses. Says why.
+   */
+  function halt(run: Run, error: ConnectorError) {
+    publish(run, { state: "stopped", affected: [], error: { code: "AGENT_FAILED", error } });
+    run.job.controller.abort();
+  }
+
+  /**
+   * Saves the Revision's Version: the boundary after which Stop is too late. Checking for Stop and marking the run as
+   * committing happen with nothing awaited between them, so a Revision is either discarded or saved and `done`.
+   */
+  async function commit(run: Run, version: Omit<Version, "version">, source: Parameters<Previews["open"]>[0]) {
+    const { ref, job } = run;
+
+    if (job.controller.signal.aborted) {
+      return;
+    }
+
+    job.isCommitting = true;
+    publish(run, { state: "saving" });
+    const { data: number, error: saveError } = await projects.saveVersion(ref.projectId, ref.format, version);
+
+    if (saveError) {
+      return publish(run, { state: "failed", affected: [], error: fileErrorOf(saveError) });
+    }
+
+    const { preview, previewError } = await previewOf(source);
+    publish(run, { state: "done", affected: [], version: number, notApplied: version.revision?.notApplied, preview, previewError });
+  }
+
+  /** The units among `ids` the Checker finds fault with, each checked in place with the rest of the video as fallbacks. */
+  async function failingUnits(
+    storyboard: Storyboard,
+    transcript: Transcript,
+    rules: ReturnType<typeof storyboardRules>,
+    preset: StylePreset,
+    ids: string[],
+    code: Record<string, UnitCode>,
+  ): Promise<Result<Set<string>, { code: "CHECKER_UNAVAILABLE"; detail: string }>> {
+    if (ids.length === 0) {
+      return { data: new Set(), error: null };
+    }
+
+    const checked = Object.fromEntries(ids.map((id) => [id, code[id]!]));
+    const { data: report, error } = await checker.check({ storyboard, transcript, rules, preset, code: checked });
+
+    if (error) {
+      return { data: null, error: { code: "CHECKER_UNAVAILABLE", detail: detailOf(error) } };
+    }
+
+    return {
+      data: new Set(
+        report.findings
+          .map(({ unit }) => unit)
+          .filter((unit) => unit !== undefined)
+          .filter((unit) => ids.includes(unit)),
+      ),
+      error: null,
+    };
+  }
+
+  /** The Checker's findings on the page with no unit's code, needed only when some unit is regenerated. */
+  async function pageFindings(storyboard: Storyboard, transcript: Transcript, rules: ReturnType<typeof storyboardRules>, preset: StylePreset, regenerating: number): Promise<CheckFinding[]> {
+    if (regenerating === 0) {
+      return [];
+    }
+
+    const { data: report } = await checker.check({ storyboard, transcript, rules, preset, code: {} });
+
+    return report?.findings ?? [];
+  }
+
+  /** Stores new code and keeps the hashes of code that didn't change, in the Storyboard's unit order. */
+  async function storeUnits({ ref, current }: Run, plans: UnitRebuild[], code: Record<string, UnitCode>): Promise<Result<Record<string, string>, FileFailed>> {
+    const units: Record<string, string> = {};
+
+    for (const { unit, previous } of plans.filter(({ unit: { id } }) => code[id])) {
+      const previousHash = previous && current.code[previous.id] === code[unit.id] && current.version.units[previous.id];
+
+      if (previousHash) {
+        units[unit.id] = previousHash;
+        continue;
+      }
+
+      const { data: hash, error } = await projects.writeUnit(ref.projectId, ref.format, code[unit.id]!);
+
+      if (error) {
+        return { data: null, error: fileErrorOf(error) };
+      }
+
+      units[unit.id] = hash;
+    }
+
+    return { data: units, error: null };
+  }
+
+  async function previewOf(source: Parameters<Previews["open"]>[0]): Promise<{ preview?: Preview; previewError?: GenerationPreviewError }> {
+    const { data, error } = await previews.open(source).catch((cause: unknown) => ({ data: null, error: { code: "THROWN" as const, cause } }));
+
+    if (error?.code === "THROWN") {
+      return { previewError: { code: "PREVIEW_FAILED", message: String(error.cause) } };
+    }
+
+    if (error) {
+      return { previewError: { code: error.code, message: previewErrorMessage(error) } };
+    }
+
+    return { preview: data };
+  }
+
+  /** Streams the video's Revision: `idle` until a request is sent. */
+  async function watch(ref: VideoRef, signal?: AbortSignal): Promise<Result<AsyncGenerator<RevisionStatus>, ReviseError>> {
+    const { error } = await projects.video(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    return { data: storeOf(ref).store.watch(signal), error: null };
+  }
+
+  /**
+   * The Revision to offer once the word at `index` was fixed from `previous`: scoped to the current Version's Scenes
+   * whose copy still says the word as it was, or what whisper-cli heard. Nothing to offer before the first Version.
+   */
+  async function offerWordFix(ref: VideoRef, index: number, previous: string): Promise<Result<WordFixOffer | undefined, WordFixOfferError>> {
+    const { data: video, error } = await projects.video(ref.projectId, ref.format);
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    const words = video.transcript?.words ?? [];
+    const word = words[index];
+
+    if (!word) {
+      return { data: null, error: { code: "UNKNOWN_WORD", index, words: words.length } };
+    }
+
+    const { data: stored, error: storedError } = await projects.storedVideo(ref.projectId, ref.format);
+
+    if (storedError) {
+      return { data: null, error: projectError(storedError) };
+    }
+
+    if (!stored) {
+      return { data: undefined, error: null };
+    }
+
+    const { success, data: storyboard, error: parseError } = StoryboardSchema.safeParse(stored.version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "FILE_FAILED", path: `versions/${stored.version.version}.json`, message: parseError.message } };
+    }
+
+    const spellings = [previous, word.heard].filter((spelling) => spelling !== undefined);
+
+    return { data: wordFixOffer(storyboard, spellings, word.text), error: null };
+  }
+
+  return { start, approve, stop, watch, offerWordFix, isRunning, whenEnded };
+}
+
+function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {
+  if (need === "rerender") {
+    return "rerender";
+  }
+
+  return "regenerate";
+}
+
+function statusOf(code: UnitCode | undefined): SceneStatus {
+  if (code) {
+    return "ready";
+  }
+
+  return "fallback";
+}
+
+/** A regenerated unit's code, and the flag it carries: a fallback's findings, or the visual review's note. */
+function regeneratedOf(id: string, outcome: UnitOutcome): Regenerated {
+  if (!outcome.code) {
+    return { flag: { unit: id, kind: "fallback", reason: outcome.reason } };
+  }
+
+  if (outcome.note) {
+    return { code: outcome.code, flag: { unit: id, kind: "review-note", reason: outcome.note } };
+  }
+
+  return { code: outcome.code };
+}
+
+/** The Scenes of the current Version a Revision changes: those of every unit it rebuilds, and those it removes. */
+function affectedScenes(current: Storyboard, plans: UnitRebuild[]): string[] {
+  const rebuilt = new Set(
+    plans
+      .filter(({ rebuild }) => rebuild !== "keep")
+      .flatMap(({ previous, unit }) => [...(previous?.scenes ?? []), ...unit.scenes])
+      .map(({ id }) => id),
+  );
+  const kept = new Set(plans.flatMap(({ unit }) => unit.scenes).map(({ id }) => id));
+
+  return current.scenes.map(({ id }) => id).filter((id) => rebuilt.has(id) || !kept.has(id));
+}
+
+/**
+ * The flags a unit carries in the new Version: a regenerated unit's own, or the ones it had before. A unit left
+ * without code is always flagged as a fallback.
+ */
+function flagsOf(id: string, previousId: string | undefined, code: Record<string, UnitCode>, regenerated: Map<string, Regenerated>, previousFlags: Flag[]): Flag[] {
+  const fresh = regenerated.get(id);
+
+  if (fresh) {
+    return [fresh.flag].filter((flag) => flag !== undefined);
+  }
+
+  const carried = previousFlags.filter(({ unit }) => unit === previousId).map((flag) => ({ ...flag, unit: id }));
+
+  if (!code[id] && !carried.some(({ kind }) => kind === "fallback")) {
+    return [{ unit: id, kind: "fallback", reason: "It has no Scene code." }];
+  }
+
+  return carried;
+}
+
+function detailOf(error: { code: string; message?: string }): string {
+  return error.message ?? error.code;
+}
+
+function fileErrorOf(error: ProjectsError | VersionError): FileFailed {
+  if (error.code === "FILE_FAILED") {
+    return error;
+  }
+
+  return { code: "FILE_FAILED", path: "", message: error.code };
+}
+
+function projectError(error: ProjectsError | VersionError): Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> {
+  if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
+    return error;
+  }
+
+  return fileErrorOf(error);
+}

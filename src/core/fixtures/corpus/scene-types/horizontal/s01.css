@@ -1,0 +1,4 @@
+.hook { display: flex; flex-direction: column; justify-content: center; gap: 44px; }
+.headline { max-width: 1320px; }
+.kicker { display: flex; align-items: center; gap: 24px; }
+.kicker-rule { width: 96px; height: 6px; border-radius: 3px; background: var(--accent); }

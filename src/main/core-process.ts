@@ -1,35 +1,82 @@
 import { utilityProcess, type MessagePortMain, type UtilityProcess } from "electron";
-import { CORE_APP_VERSION_FLAG } from "../shared/ipc";
+import {
+  CORE_APP_DATA_FLAG,
+  CORE_APP_VERSION_FLAG,
+  CORE_CACHE_DIR_FLAG,
+  CORE_PROJECTS_DIR_FLAG,
+  CORE_SAMPLE_FLAG,
+  CORE_SHUTDOWN_MESSAGE,
+} from "../shared/ipc";
 
 type CoreProcessOptions = {
   entry: string;
   appVersion: string;
+  appDataDir: string;
+  projectsDir: string;
+  cacheDir: string;
+  /** Development builds only: the source tree's fixtures folder, for the fixture Project. */
+  sampleDir?: string;
   /** The core died unexpectedly; a restart is scheduled. */
   onExit: () => void;
   /** A replacement core is up; windows should reconnect. */
   onRestart: () => void;
+  /** A request from the core for something only main can do; the answer, if any, goes back to it. */
+  onRequest: (message: unknown) => Promise<unknown>;
 };
 
 /** Delay before each restart, by how many crashes happened within CRASH_WINDOW_MS. */
 const RESTART_DELAYS_MS = [0, 500, 2_000, 5_000];
 const CRASH_WINDOW_MS = 60_000;
 
+/** How long a quitting core gets to finish its last writes and release its locks. */
+const SHUTDOWN_TIMEOUT_MS = 3_000;
+
 /**
  * Owns the single core utilityProcess: forks it, hands it window ports, and restarts it
  * when it dies so windows stay open and reconnect.
  */
-export function startCoreProcess({ entry, appVersion, onExit, onRestart }: CoreProcessOptions) {
+export function startCoreProcess({
+  entry,
+  appVersion,
+  appDataDir,
+  projectsDir,
+  cacheDir,
+  sampleDir,
+  onExit,
+  onRestart,
+  onRequest,
+}: CoreProcessOptions) {
   let isRunning = true;
   let isStopping = false;
   let crashTimes: number[] = [];
   let child = fork();
 
   function fork(): UtilityProcess {
-    const proc = utilityProcess.fork(entry, [`${CORE_APP_VERSION_FLAG}${appVersion}`], {
+    const flags = [
+      `${CORE_APP_VERSION_FLAG}${appVersion}`,
+      `${CORE_APP_DATA_FLAG}${appDataDir}`,
+      `${CORE_PROJECTS_DIR_FLAG}${projectsDir}`,
+      `${CORE_CACHE_DIR_FLAG}${cacheDir}`,
+    ];
+
+    if (sampleDir) {
+      flags.push(`${CORE_SAMPLE_FLAG}${sampleDir}`);
+    }
+
+    const proc = utilityProcess.fork(entry, flags, {
       serviceName: "MotionBrief Core",
       stdio: "inherit",
     });
     proc.once("exit", handleExit);
+    proc.on("message", (message: unknown) => {
+      void onRequest(message)
+        .then((response) => {
+          if (response !== undefined) {
+            proc.postMessage(response);
+          }
+        })
+        .catch((error: unknown) => console.error("[main] a core request failed", error));
+    });
 
     return proc;
   }
@@ -72,13 +119,32 @@ export function startCoreProcess({ entry, appVersion, onExit, onRestart }: CoreP
 
       child.postMessage(null, [port]);
     },
+    /** Sends the core a message over its parent port; dropped while the core is down. */
+    send(message: unknown) {
+      if (isRunning) {
+        child.postMessage(message);
+      }
+    },
     /** Kills the core as a crash would. Development only, to exercise the restart path. */
     crash() {
       child.kill();
     },
+    /** Asks the core to release its Project locks and exit, and kills it if it hasn't within a few seconds. */
     stop() {
       isStopping = true;
-      child.kill();
+
+      if (!isRunning) {
+        return Promise.resolve();
+      }
+
+      return new Promise<void>((resolve) => {
+        const timer = setTimeout(() => child.kill(), SHUTDOWN_TIMEOUT_MS);
+        child.once("exit", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        child.postMessage(CORE_SHUTDOWN_MESSAGE);
+      });
     },
   };
 }

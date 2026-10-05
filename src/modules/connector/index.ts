@@ -1,0 +1,20 @@
+export { defineHostTool } from "./connector";
+export type {
+  AgentEvent,
+  AuthMethod,
+  ConnectionStatus,
+  Connector,
+  ConnectorCapabilities,
+  ConnectorError,
+  ConnectorSetup,
+  HostTool,
+  HostToolResult,
+  ModelUsage,
+  PlanUsage,
+  Result,
+  SandboxPolicy,
+  Session,
+  SessionOptions,
+  SetupError,
+  TurnStatus,
+} from "./connector";

@@ -1,0 +1,34 @@
+{
+  "format": "horizontal",
+  "scenes": [
+    {
+      "id": "s01",
+      "type": "architecture-diagram",
+      "from": 0,
+      "to": 10,
+      "transition": { "type": "cut" },
+      "content": {
+        "nodes": [
+          { "id": "browser", "label": "Browser", "icon": "lucide:laptop", "at": 1 },
+          { "id": "server", "label": "Server", "icon": "lucide:server", "at": 4 },
+          { "id": "database", "label": "Database", "icon": "lucide:database", "at": 10 }
+        ],
+        "edges": [
+          { "id": "browser-server", "from": "browser", "to": "server", "at": 4 },
+          { "id": "server-database", "from": "server", "to": "database", "at": 10 }
+        ]
+      }
+    },
+    {
+      "id": "s02",
+      "type": "stat-chart",
+      "from": 11,
+      "to": 17,
+      "content": {
+        "kind": "number",
+        "number": { "id": "round-trip", "value": 200, "unit": "ms", "label": "round trip", "at": 15 },
+        "caption": { "id": "caption", "text": "per request", "at": 12 }
+      }
+    }
+  ]
+}
