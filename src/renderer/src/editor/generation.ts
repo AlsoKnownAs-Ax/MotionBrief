@@ -52,6 +52,8 @@ type GenerationStore = {
   /** Regenerates flagged fallback units: these, or every flagged one. */
   retry: (units?: string[]) => Promise<void>;
   setReconnectOpen: (isOpen: boolean) => void;
+  /** Opens the Reconnect prompt after Claude's login failed mid-run: a generation's, a Retry's, a restyle's or a Revision's. */
+  askToReconnect: () => void;
   /** Back to the Project screen, keeping the Project open, after a stop before there was a video. */
   backToProject: () => void;
   /** Stops following and releases the Project, when the creator leaves the editor. */
@@ -86,9 +88,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
         }
 
         if (status.stopped?.cause === "authentication" && before?.stopped?.cause !== "authentication") {
-          // The login is checked again, so the prompt shows where it stands now.
-          void queryClient.invalidateQueries({ queryKey: orpc.connection.status.queryKey() });
-          set({ isReconnectOpen: true });
+          get().askToReconnect();
         }
 
         // A stopped restyle is discarded: the saved Version plays again in place of its partial preview.
@@ -231,6 +231,11 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       }
     },
     setReconnectOpen: (isOpen) => set({ isReconnectOpen: isOpen }),
+    askToReconnect: () => {
+      // The login is checked again, so the prompt shows where it stands now.
+      void queryClient.invalidateQueries({ queryKey: orpc.connection.status.queryKey() });
+      set({ isReconnectOpen: true });
+    },
     backToProject: () => {
       const project = followed;
       unfollow();

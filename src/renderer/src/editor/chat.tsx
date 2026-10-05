@@ -183,6 +183,19 @@ function Message(props: { message: ChatMessage; scenes: TimelineScene[] }) {
 }
 
 function Note({ message }: { message: ChatMessage }) {
+  const askToReconnect = useGeneration((state) => state.askToReconnect);
+
+  if (message.canReconnect) {
+    return (
+      <div role="alert" className="flex flex-col items-center gap-2 px-3 text-center text-app-xs text-status-fallback-ink">
+        {message.text}
+        <Button size="sm" onClick={askToReconnect}>
+          Reconnect
+        </Button>
+      </div>
+    );
+  }
+
   if (message.isProblem) {
     return (
       <p role="alert" className="px-3 text-center text-app-xs text-status-fallback-ink">

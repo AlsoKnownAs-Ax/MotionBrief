@@ -474,7 +474,8 @@ function ReconnectDialog() {
         <DialogHeader>
           <DialogTitle>Reconnect Claude</DialogTitle>
           <DialogDescription>
-            Claude’s login failed, so the run stopped and kept every finished Scene. Reconnect, then Retry the flagged Scenes.
+            Claude’s login failed, so the run stopped. A generation keeps every finished Scene; a Revision or restyle leaves the video as it was.
+            Reconnect, then Retry the flagged Scenes or ask again.
           </DialogDescription>
         </DialogHeader>
         <ConnectClaude />
