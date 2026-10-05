@@ -152,7 +152,7 @@ function PresetList({ current, isBusy, onChoose }: { current: StylePreset; isBus
             <PresetSample preset={listed} className="w-16 shrink-0 rounded-sm" />
             <span className="flex min-w-0 flex-1 items-center gap-2">
               <span className="truncate text-app-sm">{listed.name}</span>
-              {listed.readOnly ? null : <Badge>Yours</Badge>}
+              {!listed.readOnly ? <Badge>Yours</Badge> : null}
             </span>
             {listed.id === current.id ? <CheckIcon className="size-4 shrink-0" aria-hidden="true" /> : null}
           </button>

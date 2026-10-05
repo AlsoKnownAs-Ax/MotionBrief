@@ -306,9 +306,15 @@ function entryLines(entry: ChatEntry, scenes: TimelineScene[]): NewMessage[] {
 
   const state = entry.state ?? "queued";
 
-  const approved: NewMessage[] = entry.approvedUsd ? [{ role: "event", text: `Approved about ${costLabel(entry.approvedUsd)}` }] : [];
+  return [{ role: "creator", text: entry.message ?? "", scope: entry.scope, isQueued: state === "queued" }, ...approvedLines(entry), ...OUTCOMES[state](entry, scenes)];
+}
 
-  return [{ role: "creator", text: entry.message ?? "", scope: entry.scope, isQueued: state === "queued" }, ...approved, ...OUTCOMES[state](entry, scenes)];
+function approvedLines({ approvedUsd }: ChatEntry): NewMessage[] {
+  if (!approvedUsd) {
+    return [];
+  }
+
+  return [{ role: "event", text: `Approved about ${costLabel(approvedUsd)}` }];
 }
 
 function failureText(error: RevisionError | undefined) {

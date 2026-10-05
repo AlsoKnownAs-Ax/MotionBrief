@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { core } from "@renderer/core/connection";
+import { errorMessage } from "@renderer/lib/utils";
 import type { ExportError, ExportStage, Format } from "../../../contract";
 import { useOpenVideo } from "./open-video";
 
@@ -67,7 +68,7 @@ export const useExport = create<ExportStore>((set) => ({
       }
     } catch (error) {
       if (!current.signal.aborted) {
-        set({ job: { state: "failed", error: { code: "UNEXPECTED", message: error instanceof Error ? error.message : String(error) } } });
+        set({ job: { state: "failed", error: { code: "UNEXPECTED", message: errorMessage(error) } } });
       }
     } finally {
       controller = undefined;

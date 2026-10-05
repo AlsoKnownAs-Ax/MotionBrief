@@ -66,20 +66,38 @@ export function NewProject() {
         <Button variant="ghost" size="icon-sm" aria-label="Back to Home" onClick={openHome}>
           <ArrowLeftIcon />
         </Button>
-        <h1 className="min-w-0 truncate text-app-body font-medium">{openedProject ? project?.name : "New Project"}</h1>
+        <h1 className="min-w-0 truncate text-app-body font-medium">{screenTitle(openedProject, project)}</h1>
         {project ? <SavedStatus isSaving={savesRunning > 0} /> : null}
       </div>
       {project ? (
         <ProjectEditor
           project={project}
           onProject={setProject}
-          onSaving={(isSaving) => setSavesRunning((running) => running + (isSaving ? 1 : -1))}
+          onSaving={(isSaving) => setSavesRunning((running) => running + savesChange(isSaving))}
           onGenerating={() => openGenerating(project)}
         />
       ) : null}
-      {project ? null : <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} />}
+      {!project ? <VoiceoverDrop isCreating={create.isPending} error={create.error} onVoiceover={start} /> : null}
     </div>
   );
+}
+
+/** A Project opened from Home goes by its name; a new one is "New Project" until it is made. */
+function screenTitle(openedProject: Project | undefined, project: Project | undefined) {
+  if (!openedProject) {
+    return "New Project";
+  }
+
+  return project?.name;
+}
+
+/** A save starting adds one to those running; one ending takes one away. */
+function savesChange(isSaving: boolean) {
+  if (isSaving) {
+    return 1;
+  }
+
+  return -1;
 }
 
 /**

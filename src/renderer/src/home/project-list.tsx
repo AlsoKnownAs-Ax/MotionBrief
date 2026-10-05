@@ -195,7 +195,7 @@ function ProjectRow({ project, isRenaming, onRename, onRenamed }: ProjectRowProp
         ))}
       </div>
       <span role="cell" className="text-app-sm text-ink-muted tabular-nums">
-        {project.duration === undefined ? NO_VALUE : clockLabel(project.duration)}
+        {durationLabel(project.duration)}
       </span>
       <span role="cell" className="text-app-sm text-ink-muted tabular-nums">
         {project.versions}
@@ -213,6 +213,23 @@ function ProjectRow({ project, isRenaming, onRename, onRenamed }: ProjectRowProp
       </div>
     </div>
   );
+}
+
+function durationLabel(duration: number | undefined) {
+  if (duration === undefined) {
+    return NO_VALUE;
+  }
+
+  return clockLabel(duration);
+}
+
+/** The field is described by its error while it has one. */
+function errorId(id: string, error: string | undefined) {
+  if (!error) {
+    return undefined;
+  }
+
+  return `${id}-error`;
 }
 
 async function duplicate({ path }: ProjectSummary) {
@@ -291,7 +308,7 @@ function RenameField({ project, onDone }: { project: ProjectSummary; onDone: () 
         onFocus={(event) => event.currentTarget.select()}
         aria-label="Project name"
         aria-invalid={error !== undefined}
-        aria-describedby={error ? `${id}-error` : undefined}
+        aria-describedby={errorId(id, error)}
         value={draft}
         disabled={isSaving}
         className="h-8"

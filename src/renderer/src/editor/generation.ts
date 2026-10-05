@@ -2,6 +2,7 @@ import { ORPCError, safe } from "@orpc/client";
 import { create } from "zustand";
 import { useToast } from "@renderer/components/toast";
 import { closeProject, core, orpc, queryClient, rememberOpenProject, useCoreConnection } from "@renderer/core/connection";
+import { errorMessage } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import type { Format, GenerationError, GenerationStatus, GenerationStop, OpenedVideo, Project, StylePreset, VideoRef } from "../../../contract";
@@ -103,7 +104,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
       }
     })().catch((error: unknown) => {
       if (!current.signal.aborted) {
-        set({ lostError: error instanceof Error ? error.message : String(error) });
+        set({ lostError: errorMessage(error) });
       }
     });
   }
@@ -284,19 +285,24 @@ function openErrorMessage(error: unknown) {
   return projectErrorMessage(error);
 }
 
-/** One sentence on why a generation ended without a video. */
-export function generationErrorMessage(error: GenerationError) {
-  switch (error.code) {
-    case "STORYBOARD_INVALID": {
-      const [first] = error.issues;
+/** One sentence on why a generation ended without a video, per error code. */
+const GENERATION_ERRORS = {
+  STORYBOARD_INVALID: ({ issues: [first] }) => `The agent couldn't write a valid Storyboard after 2 retries${firstIssue(first)}`,
+  AGENT_FAILED: ({ error }) => `The agent couldn't run: ${error.message}`,
+  FILE_FAILED: ({ path, message }) => `Couldn't save to ${path || "the Project folder"}: ${message}`,
+} satisfies { [Code in GenerationError["code"]]: (error: Extract<GenerationError, { code: Code }>) => string };
 
-      return `The agent couldn't write a valid Storyboard after 2 retries${first ? `: ${first.message}` : "."}`;
-    }
-    case "AGENT_FAILED":
-      return `The agent couldn't run: ${error.error.message}`;
-    case "FILE_FAILED":
-      return `Couldn't save to ${error.path || "the Project folder"}: ${error.message}`;
+export function generationErrorMessage(error: GenerationError) {
+  // The table is keyed by code, so each entry receives the error of its own code.
+  return (GENERATION_ERRORS[error.code] as (error: GenerationError) => string)(error);
+}
+
+function firstIssue(issue: { message: string } | undefined) {
+  if (!issue) {
+    return ".";
   }
+
+  return `: ${issue.message}`;
 }
 
 const RETRY_MESSAGES: Record<string, string> = {

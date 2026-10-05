@@ -36,11 +36,20 @@ export function useRemovePreset() {
   return useMutation({ mutationFn: (id: string) => core.style.remove({ id }), onSuccess: refreshPresets });
 }
 
+/** Without a Preset there is nothing to draw, so the query waits. */
+function sampleInput(preset: StylePreset | undefined) {
+  if (!preset) {
+    return skipToken;
+  }
+
+  return { preset };
+}
+
 /** The still of a Preset's sample, drawn by the core in the bundled frame; the same Preset always draws the same. */
 export function usePresetSample(preset: StylePreset | undefined) {
   return useQuery(
     orpc.style.sample.queryOptions({
-      input: preset ? { preset } : skipToken,
+      input: sampleInput(preset),
       staleTime: Infinity,
       placeholderData: keepPreviousData,
       retry: false,

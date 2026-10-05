@@ -28,7 +28,7 @@ export function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <TitleBar actions={Actions && <Actions />}>{Toolbar && <Toolbar />}</TitleBar>
+      <TitleBar actions={Actions ? <Actions /> : null}>{Toolbar ? <Toolbar /> : null}</TitleBar>
       <LoginExpiryBanner />
       <UpdateBanner />
       <Screen />

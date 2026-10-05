@@ -99,7 +99,7 @@ export function GenerateBar({ project, transcription, onGenerating }: GenerateBa
           </Button>
         </span>
       ) : (
-        <span className="min-w-0 flex-1 truncate text-app-sm text-ink-muted">{estimate ? estimateLine(estimate) : "Estimating the time this takes."}</span>
+        <span className="min-w-0 flex-1 truncate text-app-sm text-ink-muted">{estimateText(estimate)}</span>
       )}
       {generate.error && !isApprovalRequest(generate.error) ? (
         <span role="alert" className="flex min-w-0 items-center gap-1.5 text-app-xs text-status-fallback-ink">
@@ -139,6 +139,14 @@ function approvalFor(pending: PendingApproval | undefined, method: AuthMethod | 
 
 export function costLabel({ low, high }: CostRange) {
   return `$${low.toFixed(2)}-$${high.toFixed(2)}`;
+}
+
+function estimateText(estimate: GenerationEstimate | undefined) {
+  if (!estimate) {
+    return "Estimating the time this takes.";
+  }
+
+  return estimateLine(estimate);
 }
 
 /** What generating will take, in one line: time, and on an API key cost and whether it needs approving. */

@@ -4,7 +4,7 @@ import { Badge } from "@renderer/components/ui/badge";
 import { Button } from "@renderer/components/ui/button";
 import { Progress } from "@renderer/components/ui/progress";
 import { WordEditor } from "@renderer/components/word-editor";
-import { cn } from "@renderer/lib/utils";
+import { cn, rovingTabIndex } from "@renderer/lib/utils";
 import { useTranscriptionModelStep } from "@renderer/setup/transcription-model-step";
 import type { TranscriptionError, TranscriptionStatus, TranscriptWord } from "../../../contract";
 import { clockLabel, languageName } from "./labels";
@@ -255,14 +255,15 @@ function FixableWords({ words, onFixWord }: { words: TranscriptWord[]; onFixWord
                       }
                     }}
                     type="button"
-                    tabIndex={index === focused ? 0 : -1}
+                    tabIndex={rovingTabIndex(index === focused)}
                     aria-keyshortcuts="Enter F2"
-                    title={text === heard ? undefined : `Fixed from “${heard}”`}
+                    title={fixedTitle(text, heard)}
                     className={cn("cursor-text rounded-[4px] hover:bg-surface-2", text !== heard && "underline decoration-dotted underline-offset-[3px]")}
                     onFocus={() => setFocused(index)}
                     onDoubleClick={() => setEditing(index)}
                     onKeyDown={(event) => {
                       const moves: Record<string, number> = { ArrowLeft: -1, ArrowRight: 1 };
+                      const ends: Record<string, number> = { Home: 0, End: words.length - 1 };
 
                       if (event.key === "Enter" || event.key === "F2") {
                         event.preventDefault();
@@ -270,9 +271,9 @@ function FixableWords({ words, onFixWord }: { words: TranscriptWord[]; onFixWord
                       } else if (moves[event.key] !== undefined) {
                         event.preventDefault();
                         moveFocus(index + moves[event.key]!);
-                      } else if (event.key === "Home" || event.key === "End") {
+                      } else if (ends[event.key] !== undefined) {
                         event.preventDefault();
-                        moveFocus(event.key === "Home" ? 0 : words.length - 1);
+                        moveFocus(ends[event.key]!);
                       }
                     }}
                   >
@@ -289,6 +290,15 @@ function FixableWords({ words, onFixWord }: { words: TranscriptWord[]; onFixWord
 }
 
 /** Splits the words, by index, wherever the speaker paused for a breath. */
+/** A fixed word's tooltip names what whisper-cli heard. */
+function fixedTitle(text: string, heard: string) {
+  if (text === heard) {
+    return undefined;
+  }
+
+  return `Fixed from “${heard}”`;
+}
+
 function paragraphs(words: TranscriptWord[]) {
   return words.reduce<number[][]>((split, word, index) => {
     const before = words[index - 1];

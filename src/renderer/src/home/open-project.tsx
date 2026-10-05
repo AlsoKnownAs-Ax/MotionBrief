@@ -185,8 +185,21 @@ function TooNewPrompt({ project }: { project: TooNewProject }) {
 }
 
 function tooNewMessage({ name, appVersion }: TooNewProject, currentVersion?: string) {
-  const savedBy = appVersion ? `MotionBrief ${appVersion}` : "a newer MotionBrief";
-  const current = currentVersion ? `This is version ${currentVersion}, which` : "This version";
+  return `"${name}" was saved by ${savedBy(appVersion)}. ${thisVersion(currentVersion)} can't open it without risking your work.`;
+}
 
-  return `"${name}" was saved by ${savedBy}. ${current} can't open it without risking your work.`;
+function savedBy(appVersion: string | undefined) {
+  if (!appVersion) {
+    return "a newer MotionBrief";
+  }
+
+  return `MotionBrief ${appVersion}`;
+}
+
+function thisVersion(currentVersion: string | undefined) {
+  if (!currentVersion) {
+    return "This version";
+  }
+
+  return `This is version ${currentVersion}, which`;
 }

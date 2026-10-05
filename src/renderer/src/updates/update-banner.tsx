@@ -19,7 +19,7 @@ export function UpdateBanner() {
   return (
     <div role="status" className="flex h-9 shrink-0 items-center gap-3 border-b border-hairline-soft bg-surface-1 px-4 text-app-sm">
       <span className="flex-1 text-ink-muted">
-        {isExporting ? `MotionBrief ${readyVersion} is ready. Restart once your export finishes.` : `MotionBrief ${readyVersion} is ready.`}
+        {readyText(readyVersion, isExporting)}
       </span>
       <Button variant="ghost" size="sm" onClick={() => setDismissedVersion(readyVersion)}>
         Later
@@ -29,4 +29,12 @@ export function UpdateBanner() {
       </Button>
     </div>
   );
+}
+
+function readyText(readyVersion: string, isExporting: boolean) {
+  if (isExporting) {
+    return `MotionBrief ${readyVersion} is ready. Restart once your export finishes.`;
+  }
+
+  return `MotionBrief ${readyVersion} is ready.`;
 }
