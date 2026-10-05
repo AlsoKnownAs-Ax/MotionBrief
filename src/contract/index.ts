@@ -695,6 +695,8 @@ export const OpenedVideoSchema = z.object({
   version: z.number().int().positive().optional(),
   /** Whether the video shows Captions. */
   captions: z.boolean().optional(),
+  /** The Style Preset snapshot the Version is drawn in, which the Style tab changes. */
+  preset: StylePresetSchema.optional(),
   preview: PreviewSchema.optional(),
   /** Present when this open re-checked the units after a frame major update and some failed. */
   frameUpdate: FrameUpdateSchema.optional(),
@@ -702,16 +704,30 @@ export const OpenedVideoSchema = z.object({
 
 /**
  * What made a Version: a first generation; the re-check after a frame major update, which flagged units that no
- * longer pass; a Retry of flagged units; a Revision; or a Restore of an earlier Version.
+ * longer pass; a Retry of flagged units; a Revision; a Restore of an earlier Version; a Style tab swap, re-rendered
+ * with no agent; or a restyle, which regenerated every unit.
  */
-export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore"]);
+export const VersionOriginSchema = z.enum(["generation", "frame-update", "retry", "revision", "restore", "style", "restyle"]);
+
+/**
+ * What a change in the Style tab costs: nothing, when it changes nothing; a `swap` (Palette, typography, caption style,
+ * Captions on or off) re-renders with no agent; a `restyle` (another Style Preset, Motion, direction, treatments,
+ * Transitions or Canvas preference) regenerates every unit.
+ */
+export const StyleChangeKindSchema = z.enum(["none", "swap", "restyle"]);
+
+/** What a style change did: a swap answers with the video as it now plays; a restyle streams through `generation`. */
+export const StyleChangedSchema = z.object({
+  change: StyleChangeKindSchema,
+  video: OpenedVideoSchema.optional(),
+});
 
 /** A saved Version as the Versions tab lists it. */
 export const VersionSummarySchema = z.object({
   version: z.number().int().positive(),
   origin: VersionOriginSchema,
   createdAt: z.iso.datetime(),
-  /** What a Revision was asked, and its one-line summary. */
+  /** What a Revision was asked, and its one-line summary; a style change's summary says what it changed. */
   request: z.string().optional(),
   summary: z.string().optional(),
   /** The Version a Restore copied. */
@@ -1047,9 +1063,9 @@ export const coreContract = {
     /** How long, and on an API key what, generating the video will take, and whether Generate needs approving. */
     estimate: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(GenerationEstimateSchema),
     /**
-     * Turns the video's Captions on or off and saves the choice with the video; a video not generated yet is then
-     * generated with it. Re-renders with no agent run and answers with the video as it plays now, as `open` does.
-     * The Style tab's switch, which also saves a Version, builds on this.
+     * Turns the video's Captions on or off. A video not generated yet saves it as the choice its generation takes; a
+     * generated video's switch is a swap, as `changeStyle` makes it: a new Version, which alone says whether Captions
+     * show, re-rendered with no agent run. Answers with the video as it plays now, as `open` does.
      */
     setCaptions: oc
       .errors({
@@ -1060,9 +1076,47 @@ export const coreContract = {
         INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
         UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
         VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+        /** A generation, Retry, Revision or Restore is running; switch once it ends. */
+        BUSY: { data: z.object({ projectId: z.string() }) },
       })
       .input(VideoRefSchema.extend({ captions: z.boolean() }))
       .output(OpenedVideoSchema),
+    /**
+     * Changes the video's look from the Style tab: `preset` is the snapshot to draw it in (another Style Preset, or the
+     * current one with instant changes) and `captions` turns Captions on or off. A swap saves a new Version at once,
+     * re-rendered with no agent run, and answers with it. A restyle regenerates every unit, keeping the Storyboard
+     * unless the new Preset's allowed Transitions or Canvas preference rule it out, in which case it is planned again:
+     * it always needs `confirmed`, which on an API key also approves its cost. It starts and returns at once; progress
+     * streams through `generation`, and it saves a Version as a first generation does.
+     */
+    changeStyle: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+        TRANSCRIPT_NOT_READY: { data: z.object({ projectId: z.string() }) },
+        /** The video has no Version yet; its first generation takes the Project's Style Preset. */
+        NO_VIDEO: { data: z.object({ format: FormatSchema }) },
+        INVALID_VERSION: { data: z.object({ path: z.string(), message: z.string() }) },
+        INVALID_STORYBOARD: { data: z.object({ issues: z.array(StoryboardIssueSchema) }) },
+        UNKNOWN_UNIT: { data: z.object({ unit: z.string(), units: z.array(z.string()) }) },
+        VOICEOVER_MISSING: { data: z.object({ path: z.string() }) },
+        /** A generation, Retry, Revision or Restore is running; change the style once it ends. */
+        BUSY: { data: z.object({ projectId: z.string() }) },
+        /**
+         * The change is a restyle: ask the creator, then change again with `confirmed`. `replans` when the Storyboard
+         * must be planned again; `costUsd` on an API key, priced like a first generation.
+         */
+        RESTYLE_UNCONFIRMED: { data: z.object({ replans: z.boolean(), costUsd: CostRangeSchema.optional() }) },
+      })
+      .input(
+        VideoRefSchema.extend({
+          preset: StylePresetSchema.optional(),
+          captions: z.boolean().optional(),
+          /** The creator confirmed the restyle, and on an API key its cost. */
+          confirmed: z.boolean().optional(),
+        }),
+      )
+      .output(StyleChangedSchema),
     /**
      * Generates the video from the Project's Transcript: a Storyboard, then each unit's Scene code, checked and
      * retried, saved as Version 1. The Project's first video is drawn in its Style Preset; the other Format's
@@ -1141,7 +1195,8 @@ export const coreContract = {
       .output(z.array(VersionSummarySchema)),
     /**
      * Restores an earlier Version by saving a copy of it as the newest Version, so nothing is lost; its units are
-     * shared, not copied. The Transcript, word fixes and all, stays as it is. Answers with the new Version's number.
+     * shared, not copied. The Transcript, word fixes and all, stays as it is; Captions show as they did in that
+     * Version. Answers with the new Version's number.
      */
     restore: oc
       .errors({
@@ -1299,6 +1354,8 @@ export type RevisionStatus = z.infer<typeof RevisionStatusSchema>;
 export type FrameUpdate = z.infer<typeof FrameUpdateSchema>;
 export type OpenedVideo = z.infer<typeof OpenedVideoSchema>;
 export type VersionOrigin = z.infer<typeof VersionOriginSchema>;
+export type StyleChangeKind = z.infer<typeof StyleChangeKindSchema>;
+export type StyleChanged = z.infer<typeof StyleChangedSchema>;
 export type VersionSummary = z.infer<typeof VersionSummarySchema>;
 export type ChatRequestState = z.infer<typeof ChatRequestStateSchema>;
 export type ChatEntry = z.infer<typeof ChatEntrySchema>;

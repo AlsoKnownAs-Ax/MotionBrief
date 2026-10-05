@@ -64,8 +64,11 @@ export type SavedVersion = {
   storyboard: unknown;
   preset: StylePreset;
   captions: boolean;
+  /** The hash of each unit's Scene code in `units/`. */
+  units: Record<string, string>;
   flags: { unit: string; kind: string }[];
   code: Record<string, UnitCode>;
+  style?: string;
 };
 
 /** What replaying a run through the core API left behind. */
@@ -79,6 +82,10 @@ export type ReplayedRun = {
   versions: SavedVersion[];
   /** The units Scene-code subagents were asked to write, for the generation and then each Revision. */
   written: string[][];
+  /** Every turn any agent was asked so far, such as by a style change after the replay. */
+  asked: () => number;
+  /** The video's saved Versions as they are now. */
+  saved: () => Promise<SavedVersion[]>;
   /** Every corpus file this run reads, loaded. */
   corpus: {
     storyboard: unknown;
@@ -132,7 +139,18 @@ export async function replayRun(entry: CorpusEntry, root: string, fixturesDir = 
     written[index + 1] = regenerated(before, replay);
   }
 
-  return { core, project, video, generation, revisions, versions: await savedVersions(project, video.format), written, corpus };
+  return {
+    core,
+    project,
+    video,
+    generation,
+    revisions,
+    versions: await savedVersions(project, video.format),
+    written,
+    asked: () => replay.asked.length,
+    saved: () => savedVersions(project, video.format),
+    corpus,
+  };
 }
 
 /** The turn a unit recorded as a fallback replays: the agent's turn fails, so the unit ends without code, as it did. */
@@ -242,7 +260,7 @@ async function savedVersions(project: Project, format: VideoRef["format"]): Prom
 
   return Promise.all(
     files.map(async (file) => {
-      const saved = JSON.parse(await readFile(join(dir, "versions", file), "utf8")) as Omit<SavedVersion, "number" | "code"> & { units: Record<string, string> };
+      const saved = JSON.parse(await readFile(join(dir, "versions", file), "utf8")) as Omit<SavedVersion, "number" | "code">;
       const code = await Promise.all(
         Object.entries(saved.units).map(async ([unit, hash]) => [unit, JSON.parse(await readFile(join(dir, "units", `${hash}.json`), "utf8")) as UnitCode] as const),
       );

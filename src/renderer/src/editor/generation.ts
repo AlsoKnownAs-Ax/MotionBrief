@@ -3,7 +3,7 @@ import { create } from "zustand";
 import { core, orpc, queryClient } from "@renderer/core/connection";
 import { useNavigation } from "@renderer/navigation";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
-import type { Format, GenerationError, GenerationStatus, GenerationStop, OpenedVideo, Project, VideoRef } from "../../../contract";
+import type { Format, GenerationError, GenerationStatus, GenerationStop, OpenedVideo, Project, StylePreset, VideoRef } from "../../../contract";
 import { useOpenVideo } from "./open-video";
 import { usePlayback } from "./playback";
 
@@ -13,6 +13,8 @@ export type StoredVideo = {
   version?: number;
   /** Whether it shows Captions, or will once generated, as the creator chose; absent for the Format's default. */
   captions?: boolean;
+  /** The Style Preset snapshot the newest Version is drawn in. */
+  preset?: StylePreset;
   error?: string;
 };
 
@@ -86,7 +88,8 @@ export const useGeneration = create<GenerationStore>((set, get) => {
           set({ isReconnectOpen: true });
         }
 
-        if (status.state === "done" && before?.state !== "done") {
+        // A stopped restyle is discarded: the saved Version plays again in place of its partial preview.
+        if ((status.state === "done" && before?.state !== "done") || (status.state === "idle" && isGenerating(before))) {
           void openStored(video);
         }
       }
@@ -120,7 +123,7 @@ export const useGeneration = create<GenerationStore>((set, get) => {
   }
 
   function showOpened(opened: OpenedVideo) {
-    set({ stored: { isLoading: false, version: opened.version, captions: opened.captions } });
+    set({ stored: { isLoading: false, version: opened.version, captions: opened.captions, preset: opened.preset } });
 
     if (opened.preview && !isGenerating(get().status)) {
       useOpenVideo.getState().showPreview(opened.preview);

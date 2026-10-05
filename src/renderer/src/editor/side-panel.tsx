@@ -1,8 +1,8 @@
-import { PaletteIcon, type LucideIcon } from "lucide-react";
 import { Tabs } from "radix-ui";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { Chat } from "./chat";
 import { useRevision } from "./revision";
+import { StyleTab } from "./style-tab";
 import { Versions } from "./versions";
 
 const TABS = [
@@ -40,23 +40,11 @@ export function SidePanel({ width }: { width: number }) {
         <Chat />
       </Tabs.Content>
       <Tabs.Content value="style" className="flex min-h-0 flex-1 outline-none">
-        <EmptyState icon={PaletteIcon} title="Blueprint">
-          This video&rsquo;s Style Preset. Palette and typography changes show here.
-        </EmptyState>
+        <StyleTab />
       </Tabs.Content>
       <Tabs.Content value="versions" className="flex min-h-0 flex-1 outline-none">
         <Versions />
       </Tabs.Content>
     </Tabs.Root>
-  );
-}
-
-function EmptyState({ icon: Icon, title, children }: { icon: LucideIcon; title: string; children: ReactNode }) {
-  return (
-    <div className="m-auto flex max-w-[260px] flex-col items-center gap-2 px-3 py-6 text-center">
-      <Icon className="size-5 text-ink-muted" aria-hidden="true" />
-      <p className="text-app-sm font-medium">{title}</p>
-      <p className="text-app-xs leading-[1.45] text-ink-muted">{children}</p>
-    </div>
   );
 }
