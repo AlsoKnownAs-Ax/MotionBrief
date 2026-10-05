@@ -2,11 +2,12 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { CoreClient, Project, StylePreset, UnitCode, VideoRef } from "../contract";
+import type { CoreClient, GenerationStatus, Project, StylePreset, UnitCode, VideoRef } from "../contract";
+import type { AgentEvent } from "../modules/connector";
 import { FRAME_CONTRACT_VERSION } from "../modules/frame";
 import { BUNDLED_PALETTES, bundledPreset, FONT_PAIRINGS } from "../modules/style";
 import type { ReplayScript } from "./fixtures/replay-connector";
-import { connect, failsWith, newProject, sha256, storyboard, submitsCode, submitsReview, unitCode, watch } from "./test-support/generation";
+import { connect, failsWith, newProject, sha256, storyboard, submitsCode, submitsReview, submitsStoryboard, unitCode, watch } from "./test-support/generation";
 
 // A restyle checks every unit it regenerates in the pinned chrome-headless-shell.
 const RUN_TIMEOUT_MS = 180_000;
@@ -30,7 +31,7 @@ async function generatedVideo(script: ReplayScript) {
   const code = Object.fromEntries(await Promise.all(UNITS.map(async (unit) => [unit, await unitCode("good", unit)] as const)));
   const units = await saveVersion1(project, code);
 
-  return { core, replay, project, video, units };
+  return { core, replay, dir, project, video, units };
 }
 
 async function saveVersion1(project: Project, code: Record<string, UnitCode>) {
@@ -60,8 +61,47 @@ async function readVersion(project: Project, number: number) {
   return JSON.parse(await readFile(join(project.path, "horizontal", "versions", `${number}.json`), "utf8")) as Record<string, unknown> & { preset: StylePreset };
 }
 
-async function captionsChoice(project: Project) {
-  return (JSON.parse(await readFile(join(project.path, "horizontal", "video.json"), "utf8")) as { captions?: boolean }).captions;
+/** Leaves a Captions choice in the video's document, as a choice saved before the Version it belongs to would. */
+async function leaveCaptionsChoice(project: Project, captions: boolean) {
+  const path = join(project.path, "horizontal", "video.json");
+  const document = JSON.parse(await readFile(path, "utf8").catch(() => "{}")) as Record<string, unknown>;
+  await writeFile(path, `${JSON.stringify({ ...document, captions }, null, 2)}\n`);
+}
+
+function generationRecord(project: Project) {
+  return readFile(join(project.path, "horizontal", "generation.json"), "utf8").then(
+    () => true,
+    () => false,
+  );
+}
+
+/** The Project's saved Transcript, as a Storyboard is checked against it. */
+async function transcriptOf(core: CoreClient, project: Project) {
+  for await (const { state, duration, words } of await core.project.transcription({ projectId: project.id })) {
+    if (state === "done") {
+      return { duration, words: words.map(({ text, start }) => ({ text, start })) };
+    }
+  }
+
+  throw new Error("The transcription stream ended");
+}
+
+/** The fixture Storyboard planned again for Whiteboard, which allows no cuts: crossfades in their place. */
+const whiteboardStoryboard = JSON.parse(JSON.stringify(storyboard).replaceAll('"type":"cut"', '"type":"crossfade"')) as unknown;
+
+/**
+ * What the agents hand in over `runs` restyles: `good` code for s01-s04, each reviewed as looking right, and s05 never
+ * handed in, so it stays a fallback.
+ */
+async function restyleTurns(runs: number): Promise<Record<string, AgentEvent[][]>> {
+  const looksRight = submitsReview({ looksRight: true, problems: [], note: "" });
+  const code = await Promise.all(UNITS.map(async (unit) => [unit, submitsCode(await unitCode("good", unit))] as const));
+
+  return {
+    ...Object.fromEntries(code.map(([unit, turn]) => [`scene-code ${unit}`, Array.from({ length: runs }, () => turn)])),
+    ...Object.fromEntries(UNITS.map((unit) => [`review ${unit}`, Array.from({ length: runs }, () => looksRight)])),
+    "scene-code s05": Array.from({ length: runs }, () => failsWith({ code: "SERVICE_ERROR", message: "Overloaded" })),
+  };
 }
 
 async function newestVersion(core: CoreClient, video: VideoRef) {
@@ -96,14 +136,13 @@ describe("swaps from the Style tab", () => {
     expect(replay.asked).toEqual([]);
   });
 
-  it("swaps Captions on: a Version, the video's choice, and Captions drawn", async () => {
+  it("swaps Captions on: a Version that shows them", async () => {
     const { core, replay, project, video, units } = connected;
 
     const changed = await core.video.changeStyle({ ...video, captions: true });
 
     expect(changed).toMatchObject({ change: "swap", video: { version: 5, captions: true } });
     expect(await readVersion(project, 5)).toMatchObject({ origin: "style", style: "Captions on", captions: false, showsCaptions: true, units });
-    expect(await captionsChoice(project)).toBe(true);
     expect(replay.asked).toEqual([]);
   });
 
@@ -130,14 +169,21 @@ describe("swaps from the Style tab", () => {
   });
 
   it("restores a Version as it looked, its Captions included", async () => {
-    const { core, project, video } = connected;
+    const { core, video } = connected;
 
     const { version } = await core.video.restore({ ...video, version: 1 });
     const opened = await core.video.open(video);
 
     expect(version).toBe(6);
     expect(opened).toMatchObject({ version: 6, captions: false, preset: BLUEPRINT });
-    expect(await captionsChoice(project)).toBe(false);
+  });
+
+  it("plays Captions as the newest Version says, whatever Captions choice the video's document holds", async () => {
+    const { core, project, video } = connected;
+
+    await leaveCaptionsChoice(project, true);
+
+    expect(await core.video.open(video)).toMatchObject({ version: 6, captions: false });
   });
 
   it("makes the Captions switch of a generated video a Version", async () => {
@@ -202,13 +248,8 @@ describe("a restyle", () => {
   let connected: Awaited<ReturnType<typeof generatedVideo>>;
 
   beforeAll(async () => {
-    const looksRight = submitsReview({ looksRight: true, problems: [], note: "" });
-    connected = await generatedVideo({
-      storyboard: [failsWith({ code: "SERVICE_ERROR", message: "Overloaded" })],
-      ...Object.fromEntries(await Promise.all(UNITS.map(async (unit) => [`scene-code ${unit}`, [submitsCode(await unitCode("good", unit))]] as const))),
-      ...Object.fromEntries(UNITS.map((unit) => [`review ${unit}`, [looksRight]])),
-      "scene-code s05": [failsWith({ code: "SERVICE_ERROR", message: "Overloaded" })],
-    });
+    // Two runs: each unit's sessions take their turns in order.
+    connected = await generatedVideo({ storyboard: [submitsStoryboard(whiteboardStoryboard)], ...(await restyleTurns(2)) });
   });
 
   afterAll(() => connected?.core.project.close({ projectId: connected.project.id }));
@@ -242,17 +283,100 @@ describe("a restyle", () => {
     RUN_TIMEOUT_MS,
   );
 
-  it("plans the Storyboard again when the new Preset rules it out, and saves nothing when that fails", async () => {
-    const { core, replay, video } = connected;
-    const generation = await watch(core, video);
+  it(
+    "plans the Storyboard again when the new Preset rules it out, valid under the new Preset",
+    async () => {
+      const { core, replay, project, video } = connected;
+      const whiteboard = bundledPreset("whiteboard");
+      const generation = await watch(core, video);
 
-    expect(await core.video.changeStyle({ ...video, preset: bundledPreset("whiteboard"), confirmed: true })).toEqual({ change: "restyle" });
-    const ended = await generation.until(({ state }) => state === "failed");
-    generation.stop();
+      expect(await core.video.changeStyle({ ...video, preset: whiteboard, confirmed: true })).toEqual({ change: "restyle" });
+      const done = await generation.until(({ state }) => state === "done" || state === "failed");
+      generation.stop();
+      const saved = await readVersion(project, 3);
+      const { issues } = await core.storyboard.validate({
+        storyboard: saved.storyboard,
+        transcript: await transcriptOf(core, project),
+        rules: { format: "horizontal", captions: false, transitions: whiteboard.transitions, canvas: whiteboard.canvas },
+      });
 
-    expect(ended.error).toMatchObject({ code: "AGENT_FAILED" });
-    expect(replay.askedOf("storyboard")).toHaveLength(1);
-    expect(JSON.stringify(replay.askedOf("storyboard")[0])).toContain(bundledPreset("whiteboard").direction);
-    expect(await newestVersion(core, video)).toBe(2);
-  });
+      expect(done).toMatchObject({ state: "done", version: 3 });
+      expect(replay.askedOf("storyboard")).toHaveLength(1);
+      expect(saved).toMatchObject({ origin: "restyle", style: "Restyled to Whiteboard", storyboard: whiteboardStoryboard, preset: whiteboard });
+      expect(issues).toEqual([]);
+    },
+    RUN_TIMEOUT_MS,
+  );
+});
+
+/** Ends once the video's restyle has ended, however it ended. */
+const hasEnded = ({ state }: GenerationStatus) => state === "idle" || state === "done" || state === "failed";
+
+describe("a restyle cut short", () => {
+  const preset = { ...BLUEPRINT, direction: "Slow and warm, like a fireside talk." };
+
+  it(
+    "is discarded on Stop: the video stays at its Version",
+    async () => {
+      const { core, replay, project, video } = await generatedVideo(await restyleTurns(1));
+      const generation = await watch(core, video);
+      replay.hold("scene-code s01");
+
+      await core.video.changeStyle({ ...video, preset, confirmed: true });
+      await generation.until(({ units }) => units.some(({ id, status }) => id === "s02" && status === "ready"));
+      await core.video.stop(video);
+      const ended = await generation.until((status) => status.stopped !== undefined && hasEnded(status));
+      generation.stop();
+
+      expect(ended).toMatchObject({ state: "idle", stopped: { cause: "stopped" } });
+      expect(await newestVersion(core, video)).toBe(1);
+      expect(await core.video.open(video)).toMatchObject({ version: 1, preset: BLUEPRINT });
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
+    "is discarded when Claude's login fails mid-run",
+    async () => {
+      const { core, project, video } = await generatedVideo({
+        ...(await restyleTurns(1)),
+        "scene-code s01": [failsWith({ code: "AUTHENTICATION_FAILED", message: "Logged out" })],
+      });
+      const generation = await watch(core, video);
+
+      await core.video.changeStyle({ ...video, preset, confirmed: true });
+      const ended = await generation.until((status) => status.stopped !== undefined && hasEnded(status));
+      generation.stop();
+
+      expect(ended).toMatchObject({ state: "idle", stopped: { cause: "authentication" } });
+      expect(await newestVersion(core, video)).toBe(1);
+      await core.project.close({ projectId: project.id });
+    },
+    RUN_TIMEOUT_MS,
+  );
+
+  it(
+    "leaves nothing a crash recovery would save",
+    async () => {
+      const { core, replay, dir, project, video } = await generatedVideo(await restyleTurns(1));
+      const generation = await watch(core, video);
+      replay.hold("scene-code s01");
+
+      await core.video.changeStyle({ ...video, preset, confirmed: true });
+      await generation.until(({ units }) => units.some(({ id, status }) => id === "s02" && status === "ready"));
+      const hasRecord = await generationRecord(project);
+      // MotionBrief started again on the same folders while the restyle was cut off.
+      const { core: restarted } = await connect({ root, script: {}, dir });
+      const reopened = await restarted.project.open({ path: project.path, force: true });
+
+      expect(hasRecord).toBe(false);
+      expect(reopened.recovered ?? []).toEqual([]);
+      expect(await newestVersion(restarted, video)).toBe(1);
+      await restarted.project.close({ projectId: project.id });
+      await core.video.stop(video);
+      generation.stop();
+    },
+    RUN_TIMEOUT_MS,
+  );
 });

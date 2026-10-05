@@ -20,8 +20,8 @@ import { isRevising, useRevision } from "./revision";
 /** A change from the Style tab, as `video.changeStyle` takes it. */
 type StyleRequest = { preset?: StylePreset; captions?: boolean };
 
-/** A restyle waiting for the creator's go-ahead, inline under the Preset list. */
-type PendingRestyle = { preset: StylePreset; replans: boolean; costUsd?: CostRange };
+/** A restyle waiting for the creator's go-ahead, inline under the Preset list, for the video it was asked of. */
+type PendingRestyle = { video: VideoRef; preset: StylePreset; replans: boolean; costUsd?: CostRange };
 
 /**
  * The Style tab: the Style Preset list, whose other Presets restyle the video after confirming, then the instant
@@ -29,6 +29,12 @@ type PendingRestyle = { preset: StylePreset; replans: boolean; costUsd?: CostRan
  */
 export function StyleTab() {
   const video = useGeneration((state) => state.video);
+
+  // Its own state per video: a restyle waiting for confirmation never carries over to another Project or Format.
+  return <VideoStyle key={keyOf(video)} video={video} />;
+}
+
+function VideoStyle({ video }: { video?: VideoRef }) {
   const stored = useGeneration((state) => state.stored);
   const generating = useGeneration((state) => isGenerating(state.status));
   const revising = useRevision((state) => isRevising(state.status));
@@ -72,18 +78,24 @@ function useStyleChange(video: VideoRef | undefined) {
   const [isChanging, setIsChanging] = useState(false);
   const [error, setError] = useState<string>();
 
-  async function send(request: StyleRequest & { confirmed?: boolean }) {
-    if (!video) {
+  async function send(target: VideoRef | undefined, request: StyleRequest & { confirmed?: boolean }) {
+    if (!target) {
       return;
     }
 
     setIsChanging(true);
     setError(undefined);
-    const { data: changed, error: changeError } = await safe(core.video.changeStyle({ ...video, ...request }));
+    const { data: changed, error: changeError } = await safe(core.video.changeStyle({ ...target, ...request }));
+
+    // The editor moved on to another video meanwhile: this answer is about one it no longer shows.
+    if (keyOf(useGeneration.getState().video) !== keyOf(target)) {
+      return;
+    }
+
     setIsChanging(false);
 
     if (isDefinedError(changeError) && changeError.code === "RESTYLE_UNCONFIRMED" && request.preset) {
-      setPending({ preset: request.preset, ...changeError.data });
+      setPending({ video: target, preset: request.preset, ...changeError.data });
       return;
     }
 
@@ -104,10 +116,19 @@ function useStyleChange(video: VideoRef | undefined) {
     pending,
     isChanging,
     error,
-    change: (request: StyleRequest) => send(request),
-    confirm: () => send({ preset: pending?.preset, confirmed: true }),
+    change: (request: StyleRequest) => send(video, request),
+    // Confirmed for the video and Preset it was asked of, whatever the editor shows now.
+    confirm: () => send(pending?.video, { preset: pending?.preset, confirmed: true }),
     cancel: () => setPending(undefined),
   };
+}
+
+function keyOf(video: VideoRef | undefined) {
+  if (!video) {
+    return "";
+  }
+
+  return `${video.projectId} ${video.format}`;
 }
 
 /** The Style Presets, bundled first; the video's is checked. Its snapshot keeps the look even if the Preset changed since. */
@@ -166,9 +187,17 @@ function RestyleConfirm({ pending, version, isBusy, onConfirm, onCancel }: Resty
 function restyleLine({ replans, costUsd }: PendingRestyle, version: number | undefined) {
   const scope = replansLine(replans);
   const cost = costLine(costUsd);
-  const kept = version === undefined ? "" : ` Version ${version} stays restorable.`;
+  const kept = keptLine(version);
 
   return `${scope}${cost}${kept}`;
+}
+
+function keptLine(version: number | undefined) {
+  if (version === undefined) {
+    return "";
+  }
+
+  return ` Version ${version} stays restorable.`;
 }
 
 function replansLine(replans: boolean) {

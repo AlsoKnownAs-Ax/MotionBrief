@@ -1063,9 +1063,9 @@ export const coreContract = {
     /** How long, and on an API key what, generating the video will take, and whether Generate needs approving. */
     estimate: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(GenerationEstimateSchema),
     /**
-     * Turns the video's Captions on or off and saves the choice with the video; a video not generated yet is then
-     * generated with it. A generated video's switch is a swap, as `changeStyle` makes it: a new Version, re-rendered
-     * with no agent run. Answers with the video as it plays now, as `open` does.
+     * Turns the video's Captions on or off. A video not generated yet saves it as the choice its generation takes; a
+     * generated video's switch is a swap, as `changeStyle` makes it: a new Version, which alone says whether Captions
+     * show, re-rendered with no agent run. Answers with the video as it plays now, as `open` does.
      */
     setCaptions: oc
       .errors({
@@ -1195,8 +1195,8 @@ export const coreContract = {
       .output(z.array(VersionSummarySchema)),
     /**
      * Restores an earlier Version by saving a copy of it as the newest Version, so nothing is lost; its units are
-     * shared, not copied. The Transcript, word fixes and all, stays as it is; the Version's Captions on or off become
-     * the video's choice again. Answers with the new Version's number.
+     * shared, not copied. The Transcript, word fixes and all, stays as it is; Captions show as they did in that
+     * Version. Answers with the new Version's number.
      */
     restore: oc
       .errors({

@@ -88,7 +88,8 @@ export const useGeneration = create<GenerationStore>((set, get) => {
           set({ isReconnectOpen: true });
         }
 
-        if (status.state === "done" && before?.state !== "done") {
+        // A stopped restyle is discarded: the saved Version plays again in place of its partial preview.
+        if ((status.state === "done" && before?.state !== "done") || (status.state === "idle" && isGenerating(before))) {
           void openStored(video);
         }
       }

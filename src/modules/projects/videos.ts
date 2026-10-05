@@ -35,8 +35,8 @@ const VideoContentSchema = z.object({
   /** Whether the Storyboard is written for Captions: the rules it is checked by. */
   captions: z.boolean(),
   /**
-   * Whether the video shows Captions, when a Style tab switch or a Revision made it differ from what the Storyboard is
-   * written for. Restore makes it the video's Captions choice again.
+   * Whether the video shows Captions, once a style change or a Revision saved it; absent, they show as the Storyboard
+   * is written. The Version alone decides, so a restored one plays with the Captions it had.
    */
   showsCaptions: z.boolean().optional(),
   /** The SHA-256 of each unit's Scene code in `units/`, by unit id. A unit without code plays as its fallback Scene. */

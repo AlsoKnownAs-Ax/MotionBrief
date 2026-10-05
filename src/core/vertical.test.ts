@@ -188,13 +188,13 @@ describe("the 9:16 version of a Project", () => {
     // The 16:9 Storyboard was written with Captions off; turned on, its longer copy is still drawn.
     const on = await core.video.setCaptions({ ...wide, captions: true });
     const reopened = await core.video.open(wide);
-    const saved = JSON.parse(await readFile(join(project.path, "horizontal", "video.json"), "utf8")) as { captions?: boolean };
+    const saved = JSON.parse(await readFile(join(project.path, "horizontal", "versions", "2.json"), "utf8")) as { showsCaptions?: boolean };
     const off = await core.video.setCaptions({ ...wide, captions: false });
 
     expect(on).toMatchObject({ version: 2, captions: true });
     expect(await pageOf(on)).toContain('class="clip mb-caption mb-caption-highlight"');
     expect(reopened).toMatchObject({ captions: true, preview: { id: on.preview?.id } });
-    expect(saved.captions).toBe(true);
+    expect(saved.showsCaptions).toBe(true);
     expect(off).toMatchObject({ version: 3, captions: false });
     expect(await pageOf(off)).not.toContain("mb-caption");
     expect(replay.asked).toHaveLength(asked);
