@@ -389,6 +389,7 @@ describe("a word fix that is also on screen", () => {
     connected = await connect({ revision: [submitsPatch({ scenes: [s02, s04], summary: "Wrote cash where the copy said cache." })] }, { approveCost: true });
     const { core, project, video } = connected;
     v1Units = await generatedGood(project);
+    // A swap: the Captions switch saves Version 2.
     await core.video.setCaptions({ ...video, captions: true });
     cache = (await transcriptWords(core, project)).findIndex(({ text }) => text === "cache");
 
@@ -407,7 +408,7 @@ describe("a word fix that is also on screen", () => {
 
   it("updates the Captions from the fixed Transcript with no agent run and no Version", () => {
     expect(askedAfterFix).toBe(0);
-    expect(fixedVideo).toMatchObject({ version: 1, captions: true });
+    expect(fixedVideo).toMatchObject({ version: 2, captions: true });
     expect(fixedVideo.preview?.timeline.words[cache]).toMatchObject({ text: "cash" });
   });
 
@@ -416,9 +417,9 @@ describe("a word fix that is also on screen", () => {
   });
 
   it("carries the fix into the affected Scenes only, once accepted", async () => {
-    const saved = await readVersion(connected.project, 2);
+    const saved = await readVersion(connected.project, 3);
 
-    expect(done).toMatchObject({ state: "done", version: 2 });
+    expect(done).toMatchObject({ state: "done", version: 3 });
     expect(saved.revision).toMatchObject({ request: offer?.message, scope: ["s02", "s04"] });
     expect(regenerated(connected.replay)).toEqual(["s02", "s04"]);
     expect(saved.units.s01).toBe(v1Units.s01);
@@ -561,18 +562,19 @@ describe("a Revision", () => {
         revision: [replies("They are on."), submitsPatch({ scenes: [], captions: false, summary: "Turned the Captions off." })],
       });
       const v1Units = await generatedGood(project);
+      // A swap: the Captions switch saves Version 2.
       await core.video.setCaptions({ ...video, captions: true });
 
       const { ended: answered } = await revise(core, video, "Are Captions on?");
       const { ended } = await revise(core, video, "Turn the Captions off");
-      const saved = await readVersion(project, 2);
+      const saved = await readVersion(project, 3);
 
       expect(answered.state).toBe("answered");
       expect(replay.askedOf("revision")[0]?.message).toContain("Captions are on.");
       expect(ended.units.map(({ rebuild }) => rebuild)).toEqual(["rerender", "rerender", "rerender", "rerender", "rerender"]);
       expect(regenerated(replay)).toEqual([]);
-      expect(saved).toMatchObject({ captions: false, units: v1Units });
-      expect(await core.video.open(video)).toMatchObject({ version: 2, captions: false });
+      expect(saved).toMatchObject({ captions: false, showsCaptions: false, units: v1Units });
+      expect(await core.video.open(video)).toMatchObject({ version: 3, captions: false });
       await core.project.close({ projectId: project.id });
     },
     RUN_TIMEOUT_MS,

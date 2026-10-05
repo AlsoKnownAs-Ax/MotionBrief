@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ChatEntry, ChatRequestState, ChatStatus, RevisionRequest, RevisionStatus, VersionSummary, VideoRef } from "../../contract";
-import type { Generation } from "../generation";
-import { createStatusStore, type ChatLine, type Projects, type ProjectsError, type VersionError } from "../projects";
+import { shownCaptions, type Generation } from "../generation";
+import { createStatusStore, type ChatLine, type Projects, type ProjectsError, type VersionError, type VideoDocumentError } from "../projects";
 import type { Revisions } from "../revision";
 import type { Clock } from "../system";
 
@@ -358,6 +358,12 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
       return { data: null, error: historyError(restoreError) };
     }
 
+    const { error: captionsError } = await restoreCaptions(ref, version);
+
+    if (captionsError) {
+      return { data: null, error: captionsError };
+    }
+
     const { error: recordError } = await record(ref, chat, { id: randomUUID(), kind: "restore", at: now(), restoredFrom: number, version });
 
     if (recordError) {
@@ -365,6 +371,26 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
     }
 
     return { data: { version }, error: null };
+  }
+
+  /**
+   * Captions on or off is part of a Version, as a Style tab switch saves one, so the restored Version's comes back as
+   * the video's choice: the video plays as it did then.
+   */
+  async function restoreCaptions(ref: VideoRef, number: number): Promise<Result<null, HistoryError>> {
+    const { data: restored, error } = await projects.readVersion(ref.projectId, ref.format, number);
+
+    if (error) {
+      return { data: null, error: historyError(error) };
+    }
+
+    const { error: choiceError } = await projects.chooseCaptions(ref.projectId, ref.format, shownCaptions(undefined, restored.version));
+
+    if (choiceError) {
+      return { data: null, error: historyError(choiceError) };
+    }
+
+    return { data: null, error: null };
   }
 
   function now() {
@@ -409,7 +435,7 @@ function endingOf(state: RevisionStatus["state"]): ChatRequestState {
   return ENDINGS[state as keyof typeof ENDINGS] ?? "failed";
 }
 
-function historyError(error: ProjectsError | VersionError): HistoryError {
+function historyError(error: ProjectsError | VersionError | VideoDocumentError): HistoryError {
   if (error.code === "UNKNOWN_PROJECT" || error.code === "FILE_FAILED") {
     return error;
   }

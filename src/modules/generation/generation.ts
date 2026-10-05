@@ -12,10 +12,13 @@ import type {
   GenerationUnit,
   OpenedVideo,
   RoleModels,
+  StyleChanged,
+  StyleChangeKind,
   StylePreset,
   Transcript,
   UnitCode,
   UnitWork,
+  VersionOrigin,
   VideoRef,
 } from "../../contract";
 import { FormatSchema, StylePresetSchema } from "../../contract";
@@ -37,8 +40,8 @@ import {
   type VideoDocumentError,
 } from "../projects";
 import { DEFAULT_MODELS } from "../settings";
-import { StoryboardSchema, type Storyboard } from "../storyboard";
-import { listPresets, presetBrief, storyboardRules, type PresetBrief } from "../style";
+import { StoryboardSchema, validateStoryboard, type Storyboard } from "../storyboard";
+import { classifyStyleChange, describeStyleChange, listPresets, presetBrief, storyboardRules, type CaptionsChange, type PresetBrief } from "../style";
 import type { Clock } from "../system";
 import type { Usage, UsageRun } from "../usage";
 import { writeStoryboard, writeUnitCode, type StoryboardError, type UnitOutcome } from "./agents";
@@ -168,7 +171,7 @@ export function createGeneration({ connector, checker, previews, stills, project
   /** Told whenever a video's run ends, however it ended. */
   const ended: ((ref: VideoRef) => void)[] = [];
 
-  /** Calls `listener` whenever a video's first generation or Retry ends, such as to run what queued behind it. */
+  /** Calls `listener` whenever a video's first generation, Retry or restyle ends, or a swap is saved, such as to run what queued behind it. */
   function whenEnded(listener: (ref: VideoRef) => void) {
     ended.push(listener);
   }
@@ -302,45 +305,263 @@ export function createGeneration({ connector, checker, previews, stills, project
   }
 
   /**
-   * Turns the video's Captions on or off, saves the choice with the video and re-renders it, with no agent run.
-   * The Style tab (#45) adds a Version per change on top of this.
+   * Turns the video's Captions on or off. Before its first Version that is only the choice its generation takes; a
+   * generated video's switch is a swap, a new Version re-rendered with no agent run.
    */
-  async function setCaptions(ref: VideoRef, captions: boolean): Promise<Result<OpenedVideo, OpenVideoError>> {
-    const { error } = await projects.chooseCaptions(ref.projectId, ref.format, captions);
+  async function setCaptions(ref: VideoRef, captions: boolean): Promise<Result<OpenedVideo, OpenVideoError | StyleChangeError>> {
+    const { data: stored, error } = await projects.storedVideo(ref.projectId, ref.format);
 
     if (error) {
-      return { data: null, error: projectError(error) };
+      return { data: null, error: versionError(error) };
+    }
+
+    if (stored) {
+      const { data: changed, error: changeError } = await changeStyle(ref, { captions });
+
+      if (changeError) {
+        return { data: null, error: changeError };
+      }
+
+      return { data: changed.video ?? {}, error: null };
+    }
+
+    const { error: choiceError } = await projects.chooseCaptions(ref.projectId, ref.format, captions);
+
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
     }
 
     return open(ref);
   }
 
-  type GenerateRun = { run: Run; ref: VideoRef; transcript: Transcript; preset: StylePreset; captions: boolean; store: StatusStore };
+  /**
+   * Changes the video's look from the Style tab: the Style Preset snapshot it is drawn in, and Captions on or off. A
+   * swap saves the next Version at once, re-rendered with no agent, and answers with the video as it now plays. A
+   * restyle needs the creator's confirmation, then starts a run that regenerates every unit; it streams through `watch`.
+   */
+  async function changeStyle(ref: VideoRef, request: StyleRequest): Promise<Result<StyleChanged, OpenVideoError | StyleChangeError>> {
+    // In turn with opens and Retry starts, so a re-check never saves a Version under a style change.
+    const { data: change, error } = await exclusive(storeOf(ref).key, () => startStyleChange(ref, request));
 
-  async function generate({ run, ref, transcript, preset, captions, store }: GenerateRun) {
+    if (error) {
+      return { data: null, error };
+    }
+
+    if (change === "restyle") {
+      return { data: { change }, error: null };
+    }
+
+    const { data: video, error: openError } = await open(ref);
+
+    if (openError) {
+      return { data: null, error: openError };
+    }
+
+    return { data: { change, video }, error: null };
+  }
+
+  /** Reserves the video before reading the Version a style change starts from, so no other job saves one meanwhile. */
+  async function startStyleChange(ref: VideoRef, request: StyleRequest): Promise<Result<StyleChangeKind, OpenVideoError | StyleChangeError>> {
+    const release = projects.reserve(ref.projectId, ref.format);
+
+    if (!release) {
+      return { data: null, error: { code: "BUSY", projectId: ref.projectId } };
+    }
+
+    const changed = await changeReserved(ref, request, release);
+
+    // A restyle's run holds the reservation until it ends; anything else is done with it now.
+    if (changed.data !== "restyle") {
+      release();
+    }
+
+    // What queued behind a swap can run now, as after a run.
+    if (changed.data === "swap") {
+      ended.forEach((listener) => listener(ref));
+    }
+
+    return changed;
+  }
+
+  async function changeReserved(ref: VideoRef, request: StyleRequest, release: () => void): Promise<Result<StyleChangeKind, OpenVideoError | StyleChangeError>> {
+    const { data: saved, error } = await savedVideo(ref);
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const { data: choice, error: choiceError } = await projects.captionsChoice(ref.projectId, ref.format);
+
+    if (choiceError) {
+      return { data: null, error: projectError(choiceError) };
+    }
+
+    const { version } = saved.stored;
+    const shown = shownCaptions(choice, version);
+    const preset = request.preset ?? version.preset;
+    const captions = { before: shown, after: request.captions ?? shown };
+    const change = classifyStyleChange(version.preset, preset, captions);
+    const style = describeStyleChange(version.preset, preset, captions);
+
+    if (change === "none") {
+      return { data: change, error: null };
+    }
+
+    if (change === "swap") {
+      return swap(ref, version, preset, captions, style);
+    }
+
+    return restyle(ref, saved, { preset, captions, style, isConfirmed: request.confirmed ?? false }, release);
+  }
+
+  /** Saves the swap as the next Version: the same Storyboard and unit code, drawn in the new Palette, typography or Captions. */
+  async function swap(ref: VideoRef, version: Version, preset: StylePreset, captions: CaptionsChange, style: string): Promise<Result<"swap", OpenVideoError>> {
+    const createdAt = new Date(clock.now()).toISOString();
+    const content = { ...contentOf(version), preset, showsCaptions: captions.after };
+    const { error } = await projects.saveVersion(ref.projectId, ref.format, { ...content, origin: "style", style, createdAt });
+
+    if (error) {
+      return { data: null, error: projectError(error) };
+    }
+
+    if (captions.after !== captions.before) {
+      const { error: choiceError } = await projects.chooseCaptions(ref.projectId, ref.format, captions.after);
+
+      if (choiceError) {
+        return { data: null, error: projectError(choiceError) };
+      }
+    }
+
+    return { data: "swap", error: null };
+  }
+
+  type Restyle = { preset: StylePreset; captions: CaptionsChange; style: string; isConfirmed: boolean };
+
+  /**
+   * Starts regenerating every unit in the new Preset, once confirmed. The Storyboard is kept while the new Preset's
+   * allowed Transitions and Canvas preference still allow it; otherwise the Storyboard agent plans it again.
+   */
+  async function restyle(ref: VideoRef, saved: SavedVideo, { preset, captions, style, isConfirmed }: Restyle, release: () => void): Promise<Result<"restyle", OpenVideoError | StyleChangeError>> {
     const { projectId, format } = ref;
-    const rules = storyboardRules(preset, { format, captions });
-    const brief = presetBrief(preset, format);
-    const { data: storyboard, error } = await writeStoryboard({
-      connector: run.usage.connector("storyboard"),
-      workDir,
-      signal: run.controller.signal,
-      model: run.models.storyboard,
-      transcript,
-      rules,
-      brief,
-    });
+    const { transcript, stored } = saved;
+    const { version } = stored;
+    const { success, data: storyboard } = StoryboardSchema.safeParse(version.storyboard);
+
+    if (!success) {
+      return { data: null, error: { code: "INVALID_VERSION", path: format, message: `Version ${version.version} has no valid Storyboard` } };
+    }
+
+    const { error: unfit } = validateStoryboard(storyboard, transcript, storyboardRules(preset, { format, captions: version.captions }));
+
+    if (!isConfirmed) {
+      return { data: null, error: { code: "RESTYLE_UNCONFIRMED", replans: unfit !== null, costUsd: await restyleCost(transcript.duration) } };
+    }
+
+    const chosen = await models();
+
+    // Synchronous from here on, so a close of the Project either stops this run or refuses it.
+    if (!projects.admits(projectId)) {
+      return { data: null, error: { code: "UNKNOWN_PROJECT", projectId } };
+    }
+
+    const { store } = storeOf(ref);
+    const job = { ref, transcript, preset, writtenFor: version.captions, shows: captions.after, style, choice: choiceOf(captions), store };
+    store.set({ state: unfit ? "planning" : "writing", units: [] });
+    begin(ref, store, release, { usage: usage.startRun(ref), models: chosen }, (run) => restyleRun({ ...job, run, storyboard: unfit ? undefined : storyboard }));
+
+    return { data: "restyle", error: null };
+  }
+
+  type RestyleRun = {
+    run: Run;
+    ref: VideoRef;
+    transcript: Transcript;
+    preset: StylePreset;
+    /** The kept Storyboard; absent when the new Preset rules it out and it is planned again. */
+    storyboard?: Storyboard;
+    /** Whether the kept Storyboard is written for Captions. */
+    writtenFor: boolean;
+    /** Whether the video shows Captions. */
+    shows: boolean;
+    style: string;
+    choice?: boolean;
+    store: StatusStore;
+  };
+
+  async function restyleRun({ run, ref, transcript, preset, storyboard, writtenFor, shows, style, choice, store }: RestyleRun) {
+    const restyled = { run, ref, transcript, preset, store, origin: "restyle" as const, showsCaptions: shows, style, choice };
+
+    if (storyboard) {
+      return writeVideo({ ...restyled, storyboard, captions: writtenFor });
+    }
+
+    // Planned again, the Storyboard is written for Captions as the video shows them.
+    const { data: planned, error } = await planStoryboard(run, ref, transcript, preset, shows);
 
     if (error) {
       store.set(endedBeforeStoryboard(run, error));
       return;
     }
 
+    await writeVideo({ ...restyled, storyboard: planned, captions: shows });
+  }
+
+  /** On an API key, what a restyle is estimated to cost: about a first generation. A subscription isn't billed per run. */
+  async function restyleCost(voiceoverSeconds: number): Promise<CostRange | undefined> {
+    if ((await connector.status()).method !== "api-key") {
+      return undefined;
+    }
+
+    return usage.estimateCost(voiceoverSeconds);
+  }
+
+  type GenerateRun = { run: Run; ref: VideoRef; transcript: Transcript; preset: StylePreset; captions: boolean; store: StatusStore };
+
+  async function generate({ run, ref, transcript, preset, captions, store }: GenerateRun) {
+    const { data: storyboard, error } = await planStoryboard(run, ref, transcript, preset, captions);
+
+    if (error) {
+      store.set(endedBeforeStoryboard(run, error));
+      return;
+    }
+
+    await writeVideo({ run, ref, transcript, preset, captions, storyboard, store, origin: "generation" });
+  }
+
+  /** The Storyboard agent's validated Storyboard for the video in `preset`, written for Captions on or off. */
+  function planStoryboard(run: Run, { format }: VideoRef, transcript: Transcript, preset: StylePreset, captions: boolean) {
+    return writeStoryboard({
+      connector: run.usage.connector("storyboard"),
+      workDir,
+      signal: run.controller.signal,
+      model: run.models.storyboard,
+      transcript,
+      rules: storyboardRules(preset, { format, captions }),
+      brief: presetBrief(preset, format),
+    });
+  }
+
+  type VideoRun = GenerateRun & {
+    storyboard: Storyboard;
+    origin: Extract<VersionOrigin, "generation" | "restyle">;
+    /** Whether the video shows Captions, when that differs from what the Storyboard is written for. */
+    showsCaptions?: boolean;
+    /** What a restyle changed, for its Version. */
+    style?: string;
+    /** The Captions choice to save with the Version, when the run switched them. */
+    choice?: boolean;
+  };
+
+  /** Writes every unit of a valid Storyboard, as a first generation or a restyle does, and saves them as the next Version. */
+  async function writeVideo({ run, ref, transcript, preset, captions, storyboard, store, origin, showsCaptions, style, choice }: VideoRun) {
+    const { projectId, format } = ref;
+    const rules = storyboardRules(preset, { format, captions });
+    const brief = presetBrief(preset, format);
     const units = planUnits(storyboard, transcript);
     const planned = units.map(({ id }) => id);
     const startedAt = new Date(clock.now()).toISOString();
-    const content: VideoContent = { storyboard, preset, captions, units: {}, flags: [], models: run.models, frameContractVersion: FRAME_CONTRACT_VERSION };
-    const record = { runId: run.id, origin: "generation" as const, startedAt, planned };
+    const content: VideoContent = { storyboard, preset, captions, showsCaptions, units: {}, flags: [], models: run.models, frameContractVersion: FRAME_CONTRACT_VERSION };
+    const record = { runId: run.id, origin, startedAt, planned };
     const saveRecord = () => projects.saveGeneration(projectId, format, { ...inUnitOrder(content, units), ...record });
     const progress = new Map<string, GenerationUnit>(units.map(({ id }) => [id, { id, status: "queued", attempts: 0 }]));
     const code: Record<string, UnitCode> = {};
@@ -362,13 +583,22 @@ export function createGeneration({ connector, checker, previews, stills, project
 
     const { data: version, error: versionError } = await projects.saveVersion(projectId, format, {
       ...inUnitOrder(content, units),
-      origin: "generation",
+      origin,
+      style,
       runId: run.id,
       createdAt: new Date(clock.now()).toISOString(),
     });
 
     if (versionError) {
       return failed(publish, fileErrorOf(versionError));
+    }
+
+    if (choice !== undefined) {
+      const { error: choiceError } = await projects.chooseCaptions(projectId, format, choice);
+
+      if (choiceError) {
+        return failed(publish, fileErrorOf(projectError(choiceError)));
+      }
     }
 
     await publish({ state: "done", version, stopped: run.stopped });
@@ -735,7 +965,7 @@ export function createGeneration({ connector, checker, previews, stills, project
     }
 
     const { transcript, voiceoverPath, version, code, frameUpdate } = checked;
-    const captions = choice ?? version.captions;
+    const captions = shownCaptions(choice, version);
     // The Storyboard is checked by the rules it was written to; Captions turned on since are only drawn.
     const rules = storyboardRules(version.preset, { format: ref.format, captions: version.captions });
     const source = { storyboard: version.storyboard, transcript, rules, preset: version.preset, code, notes: reviewNotes(version.flags), voiceover: voiceoverPath, captions };
@@ -745,7 +975,7 @@ export function createGeneration({ connector, checker, previews, stills, project
       return { data: null, error: previewError };
     }
 
-    return { data: { version: version.version, captions, preview, frameUpdate }, error: null };
+    return { data: { version: version.version, captions, preset: version.preset, preview, frameUpdate }, error: null };
   }
 
   /**
@@ -865,7 +1095,26 @@ export function createGeneration({ connector, checker, previews, stills, project
     };
   }
 
-  return { estimate, start, stop, retry, watch, open, setCaptions, isRunning, whenEnded };
+  return { estimate, start, stop, retry, watch, open, setCaptions, changeStyle, isRunning, whenEnded };
+}
+
+/** A change from the Style tab: the snapshot to draw the video in, Captions on or off, and whether a restyle is confirmed. */
+export type StyleRequest = { preset?: StylePreset; captions?: boolean; confirmed?: boolean };
+
+export type StyleChangeError = { code: "BUSY"; projectId: string } | { code: "RESTYLE_UNCONFIRMED"; replans: boolean; costUsd?: CostRange };
+
+/** Whether the video shows Captions: the creator's choice, else as its Version was saved. */
+export function shownCaptions(choice: boolean | undefined, version: Pick<Version, "captions" | "showsCaptions">): boolean {
+  return choice ?? version.showsCaptions ?? version.captions;
+}
+
+/** The Captions choice a style change saves: only one that switches them. */
+function choiceOf({ before, after }: CaptionsChange): boolean | undefined {
+  if (before === after) {
+    return undefined;
+  }
+
+  return after;
 }
 
 type Publish = (change: Partial<GenerationStatus>, unit?: GenerationUnit) => Promise<void>;
@@ -986,8 +1235,8 @@ function reviewNotes(flags: Flag[]): Record<string, string> {
 }
 
 /** What a Version plays and how it was made, without what makes it a Version. */
-function contentOf({ storyboard, preset, captions, units, flags, models, frameContractVersion }: Version): VideoContent {
-  return { storyboard, preset, captions, units, flags, models, frameContractVersion };
+function contentOf({ storyboard, preset, captions, showsCaptions, units, flags, models, frameContractVersion }: Version): VideoContent {
+  return { storyboard, preset, captions, showsCaptions, units, flags, models, frameContractVersion };
 }
 
 function versionError(error: ProjectsError | VersionError): OpenVideoError {

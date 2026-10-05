@@ -2,7 +2,7 @@ import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
-import type { GenerateError, Generation, OpenVideoError, RetryError } from "../generation";
+import type { GenerateError, Generation, OpenVideoError, RetryError, StyleChangeError } from "../generation";
 import type { History, HistoryError } from "../history";
 import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
@@ -220,6 +220,7 @@ export function createCoreRouter({
       estimate: api.video.estimate.handler(async ({ input }) => dataOrThrow(await generation.estimate(input))),
       open: api.video.open.handler(async ({ input }) => dataOrThrow(await generation.open(input))),
       setCaptions: api.video.setCaptions.handler(async ({ input: { captions, ...video } }) => dataOrThrow(await generation.setCaptions(video, captions))),
+      changeStyle: api.video.changeStyle.handler(async ({ input: { projectId, format, ...request } }) => dataOrThrow(await generation.changeStyle({ projectId, format }, request))),
       generate: api.video.generate.handler(async ({ input }) => {
         dataOrThrow(await generation.start(input));
       }),
@@ -275,7 +276,10 @@ function dataOrThrow<R extends CodedResult>(result: R): Extract<R, { error: null
 
 type CodedResult =
   | { data: unknown; error: null }
-  | { data: null; error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | ReviseError | UsageError | SettingsError | HistoryError };
+  | {
+      data: null;
+      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | ReviseError | UsageError | SettingsError | HistoryError;
+    };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
 function stillUnavailable(error: StillError): CheckerUnavailable {

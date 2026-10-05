@@ -16,7 +16,7 @@ import type {
 } from "../../contract";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
-import { inParallel, reviewUnit, writeUnitCode, type UnitOutcome } from "../generation";
+import { inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
 import type { PreviewError, Previews, Stills } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type RevisionRecord, type Version, type VersionError } from "../projects";
 import { StoryboardSchema, type Storyboard } from "../storyboard";
@@ -198,7 +198,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
       return { data: null, error: { code: "FILE_FAILED", path: `versions/${stored.version.version}.json`, message: parseError.message } };
     }
 
-    const current: Current = { version: stored.version, code: stored.code, storyboard, captions: choice ?? stored.version.captions };
+    const current: Current = { version: stored.version, code: stored.code, storyboard, captions: shownCaptions(choice, stored.version) };
 
     const unknown = request.scope.find((sceneId) => !current.storyboard.scenes.some(({ id }) => id === sceneId));
 
@@ -449,6 +449,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
       storyboard,
       preset,
       captions: writtenFor,
+      showsCaptions: captions,
       units,
       flags: plans.flatMap(({ unit, previous }) => flagsOf(unit.id, previous?.id, code, regenerated, current.version.flags)),
       models: { ...current.version.models, ...run.models },

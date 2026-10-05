@@ -116,6 +116,8 @@ const ORIGIN_LABELS = {
   retry: () => "Retried flagged Scenes",
   revision: ({ request }) => `Revision: “${request ?? ""}”`,
   restore: ({ restoredFrom }) => `Restored Version ${restoredFrom}`,
+  style: ({ summary }) => summary ?? "Style change",
+  restyle: ({ summary }) => summary ?? "Restyled",
 } satisfies Record<VersionOrigin, (version: VersionSummary) => string>;
 
 function versionLabel(version: VersionSummary) {

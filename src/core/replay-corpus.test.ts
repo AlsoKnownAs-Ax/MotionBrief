@@ -73,12 +73,20 @@ describe("the replay corpus", () => {
 
     // Scene code uses the frame's tokens only, so a Palette and typography swap re-renders the same code, which still passes.
     it.each(PRESETS.filter((preset) => preset !== entry.preset))(
-      "still passes every check with %s's Palette and typography",
+      "swaps to %s's Palette and typography with no agent, keeping every unit, which still passes every check",
       async (into) => {
+        const asked = run.asked();
         const preset = swapped(last.preset, into);
-        const rules = storyboardRules(preset, { format: run.video.format, captions: last.captions });
-        const report = await run.core.checker.check({ storyboard: last.storyboard, transcript: run.corpus.transcript, rules, preset, code: last.code });
 
+        const { change, video } = await run.core.video.changeStyle({ ...run.video, preset });
+        const saved = (await run.saved()).at(-1)!;
+        const rules = storyboardRules(preset, { format: run.video.format, captions: saved.captions });
+        const report = await run.core.checker.check({ storyboard: saved.storyboard, transcript: run.corpus.transcript, rules, preset, code: saved.code });
+
+        expect(change).toBe("swap");
+        expect(video).toMatchObject({ version: saved.number, preset });
+        expect(saved).toMatchObject({ origin: "style", storyboard: last.storyboard, units: last.units, code: last.code, preset });
+        expect(run.asked()).toBe(asked);
         expect(report.findings).toEqual([]);
       },
       BROWSER_TIMEOUT_MS,

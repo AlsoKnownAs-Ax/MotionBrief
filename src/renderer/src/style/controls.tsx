@@ -66,16 +66,19 @@ export function Select<T extends string | number>({
   options,
   onChange,
   className,
+  disabled,
 }: {
   id: string;
   value: T;
   options: { value: T; label: string }[];
   onChange: (value: T) => void;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <select
       id={id}
+      disabled={disabled}
       value={String(value)}
       onChange={(event) => onChange(options.find((option) => String(option.value) === event.target.value)?.value ?? value)}
       className={cn(SELECT_CLASSES, className)}

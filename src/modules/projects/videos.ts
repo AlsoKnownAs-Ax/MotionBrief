@@ -32,7 +32,13 @@ const VideoContentSchema = z.object({
   storyboard: z.unknown(),
   /** The Style Preset snapshot the video is drawn in. */
   preset: StylePresetSchema,
+  /** Whether the Storyboard is written for Captions: the rules it is checked by. */
   captions: z.boolean(),
+  /**
+   * Whether the video shows Captions, when a Style tab switch or a Revision made it differ from what the Storyboard is
+   * written for. Restore makes it the video's Captions choice again.
+   */
+  showsCaptions: z.boolean().optional(),
   /** The SHA-256 of each unit's Scene code in `units/`, by unit id. A unit without code plays as its fallback Scene. */
   units: z.record(z.string(), z.string().regex(/^[0-9a-f]{64}$/)),
   flags: z.array(FlagSchema),
@@ -62,6 +68,8 @@ export const VersionSchema = VideoContentSchema.extend({
   revision: RevisionRecordSchema.optional(),
   /** Set on a Version a Restore made: the Version it is a copy of. */
   restoredFrom: z.number().int().positive().optional(),
+  /** Set on a Version a style change made: what it changed, such as "Palette: Ember" or "Restyled to Whiteboard". */
+  style: z.string().optional(),
   /** The run that saved it, so its record, left behind by a crash just after, is never saved again. */
   runId: z.string().optional(),
 });
@@ -258,13 +266,13 @@ export async function listVersions(dir: string, format: Format): Promise<Result<
   return { data: summaries.reverse(), error: null };
 }
 
-function summaryOf({ version, origin, createdAt, revision, restoredFrom, flags }: Version): VersionSummary {
+function summaryOf({ version, origin, createdAt, revision, restoredFrom, style, flags }: Version): VersionSummary {
   return {
     version,
     origin,
     createdAt,
     request: revision?.request,
-    summary: revision?.summary,
+    summary: revision?.summary ?? style,
     restoredFrom,
     fallbacks: flags.filter(({ kind }) => kind === "fallback").length,
   };
