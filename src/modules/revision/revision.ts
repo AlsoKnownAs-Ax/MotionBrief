@@ -17,7 +17,7 @@ import type {
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { endsRun, inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
-import type { PreviewError, Previews, Stills } from "../preview";
+import { previewErrorMessage, type Previews, type Stills } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type RevisionRecord, type Version, type VersionError } from "../projects";
 import { StoryboardSchema, type Storyboard } from "../storyboard";
 import { presetBrief, storyboardRules } from "../style";
@@ -600,7 +600,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     }
 
     if (error) {
-      return { previewError: { code: error.code, message: previewMessage(error) } };
+      return { previewError: { code: error.code, message: previewErrorMessage(error) } };
     }
 
     return { preview: data };
@@ -739,15 +739,4 @@ function projectError(error: ProjectsError | VersionError): Extract<ProjectsErro
   }
 
   return fileErrorOf(error);
-}
-
-const PREVIEW_ERRORS = {
-  VOICEOVER_MISSING: (error) => `The Voiceover isn't at ${error.path} any more.`,
-  INVALID_STORYBOARD: (error) => error.issues.map((issue) => issue.message).join(" "),
-  UNKNOWN_UNIT: (error) => `The Storyboard has no unit ${error.unit}.`,
-} satisfies { [Code in PreviewError["code"]]: (error: Extract<PreviewError, { code: Code }>) => string };
-
-function previewMessage(error: PreviewError): string {
-  // The table is keyed by code, so each entry receives the error of its own code.
-  return (PREVIEW_ERRORS[error.code] as (error: PreviewError) => string)(error);
 }

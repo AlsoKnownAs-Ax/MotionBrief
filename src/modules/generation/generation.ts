@@ -26,7 +26,7 @@ import { planUnits, type Unit } from "../assembler";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { FRAME_CONTRACT_VERSION } from "../frame";
-import type { PreviewError, Previews, Stills } from "../preview";
+import { previewErrorMessage, type PreviewError, type Previews, type Stills } from "../preview";
 import {
   createStatusStore,
   type Flag,
@@ -1362,14 +1362,7 @@ function thrown(cause: unknown): GenerationPreviewError {
 }
 
 function previewErrorOf(error: PreviewError): GenerationPreviewError {
-  switch (error.code) {
-    case "VOICEOVER_MISSING":
-      return { code: error.code, message: `The Voiceover isn't at ${error.path} any more.` };
-    case "INVALID_STORYBOARD":
-      return { code: error.code, message: error.issues.map((issue) => issue.message).join(" ") };
-    case "UNKNOWN_UNIT":
-      return { code: error.code, message: `The Storyboard has no unit ${error.unit}.` };
-  }
+  return { code: error.code, message: previewErrorMessage(error) };
 }
 
 /** Runs `work` on every item, at most `limit` at once, and resolves with the results in order. */
