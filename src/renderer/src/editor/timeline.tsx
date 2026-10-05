@@ -461,7 +461,7 @@ function TransitionMarker({ scene, px, top }: { scene: TimelineScene; px: number
       role="img"
       aria-label={description}
       title={description}
-      className="absolute z-[2] -mt-[9px] -ml-[9px] grid size-[18px] place-items-center rounded-full bg-surface-3 text-[#cfcfcf] shadow-[0_0_0_2px_#0b0b0b]"
+      className="absolute z-[2] -mt-[9px] -ml-[9px] grid size-[18px] place-items-center rounded-full bg-surface-3 text-ink shadow-[0_0_0_2px_#0b0b0b]"
       style={{ left: scene.start * px - 1.5, top }}
     >
       <Icon className="size-2.5" aria-hidden="true" />

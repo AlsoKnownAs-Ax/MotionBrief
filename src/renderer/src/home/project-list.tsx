@@ -189,7 +189,7 @@ function ProjectRow({ project, isRenaming, onRename, onRenamed }: ProjectRowProp
       </div>
       <div role="cell" className="flex gap-1">
         {project.formats.map((format) => (
-          <span key={format} className="rounded-sm bg-surface-2 px-[7px] py-0.5 text-app-xs font-medium text-[#cfcfcf] tabular-nums">
+          <span key={format} className="rounded-sm bg-surface-2 px-[7px] py-0.5 text-app-xs font-medium text-ink tabular-nums">
             {FORMAT_LABELS[format]}
           </span>
         ))}
