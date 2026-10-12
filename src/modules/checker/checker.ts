@@ -52,7 +52,7 @@ export type Checker = ReturnType<typeof createChecker>;
  * contract and the Checker's own rules, and reports every finding against the unit it belongs to.
  */
 export function createChecker({ chromePath }: CheckerOptions) {
-  async function check({ storyboard: raw, transcript, rules, preset, code }: CheckInput): Promise<CheckResult> {
+  async function check({ storyboard: raw, transcript, rules, preset, code }: CheckInput, signal?: AbortSignal): Promise<CheckResult> {
     const { data: storyboard, error } = validateStoryboard(raw, transcript, rules);
 
     if (error) {
@@ -80,7 +80,7 @@ export function createChecker({ chromePath }: CheckerOptions) {
         return { data: null, error: assembleError };
       }
 
-      const { data: pageFindings, error: pageError } = await checkPage(dir, assembled);
+      const { data: pageFindings, error: pageError } = await checkPage(dir, assembled, signal);
 
       if (pageError) {
         return { data: null, error: pageError };
@@ -95,8 +95,8 @@ export function createChecker({ chromePath }: CheckerOptions) {
   }
 
   /** `hyperframes check` and our own probe (the contract, then the rules) each play the page in their own browser, side by side. */
-  async function checkPage(dir: string, assembled: AssembledPage): Promise<Result<CheckFinding[], CheckerError>> {
-    const [hyperframes, probed] = await Promise.all([runHyperframesCheck({ dir, chromePath, units: assembled.units }), probePage(dir, assembled)]);
+  async function checkPage(dir: string, assembled: AssembledPage, signal?: AbortSignal): Promise<Result<CheckFinding[], CheckerError>> {
+    const [hyperframes, probed] = await Promise.all([runHyperframesCheck({ dir, chromePath, units: assembled.units, signal }), probePage(dir, assembled)]);
 
     if (hyperframes.error) {
       return { data: null, error: hyperframes.error };

@@ -176,6 +176,19 @@ describe("Checker", () => {
     },
     BROWSER_TIMEOUT_MS,
   );
+
+  it(
+    "fails, rather than hangs, when it is stopped",
+    async () => {
+      const check = connect().checker.check(
+        { storyboard, transcript, rules: RULES, preset: BLUEPRINT, code: await goodCode() },
+        { signal: AbortSignal.abort() },
+      );
+
+      await expect(check).rejects.toMatchObject({ code: "CHECKER_UNAVAILABLE", data: { cause: "HYPERFRAMES_FAILED" } });
+    },
+    BROWSER_TIMEOUT_MS,
+  );
 });
 
 /** The parts of a finding that say where it is: what an agent needs to find and fix it. */

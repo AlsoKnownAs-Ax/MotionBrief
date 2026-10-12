@@ -157,6 +157,8 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
 
     if (recordError) {
       chat.running = undefined;
+      // Still queued on disk; paused so it isn't retried on every next() until Resume queue.
+      chat.store.update({ isPaused: true, saveError: saveErrorOf(recordError) });
       return;
     }
 
@@ -169,13 +171,17 @@ export function createHistory({ projects, revisions, generation, clock }: Histor
     chat.running = undefined;
 
     // A Revision started outside the chat got there first: wait for it to end.
-    if (error.code === "REVISING") {
-      await record(ref, chat, { id: queued.id, state: "queued" });
+    const line: ChatLine = error.code === "REVISING" ? { id: queued.id, state: "queued" } : { id: queued.id, state: "refused", refused: error.code };
+    const { error: lineError } = await record(ref, chat, line);
+
+    if (lineError) {
+      keepUnsaved(chat, line, lineError);
       return;
     }
 
-    await record(ref, chat, { id: queued.id, state: "refused", refused: error.code });
-    await startNext(ref, chat);
+    if (error.code !== "REVISING") {
+      await startNext(ref, chat);
+    }
   }
 
   /** Records how the running request's Revision ended, in turn with the queue, then runs what queued behind it. */

@@ -86,8 +86,8 @@ export function createCoreRouter({
       }),
     },
     checker: {
-      check: api.checker.check.handler(async ({ input, errors }) => {
-        const { data: report, error } = await checker.check(input);
+      check: api.checker.check.handler(async ({ input, errors, signal }) => {
+        const { data: report, error } = await checker.check(input, signal);
 
         if (error?.code === "INVALID_STORYBOARD") {
           throw errors.INVALID_STORYBOARD({ data: { issues: error.issues } });

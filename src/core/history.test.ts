@@ -315,6 +315,29 @@ describe("the chat", () => {
     await core.project.close({ projectId: project.id });
   }, 60_000);
 
+  it("pauses the queue, rather than retrying forever, when a refused request can't be saved", async () => {
+    const { core, replay, project, video } = await connect({ storyboard: [replies("Planning.")], revision: [replies("Sure.")] });
+    replay.hold("storyboard");
+    await core.video.generate({ ...video, approved: true });
+    const chat = await watchChat(core, video);
+    await core.video.send({ ...video, message: "Make it punchier", scope: [] });
+
+    // The log can't be written to: a folder now stands where it was.
+    const log = join(project.path, "horizontal", "chat.jsonl");
+    await rm(log);
+    await mkdir(log);
+    const stopped = core.video.stop(video);
+    replay.release("storyboard");
+    await stopped;
+    const failed = await chat.until(({ saveError }) => saveError !== undefined);
+    chat.stop();
+
+    expect(failed.isPaused).toBe(true);
+    expect(replay.askedOf("revision")).toHaveLength(0);
+    await rm(log, { recursive: true });
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
   it("pauses the queue when a Revision is stopped, until Resume queue", async () => {
     const { core, replay, project, video } = await connect({ revision: [replies("Stopped one."), replies("Second.")] });
     await twoVersions(project);
