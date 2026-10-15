@@ -11,11 +11,13 @@ concurrency:
 
 jobs:
   check:
-    name: Lint, typecheck and test (${{ matrix.os }})
+    name: Lint, typecheck and test (${{ matrix.os }}, ${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
       matrix:
         os: [windows-2025, macos-15]
+        # The suite is CPU-bound on real Chrome checks (~18 min on one runner), so it is split by file across runners.
+        shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -36,9 +38,11 @@ jobs:
           PUPPETEER_SKIP_DOWNLOAD: "1"
 
       - run: pnpm lint
+        if: matrix.shard == 1
 
       - run: pnpm typecheck
+        if: matrix.shard == 1
 
       # Tier 1 (seams 1 and 2 on hand-written inputs) and tier 2 (the replay corpus, replay-corpus.test.ts), at zero
       # cost, with the binaries the install above fetched.
-      - run: pnpm test
+      - run: pnpm test --shard=${{ matrix.shard }}/4
