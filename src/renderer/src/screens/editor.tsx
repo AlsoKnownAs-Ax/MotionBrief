@@ -7,7 +7,7 @@ import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { Progress } from "@renderer/components/ui/progress";
 import { useCoreConnection } from "@renderer/core/connection";
-import { LibraryButton, LibraryDrawer, LibraryWindow, PrototypeSwitcher } from "@renderer/editor/assets-prototype";
+import { LibraryButton, LibraryDrawer, LibraryWindow, LibraryWorkspace, PrototypeSwitcher } from "@renderer/editor/assets-prototype";
 import { ExportControl } from "@renderer/editor/export-control";
 import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, stopHeadline, useGeneration } from "@renderer/editor/generation";
@@ -275,6 +275,7 @@ export function Editor() {
       <LibraryWindow />
       <div className="flex min-h-0 flex-1">
         <LibraryDrawer />
+        <LibraryWorkspace />
         <section aria-label="Player" className="flex min-w-0 flex-1 flex-col gap-3 px-5 pt-4 pb-3.5">
           <GenerationNotice />
           <Player preview={preview} />

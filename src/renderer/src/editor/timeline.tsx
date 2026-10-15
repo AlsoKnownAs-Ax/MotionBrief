@@ -7,7 +7,7 @@ import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
 import { cn, rovingTabIndex } from "@renderer/lib/utils";
 import type { Preview, RevisionStatus, TimelineScene, TimelineWord, VideoTimeline, WordFixOffer } from "../../../contract";
-import { SceneMarks, soundLanesHeight, SoundLanes, TimelineSoundButton, useVariant } from "./assets-prototype";
+import { DockedLibrary, DockTabs, SceneMarks, soundLanesHeight, SoundLanes, TimelineSoundButton, useDockTab, useVariant } from "./assets-prototype";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } from "./labels";
 import { useOpenVideo } from "./open-video";
@@ -114,6 +114,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const brackets = bracketsHeight(canvases);
   const cardTop = RULER + GAP + brackets;
   const variant = useVariant();
+  const dock = useDockTab();
   const lanes = soundLanesHeight(variant);
   const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP - lanes);
   const wordTop = cardTop + cardHeight + GAP;
@@ -131,6 +132,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   return (
     <section aria-label="Scene timeline" className="flex shrink-0 flex-col bg-[#0b0b0b]" style={{ height }}>
       <header className="flex shrink-0 items-center gap-3.5 pr-3 pl-4 whitespace-nowrap" style={{ height: HEADER }}>
+        {dock.isDocked ? <DockTabs tab={dock.tab} onTab={dock.setTab} /> : null}
         <span className="text-app-sm">
           <span className="font-medium">{timeline.scenes.length} Scenes</span>
           <span className="text-ink-muted tabular-nums"> · {formatTime(timeline.duration)}</span>
@@ -151,7 +153,8 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
         <TimelineSoundButton />
         <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
       </header>
-      <div ref={scrollRef} className="timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
+      {dock.tab === "library" ? <DockedLibrary /> : null}
+      <div ref={scrollRef} className={cn("timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden", dock.tab === "library" && "hidden")}>
         <div className="relative" style={{ width: timeline.duration * px + TAIL, height: area }}>
           <Ruler duration={timeline.duration} px={px} onSeek={seek} />
           {canvases.map((scenes) => (

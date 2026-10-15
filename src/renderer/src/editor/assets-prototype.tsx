@@ -15,7 +15,9 @@ import {
   MusicIcon,
   PlayIcon,
   PlusIcon,
+  SearchIcon,
   SlidersHorizontalIcon,
+  SquareIcon,
   SparklesIcon,
   UploadIcon,
   Volume2Icon,
@@ -31,12 +33,57 @@ import { cn } from "@renderer/lib/utils";
 import { Row, Section, Segmented, Select, Slider } from "@renderer/style/controls";
 import type { TimelineScene, VideoTimeline } from "../../../contract";
 
-export type Variant = "A" | "B" | "C";
+export type Variant = "A" | "B" | "C" | "D" | "E";
 const VARIANTS: { key: Variant; name: string }[] = [
   { key: "A", name: "Assets tab" },
   { key: "B", name: "Library drawer" },
   { key: "C", name: "Library window" },
+  { key: "D", name: "Library workspace" },
+  { key: "E", name: "Docked browser" },
 ];
+
+/** B, D and E share the Music and SFX lanes and the timeline's Sound button. */
+const hasLanes = (variant: Variant | undefined) => variant === "B" || variant === "D" || variant === "E";
+
+function matches(asset: Asset, query: string) {
+  const needle = query.trim().toLowerCase();
+  return !needle || `${asset.name} ${asset.notes} ${KINDS[asset.kind].label}`.toLowerCase().includes(needle);
+}
+
+/* ───────────────────────── audition: a stub tone stands in for the real file ───────────────────────── */
+
+type Audition = { id?: string; started: number; length: number; play: (asset: Asset) => void; stop: () => void };
+
+let context: AudioContext | undefined;
+let timer: ReturnType<typeof setTimeout> | undefined;
+let source: OscillatorNode | undefined;
+
+export const useAudition = create<Audition>((set, get) => ({
+  started: 0,
+  length: 0,
+  stop: () => {
+    source?.stop();
+    source = undefined;
+    clearTimeout(timer);
+    set({ id: undefined });
+  },
+  play: (asset) => {
+    const wasSame = get().id === asset.id;
+    get().stop();
+    if (wasSame) return;
+    const length = asset.kind === "music" ? 6 : 0.7;
+    context ??= new AudioContext();
+    const gain = context.createGain();
+    source = context.createOscillator();
+    source.frequency.value = asset.kind === "music" ? 196 : 880 - asset.name.length * 12;
+    gain.gain.setValueAtTime(0.08, context.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + length);
+    source.connect(gain).connect(context.destination);
+    source.start();
+    timer = setTimeout(() => get().stop(), length * 1000);
+    set({ id: asset.id, started: performance.now(), length });
+  },
+}));
 
 type Kind = "sfx" | "music" | "image" | "logo";
 type Scope = "bundled" | "library" | "project";
@@ -199,11 +246,39 @@ function KindMark({ asset, size = 32 }: { asset: Asset; size?: number }) {
 }
 
 function PreviewButton({ asset }: { asset: Asset }) {
+  const isPlaying = useAudition((state) => state.id === asset.id);
+  const play = useAudition((state) => state.play);
   if (asset.kind !== "sfx" && asset.kind !== "music") return null;
   return (
-    <Button variant="ghost" size="icon-sm" aria-label={`Play ${asset.name}`} title="Play (stub)">
-      <PlayIcon />
+    <Button
+      variant="ghost"
+      size="icon-sm"
+      aria-label={`${isPlaying ? "Stop" : "Play"} ${asset.name}`}
+      aria-pressed={isPlaying}
+      className={cn(isPlaying && "text-primary")}
+      onClick={(event) => {
+        event.stopPropagation();
+        play(asset);
+      }}
+    >
+      {isPlaying ? <SquareIcon /> : <PlayIcon />}
     </Button>
+  );
+}
+
+function SearchField({ value, onChange, className }: { value: string; onChange: (value: string) => void; className?: string }) {
+  return (
+    <label className={cn("flex h-control-sm items-center gap-2 rounded-md bg-surface-2 px-2.5 focus-within:shadow-[0_0_0_1px_var(--brand)]", className)}>
+      <SearchIcon className="size-3.5 shrink-0 text-ink-muted" aria-hidden="true" />
+      <input
+        type="search"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="Search names and notes"
+        aria-label="Search Assets"
+        className="min-w-0 flex-1 bg-transparent text-app-sm outline-none placeholder:text-ink-muted"
+      />
+    </label>
   );
 }
 
@@ -399,6 +474,7 @@ export function LibraryDrawer() {
   const [filter, setFilter] = useState<Kind | "all">("all");
   const [where, setWhere] = useState<"project" | "library">("project");
   const [importing, setImporting] = useState(false);
+  const [query, setQuery] = useState("");
 
   if (variant !== "B") return null;
 
@@ -413,7 +489,7 @@ export function LibraryDrawer() {
   }
 
   const shown = assets.filter(
-    (asset) => (filter === "all" || asset.kind === filter) && (where === "project" ? asset.scope === "project" || isUsed(asset) : asset.scope !== "project"),
+    (asset) => matches(asset, query) && (filter === "all" || asset.kind === filter) && (where === "project" ? asset.scope === "project" || isUsed(asset) : asset.scope !== "project"),
   );
 
   return (
@@ -434,6 +510,7 @@ export function LibraryDrawer() {
         ]}
         onChange={setWhere}
       />
+      <SearchField value={query} onChange={setQuery} />
       <div className="flex flex-wrap gap-1">
         {FILTERS.map(({ value, label }) => (
           <button
@@ -460,6 +537,7 @@ export function LibraryDrawer() {
         {shown.map((asset) => (
           <AssetTile key={asset.id} asset={asset} />
         ))}
+        {shown.length === 0 ? <p className="col-span-2 py-6 text-center text-app-xs text-ink-muted">Nothing matches “{query}”.</p> : null}
       </div>
     </aside>
   );
@@ -523,7 +601,7 @@ function Waveform() {
 /** B: the sound controls behind a timeline header button. */
 export function TimelineSoundButton() {
   const variant = useVariant();
-  if (variant !== "B") return null;
+  if (!hasLanes(variant)) return null;
 
   return (
     <Popover>
@@ -546,7 +624,7 @@ const LANE = 24;
 
 export function soundLanesHeight(variant: Variant | undefined) {
   if (variant === "A") return LANE + 8;
-  if (variant === "B") return 2 * LANE + 12;
+  if (hasLanes(variant)) return 2 * LANE + 12;
   return 0;
 }
 
@@ -567,7 +645,7 @@ export function SoundLanes({ timeline, px, top }: { timeline: VideoTimeline; px:
     );
   }
 
-  if (variant !== "B") return null;
+  if (!hasLanes(variant)) return null;
 
   return (
     <>
@@ -684,7 +762,7 @@ export function LibraryButton() {
   if (variant !== "C") return null;
 
   return (
-    <Button size="sm" onClick={() => set({ isLibraryOpen: true, isPickingMusic: false })}>
+    <Button size="sm" className="no-drag-region" onClick={() => set({ isLibraryOpen: true, isPickingMusic: false })}>
       <LibraryIcon />
       Library
     </Button>
@@ -790,5 +868,299 @@ export function LibraryWindow() {
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/* ───────────────────────── D: Library workspace, a non-modal pane beside the player ───────────────────────── */
+
+type ScopeFilter = Scope | "all";
+
+/** A waveform that fills with progress while it auditions; images show their swatch instead. */
+function AuditionWave({ asset, bars = 40 }: { asset: Asset; bars?: number }) {
+  const audition = useAudition();
+  const isPlaying = audition.id === asset.id;
+  const seed = asset.name.length;
+
+  return (
+    <span aria-hidden="true" className="relative flex h-6 min-w-0 flex-1 items-center gap-[2px] overflow-hidden">
+      {Array.from({ length: bars }, (_, index) => (
+        <span key={index} className="w-[2px] shrink-0 rounded-full bg-[#3a3a3a]" style={{ height: 4 + ((index * 7 + seed * 3) % 17) }} />
+      ))}
+      {isPlaying ? (
+        <span
+          key={audition.started}
+          className="absolute inset-y-0 left-0 bg-primary/25 mix-blend-screen"
+          style={{ animation: `proto-fill ${audition.length}s linear forwards` }}
+        />
+      ) : null}
+      <style>{"@keyframes proto-fill { from { width: 0 } to { width: 100% } }"}</style>
+    </span>
+  );
+}
+
+function useFiltered(kind: Kind | "all", scope: ScopeFilter, query: string) {
+  const assets = useAssetsProto((state) => state.assets);
+  return assets.filter((asset) => matches(asset, query) && (kind === "all" || asset.kind === kind) && (scope === "all" || asset.scope === scope));
+}
+
+function KindNav({ kind, onKind, scope, onScope }: { kind: Kind | "all"; onKind: (kind: Kind | "all") => void; scope: ScopeFilter; onScope: (scope: ScopeFilter) => void }) {
+  const assets = useAssetsProto((state) => state.assets);
+  const item = (isOn: boolean) =>
+    cn("flex h-7 items-center gap-2 rounded-md px-2 text-left text-app-sm text-ink-muted transition-colors hover:text-ink", isOn && "bg-surface-2 text-ink");
+
+  return (
+    <nav aria-label="Filter Assets" className="flex w-[148px] shrink-0 flex-col gap-0.5">
+      <button type="button" aria-pressed={kind === "all"} className={item(kind === "all")} onClick={() => onKind("all")}>
+        <LibraryIcon className="size-3.5" aria-hidden="true" />
+        Everything
+        <span className="ml-auto text-app-xs tabular-nums">{assets.length}</span>
+      </button>
+      {(Object.keys(KINDS) as Kind[]).map((value) => {
+        const Icon = KINDS[value].icon;
+        return (
+          <button key={value} type="button" aria-pressed={kind === value} className={item(kind === value)} onClick={() => onKind(value)}>
+            <Icon className="size-3.5" aria-hidden="true" />
+            {KINDS[value].plural}
+            <span className="ml-auto text-app-xs tabular-nums">{assets.filter((asset) => asset.kind === value).length}</span>
+          </button>
+        );
+      })}
+      <span className="mt-3 mb-1 px-2 text-app-xs text-ink-muted">From</span>
+      {(["all", "project", "library", "bundled"] as const).map((value) => (
+        <button key={value} type="button" aria-pressed={scope === value} className={item(scope === value)} onClick={() => onScope(value)}>
+          {value === "all" ? "Anywhere" : SCOPES[value]}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
+/** Space auditions the selected sound; ↑/↓ move the selection and audition as they go when `autoplay` is on. */
+function useListKeys(rows: Asset[], selected: Asset | undefined, onSelect: (id: string) => void, autoplay: boolean) {
+  const play = useAudition((state) => state.play);
+
+  return (event: React.KeyboardEvent) => {
+    const index = rows.findIndex(({ id }) => id === selected?.id);
+    const step = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+
+    if (step) {
+      event.preventDefault();
+      const next = rows[Math.max(0, Math.min(rows.length - 1, index + step))];
+      if (!next) return;
+      onSelect(next.id);
+      if (autoplay && (next.kind === "sfx" || next.kind === "music")) play(next);
+    } else if (event.key === " " && selected) {
+      // Space here auditions; keep it from also playing the video.
+      event.preventDefault();
+      event.stopPropagation();
+      play(selected);
+    }
+  };
+}
+
+export function LibraryWorkspace() {
+  const variant = useVariant();
+  const { music, set, updateAsset } = useAssetsProto();
+  const [isOpen, setIsOpen] = useState(true);
+  const [kind, setKind] = useState<Kind | "all">("all");
+  const [scope, setScope] = useState<ScopeFilter>("all");
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState<string>();
+  const [importing, setImporting] = useState(false);
+  const rows = useFiltered(kind, scope, query);
+  const selected = rows.find(({ id }) => id === selectedId) ?? rows[0];
+  const onKeyDown = useListKeys(rows, selected, setSelectedId, true);
+
+  if (variant !== "D") return null;
+
+  if (!isOpen) {
+    return (
+      <aside className="flex shrink-0 flex-col items-center border-r border-hairline-soft px-1.5 pt-4">
+        <Button variant="ghost" size="icon-sm" aria-label="Open the Library" title="Library" onClick={() => setIsOpen(true)}>
+          <LibraryIcon />
+        </Button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside aria-label="Library" className="flex w-[min(820px,58%)] shrink-0 flex-col gap-3 border-r border-hairline-soft p-3">
+      <div className="flex items-center gap-2">
+        <h2 className="text-app-body font-medium">Library</h2>
+        <SearchField value={query} onChange={setQuery} className="ml-2 max-w-[320px] flex-1" />
+        <span className="flex-1" />
+        <Button size="sm" onClick={() => setImporting(true)}>
+          <UploadIcon />
+          Import
+        </Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Collapse the Library" title="Collapse" onClick={() => setIsOpen(false)}>
+          <ChevronLeftIcon />
+        </Button>
+      </div>
+      {importing ? <ImportForm scope="project" onDone={() => setImporting(false)} /> : null}
+      <div className="flex min-h-0 flex-1 gap-3">
+        <KindNav kind={kind} onKind={setKind} scope={scope} onScope={setScope} />
+        <ul aria-label="Assets" tabIndex={0} onKeyDown={onKeyDown} className="flex min-h-0 min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-md outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]">
+          {rows.map((asset) => (
+            <li
+              key={asset.id}
+              aria-selected={selected?.id === asset.id}
+              onClick={() => setSelectedId(asset.id)}
+              className={cn("flex cursor-default items-center gap-2.5 rounded-[10px] p-1.5 hover:bg-surface-1", selected?.id === asset.id && "bg-surface-2 hover:bg-surface-2")}
+            >
+              {asset.kind === "sfx" || asset.kind === "music" ? <PreviewButton asset={asset} /> : <KindMark asset={asset} size={30} />}
+              <span className="flex w-[34%] min-w-0 flex-col">
+                <span className="truncate text-app-sm">{asset.name}</span>
+                <span className="truncate text-app-xs text-ink-muted">{asset.notes || "No notes"}</span>
+              </span>
+              {asset.kind === "sfx" || asset.kind === "music" ? <AuditionWave asset={asset} /> : <span className="flex-1" />}
+              <span className="w-[92px] shrink-0 truncate text-right text-app-xs text-ink-muted tabular-nums">{asset.facts.split(" · ")[0]}</span>
+            </li>
+          ))}
+          {rows.length === 0 ? <li className="py-8 text-center text-app-xs text-ink-muted">Nothing matches. Try fewer words, or Import a file.</li> : null}
+        </ul>
+        {selected ? (
+          <section aria-label="Selected Asset" className="flex w-[220px] shrink-0 flex-col gap-2">
+            <span className="grid aspect-video w-full place-items-center rounded-md" style={{ background: selected.tint ?? "var(--surface-1)" }}>
+              {selected.tint ? <KindMark asset={selected} size={36} /> : <PreviewButton asset={selected} />}
+            </span>
+            <p className="text-app-sm font-medium">{selected.name}</p>
+            <p className="text-app-xs text-ink-muted tabular-nums">
+              {KINDS[selected.kind].label} · {selected.facts}
+              <br />
+              {SCOPES[selected.scope]}
+            </p>
+            <label htmlFor="proto-d-notes" className="mt-1 text-app-xs text-ink-muted">
+              Notes for the agent
+            </label>
+            <textarea
+              id="proto-d-notes"
+              value={selected.notes}
+              rows={4}
+              disabled={selected.scope === "bundled"}
+              onChange={(event) => updateAsset(selected.id, { notes: event.target.value })}
+              className="resize-none rounded-md bg-surface-2 px-2.5 py-1.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)] disabled:opacity-60"
+            />
+            <div className="flex flex-wrap gap-2">
+              {selected.kind === "music" ? (
+                <Button size="sm" variant={selected.id === music ? "tertiary" : "primary"} disabled={selected.id === music} onClick={() => set({ music: selected.id })}>
+                  {selected.id === music ? "The music bed" : "Use as music"}
+                </Button>
+              ) : null}
+              {selected.scope === "project" ? (
+                <Button size="sm" onClick={() => updateAsset(selected.id, { scope: "library" })}>
+                  Add to Library
+                </Button>
+              ) : null}
+            </div>
+            <p className="mt-auto text-app-xs text-ink-muted">↑/↓ to audition as you go, Space to replay.</p>
+          </section>
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
+/* ───────────────────────── E: Docked browser, the Library as a tab of the bottom dock ───────────────────────── */
+
+export function useDockTab() {
+  const variant = useVariant();
+  const [tab, setTab] = useState<"timeline" | "library">("timeline");
+  return { tab: variant === "E" ? tab : "timeline", setTab, isDocked: variant === "E" };
+}
+
+export function DockTabs({ tab, onTab }: { tab: "timeline" | "library"; onTab: (tab: "timeline" | "library") => void }) {
+  return (
+    <div className="w-[190px]">
+      <Segmented
+        label="Dock"
+        value={tab}
+        options={[
+          { value: "timeline", label: "Timeline" },
+          { value: "library", label: "Library" },
+        ]}
+        onChange={onTab}
+      />
+    </div>
+  );
+}
+
+export function DockedLibrary() {
+  const { music, set, updateAsset } = useAssetsProto();
+  const [kind, setKind] = useState<Kind | "all">("all");
+  const [scope, setScope] = useState<ScopeFilter>("all");
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState<string>();
+  const [autoplay, setAutoplay] = useState(true);
+  const [importing, setImporting] = useState(false);
+  const rows = useFiltered(kind, scope, query);
+  const selected = rows.find(({ id }) => id === selectedId);
+  const onKeyDown = useListKeys(rows, selected, setSelectedId, autoplay);
+
+  return (
+    <div className="flex min-h-0 flex-1 gap-4 px-4 pb-3">
+      <div className="flex w-[200px] shrink-0 flex-col gap-2 overflow-y-auto">
+        <SearchField value={query} onChange={setQuery} />
+        <KindNav kind={kind} onKind={setKind} scope={scope} onScope={setScope} />
+      </div>
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+        <div className="flex items-center gap-3 text-app-xs text-ink-muted">
+          <span className="tabular-nums">{rows.length} Assets</span>
+          <label className="flex items-center gap-1.5">
+            <input type="checkbox" checked={autoplay} onChange={(event) => setAutoplay(event.target.checked)} className="accent-[var(--brand)]" />
+            Audition as I move (↑/↓)
+          </label>
+          <span className="flex-1" />
+          <Button size="sm" onClick={() => setImporting(!importing)}>
+            <UploadIcon />
+            Import
+          </Button>
+        </div>
+        {importing ? <ImportForm scope="project" onDone={() => setImporting(false)} /> : null}
+        <div role="grid" aria-label="Assets" tabIndex={0} onKeyDown={onKeyDown} className="min-h-0 flex-1 overflow-y-auto rounded-md outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]">
+          {rows.map((asset) => {
+            const isSound = asset.kind === "sfx" || asset.kind === "music";
+            return (
+              <div
+                key={asset.id}
+                role="row"
+                aria-selected={selected?.id === asset.id}
+                onClick={() => setSelectedId(asset.id)}
+                className={cn(
+                  "grid h-9 grid-cols-[32px_minmax(140px,1.2fr)_96px_minmax(160px,2fr)_minmax(120px,1.4fr)_96px_auto] items-center gap-3 border-b border-hairline-soft px-1 text-app-sm",
+                  selected?.id === asset.id ? "bg-surface-2" : "hover:bg-surface-1",
+                )}
+              >
+                {isSound ? <PreviewButton asset={asset} /> : <KindMark asset={asset} size={24} />}
+                <span className="truncate">{asset.name}</span>
+                <span className="truncate text-app-xs text-ink-muted">{KINDS[asset.kind].label}</span>
+                <input
+                  value={asset.notes}
+                  disabled={asset.scope === "bundled"}
+                  aria-label={`Notes for ${asset.name}`}
+                  placeholder="When to use it"
+                  onChange={(event) => updateAsset(asset.id, { notes: event.target.value })}
+                  className="h-7 min-w-0 rounded-sm bg-transparent px-1.5 text-app-xs text-ink-muted outline-none hover:bg-surface-2 focus:bg-surface-2 focus:text-ink disabled:hover:bg-transparent"
+                />
+                {isSound ? <AuditionWave asset={asset} bars={60} /> : <span className="truncate text-app-xs text-ink-muted tabular-nums">{asset.facts}</span>}
+                <span className="truncate text-app-xs text-ink-muted">{SCOPES[asset.scope]}</span>
+                <span className="flex justify-end">
+                  {asset.kind === "music" ? (
+                    <Button size="sm" variant="ghost" disabled={asset.id === music} onClick={() => set({ music: asset.id })}>
+                      {asset.id === music ? "In use" : "Use"}
+                    </Button>
+                  ) : asset.scope === "project" ? (
+                    <Button size="sm" variant="ghost" onClick={() => updateAsset(asset.id, { scope: "library" })}>
+                      Add to Library
+                    </Button>
+                  ) : null}
+                </span>
+              </div>
+            );
+          })}
+          {rows.length === 0 ? <p className="py-8 text-center text-app-xs text-ink-muted">Nothing matches. Try fewer words, or Import a file.</p> : null}
+        </div>
+      </div>
+    </div>
   );
 }
