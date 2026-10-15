@@ -12,6 +12,12 @@ const CLI = join(dirname(require.resolve("hyperframes/package.json")), "bin", "h
 /** Layout samples across the video; the spike's value. */
 const SAMPLES = 15;
 
+/**
+ * How long the page may take to load, in ms; the CLI's 10 s default fails on a busy machine with a bogus page-wide
+ * `check_runtime_failure`. Only navigation: `--timeout` would also make a page that never settles wait this long.
+ */
+const NAVIGATION_TIMEOUT_MS = 60_000;
+
 const FindingSchema = z.looseObject({
   code: z.string(),
   severity: z.string(),
@@ -82,6 +88,7 @@ function run(args: string[], chromePath: string): Promise<{ stdout: string; stde
         // In the Electron core process, execPath is Electron: run it as Node.
         ELECTRON_RUN_AS_NODE: "1",
         HYPERFRAMES_BROWSER_PATH: chromePath,
+        PRODUCER_PAGE_NAVIGATION_TIMEOUT_MS: String(NAVIGATION_TIMEOUT_MS),
         HYPERFRAMES_NO_TELEMETRY: "1",
         DO_NOT_TRACK: "1",
         HYPERFRAMES_NO_UPDATE_CHECK: "1",
