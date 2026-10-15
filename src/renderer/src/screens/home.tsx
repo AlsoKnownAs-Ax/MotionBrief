@@ -6,12 +6,13 @@ import { Button } from "@renderer/components/ui/button";
 import { orpc } from "@renderer/core/connection";
 import { useOpenFixtureProject } from "@renderer/editor/open-video";
 import { chooseAndOpenProject, OpenProjectPrompts } from "@renderer/home/open-project";
-import { ProjectList } from "@renderer/home/project-list";
+import { ProjectList, ProjectListSkeleton, refreshList } from "@renderer/home/project-list";
+import { projectsView, type ProjectsView } from "@renderer/home/projects-view";
 import { cn } from "@renderer/lib/utils";
 import { useNavigation } from "@renderer/navigation";
+import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { chooseVoiceover, useFileDrop } from "@renderer/new-project/voiceover-file";
 import { SetupChecklist } from "@renderer/setup/checklist";
-import type { ProjectSummary } from "../../../contract";
 import { SHORTCUTS } from "../../../shared/shortcuts";
 
 const NO_VALUE = "–";
@@ -102,8 +103,28 @@ function DropOverlay({ isOver }: { isOver: boolean }) {
   );
 }
 
+/** The list, its loading skeleton, or why it couldn't load. */
+function RecentProjectsBody({ view }: { view: Exclude<ProjectsView, { kind: "empty" }> }) {
+  if (view.kind === "loading") {
+    return <ProjectListSkeleton />;
+  }
+
+  if (view.kind === "failed") {
+    return (
+      <div role="alert" className="flex items-center gap-3 px-3">
+        <p className="text-app-sm text-status-fallback-ink">Couldn't load your Projects. {projectErrorMessage(view.error)}</p>
+        <Button variant="tertiary" size="sm" onClick={refreshList}>
+          Try again
+        </Button>
+      </div>
+    );
+  }
+
+  return <ProjectList projects={view.projects} />;
+}
+
 /** Projects, Open Project… and New Project, over the recent Projects. */
-function RecentProjects({ projects }: { projects: ProjectSummary[] }) {
+function RecentProjects({ view }: { view: Exclude<ProjectsView, { kind: "empty" }> }) {
   const openNewProject = useNavigation((state) => state.openNewProject);
 
   async function choose() {
@@ -130,7 +151,7 @@ function RecentProjects({ projects }: { projects: ProjectSummary[] }) {
           New Project
         </Button>
       </div>
-      <ProjectList projects={projects} />
+      <RecentProjectsBody view={view} />
       <p className="flex items-center gap-2 text-app-xs text-ink-muted">
         <UploadIcon aria-hidden="true" className="size-3.5" />
         Drop a Voiceover anywhere on this window to start a new Project. Projects are plain folders you can move, sync or copy.
@@ -146,15 +167,15 @@ export function Home() {
   const projects = useQuery(orpc.project.list.queryOptions());
   const openNewProject = useNavigation((state) => state.openNewProject);
   const drop = useFileDrop(openNewProject);
-  const hasProjects = (projects.data?.length ?? 0) > 0;
+  const view = projectsView(projects);
 
   return (
     <main
-      className={cn("relative flex flex-1 flex-col items-center gap-8 overflow-y-auto p-10", !hasProjects && "justify-center")}
+      className={cn("relative flex flex-1 flex-col items-center gap-8 overflow-y-auto p-10", view.kind === "empty" && "justify-center")}
       {...drop.handlers}
     >
       <SetupChecklist />
-      {hasProjects ? <RecentProjects projects={projects.data ?? []} /> : <StartWithVoiceover />}
+      {view.kind === "empty" ? <StartWithVoiceover /> : <RecentProjects view={view} />}
 
       <section aria-label="Core" className="w-full max-w-sm rounded-lg bg-surface-1 px-3 py-1">
         <dl className="flex flex-col">
