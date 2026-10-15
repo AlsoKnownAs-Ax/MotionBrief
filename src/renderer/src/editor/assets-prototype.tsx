@@ -33,17 +33,18 @@ import { cn } from "@renderer/lib/utils";
 import { Row, Section, Segmented, Select, Slider } from "@renderer/style/controls";
 import type { TimelineScene, VideoTimeline } from "../../../contract";
 
-export type Variant = "A" | "B" | "C" | "D" | "E";
+export type Variant = "A" | "B" | "C" | "D" | "E" | "F";
 const VARIANTS: { key: Variant; name: string }[] = [
   { key: "A", name: "Assets tab" },
   { key: "B", name: "Library drawer" },
   { key: "C", name: "Library window" },
   { key: "D", name: "Library workspace" },
   { key: "E", name: "Docked browser" },
+  { key: "F", name: "Workspace drawer" },
 ];
 
-/** B, D and E share the Music and SFX lanes and the timeline's Sound button. */
-const hasLanes = (variant: Variant | undefined) => variant === "B" || variant === "D" || variant === "E";
+/** B, D, E and F share the Music and SFX lanes and the timeline's Sound button. */
+const hasLanes = (variant: Variant | undefined) => variant === "B" || variant === "D" || variant === "E" || variant === "F";
 
 function matches(asset: Asset, query: string) {
   const needle = query.trim().toLowerCase();
@@ -1162,5 +1163,138 @@ export function DockedLibrary() {
         </div>
       </div>
     </div>
+  );
+}
+
+/* ───────────────────────── F: D's workspace folded into B's drawer ───────────────────────── */
+
+export function WorkspaceDrawer() {
+  const variant = useVariant();
+  const { music, set, updateAsset } = useAssetsProto();
+  const [isOpen, setIsOpen] = useState(true);
+  const [kind, setKind] = useState<Kind | "all">("all");
+  const [where, setWhere] = useState<"project" | "library">("project");
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState<string>();
+  const [importing, setImporting] = useState(false);
+  const assets = useAssetsProto((state) => state.assets);
+  const rows = assets.filter(
+    (asset) => matches(asset, query) && (kind === "all" || asset.kind === kind) && (where === "project" ? asset.scope === "project" || isUsed(asset) : asset.scope !== "project"),
+  );
+  const selected = rows.find(({ id }) => id === selectedId);
+  const onKeyDown = useListKeys(rows, selected ?? rows[0], setSelectedId, true);
+
+  if (variant !== "F") return null;
+
+  if (!isOpen) {
+    return (
+      <aside className="flex shrink-0 flex-col items-center border-r border-hairline-soft px-1.5 pt-4">
+        <Button variant="ghost" size="icon-sm" aria-label="Open the Library" title="Library" onClick={() => setIsOpen(true)}>
+          <LibraryIcon />
+        </Button>
+      </aside>
+    );
+  }
+
+  return (
+    <aside aria-label="Library" className="flex w-[340px] shrink-0 flex-col gap-3 border-r border-hairline-soft p-3">
+      <div className="flex items-center gap-2">
+        <LibraryIcon className="size-4 text-ink-muted" aria-hidden="true" />
+        <h2 className="flex-1 text-app-sm font-medium">Assets</h2>
+        <Button variant="ghost" size="icon-sm" aria-label="Import" title="Import" onClick={() => setImporting(!importing)}>
+          <UploadIcon />
+        </Button>
+        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setIsOpen(false)}>
+          <XIcon />
+        </Button>
+      </div>
+      <Segmented
+        label="Where"
+        value={where}
+        options={[
+          { value: "project", label: "This video" },
+          { value: "library", label: "Library" },
+        ]}
+        onChange={setWhere}
+      />
+      <SearchField value={query} onChange={setQuery} />
+      <div className="flex flex-wrap gap-1">
+        {FILTERS.map(({ value, label }) => (
+          <button
+            key={value}
+            type="button"
+            aria-pressed={kind === value}
+            onClick={() => setKind(value)}
+            className={cn("h-6 rounded-pill px-2.5 text-app-xs text-ink-muted hover:text-ink", kind === value && "bg-surface-3 text-ink")}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {importing ? <ImportForm scope={where} onDone={() => setImporting(false)} /> : null}
+      <ul
+        aria-label="Assets"
+        tabIndex={0}
+        onKeyDown={onKeyDown}
+        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-md outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]"
+      >
+        {rows.map((asset) => {
+          const isSound = asset.kind === "sfx" || asset.kind === "music";
+          const isSelected = selected?.id === asset.id;
+          return (
+            <li
+              key={asset.id}
+              aria-selected={isSelected}
+              onClick={() => setSelectedId(isSelected ? undefined : asset.id)}
+              className={cn("flex cursor-default flex-col gap-2 rounded-[10px] p-1.5", isSelected ? "bg-surface-2" : "hover:bg-surface-1")}
+            >
+              <span className="flex items-center gap-2">
+                {isSound ? <PreviewButton asset={asset} /> : <KindMark asset={asset} size={30} />}
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="truncate text-app-sm">{asset.name}</span>
+                  <span className="truncate text-app-xs text-ink-muted">{isSelected ? asset.facts : asset.notes || "No notes"}</span>
+                </span>
+                {asset.id === music ? <span className="text-app-xs text-primary">Music bed</span> : null}
+              </span>
+              {isSound ? (
+                <span className="flex pl-[38px]">
+                  <AuditionWave asset={asset} bars={isSelected ? 56 : 36} />
+                </span>
+              ) : null}
+              {isSelected ? (
+                <span className="flex flex-col gap-2 pl-[38px]" onClick={(event) => event.stopPropagation()}>
+                  {!isSound ? <span className="grid aspect-video w-full place-items-center rounded-sm" style={{ background: asset.tint }}><KindMark asset={asset} size={32} /></span> : null}
+                  <label htmlFor={`proto-f-${asset.id}`} className="text-app-xs text-ink-muted">
+                    Notes for the agent · {SCOPES[asset.scope]}
+                  </label>
+                  <textarea
+                    id={`proto-f-${asset.id}`}
+                    value={asset.notes}
+                    rows={3}
+                    disabled={asset.scope === "bundled"}
+                    onChange={(event) => updateAsset(asset.id, { notes: event.target.value })}
+                    className="resize-none rounded-md bg-surface-3 px-2.5 py-1.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)] disabled:opacity-60"
+                  />
+                  <span className="flex flex-wrap gap-2">
+                    {asset.kind === "music" ? (
+                      <Button size="sm" variant="primary" disabled={asset.id === music} onClick={() => set({ music: asset.id })}>
+                        {asset.id === music ? "The music bed" : "Use as music"}
+                      </Button>
+                    ) : null}
+                    {asset.scope === "project" ? (
+                      <Button size="sm" onClick={() => updateAsset(asset.id, { scope: "library" })}>
+                        Add to Library
+                      </Button>
+                    ) : null}
+                  </span>
+                </span>
+              ) : null}
+            </li>
+          );
+        })}
+        {rows.length === 0 ? <li className="py-8 text-center text-app-xs text-ink-muted">Nothing matches. Try fewer words, or Import a file.</li> : null}
+      </ul>
+      <p className="text-app-xs text-ink-muted">↑/↓ to audition as you go, Space to replay.</p>
+    </aside>
   );
 }
