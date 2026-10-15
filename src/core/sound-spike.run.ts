@@ -31,7 +31,7 @@ type AgentSound = { asset: keyof typeof SFX; at: number };
 
 /** Storyboard by hand, with the `sounds` field the Storyboard agent would write. */
 const SCENES = [
-  { id: "s01", type: "hook", from: 0, to: 16, transition: { type: "push-left" }, content: { headline: { id: "headline", text: "Small functions are making your code worse", at: 0 }, kicker: { id: "kicker", text: "Keep every function tiny?", at: 10 } }, sounds: [{ asset: "pop", at: 6 }] },
+  { id: "s01", type: "hook", from: 0, to: 16, transition: { type: "push-left" }, content: { headline: { id: "headline", text: "Small functions are making your code worse", at: 0 }, kicker: { id: "kicker", text: "Keep every function tiny?", at: 10 } }, sounds: [] },
   { id: "s02", type: "list", from: 17, to: 35, transition: { type: "cut" }, content: { title: { id: "title", text: "PaymentService: 15 methods", at: 19 }, items: [{ id: "validate", text: "validateCard()", at: 27 }, { id: "format", text: "formatAmount()", at: 29 }, { id: "build", text: "buildRequest()", at: 31 }, { id: "retry", text: "retryOnTimeout()", at: 33 }] }, sounds: [{ asset: "impact", at: 24 }] },
   { id: "s02b", type: "hook", from: 36, to: 50, transition: { type: "crossfade" }, content: { headline: { id: "headline", text: "Every caller knows all 15, in order", at: 37 } }, sounds: [] },
   { id: "s03", type: "key-term", from: 51, to: 60, transition: { type: "zoom-through" }, content: { term: { id: "term", text: "Shallow module", at: 53 }, definition: { id: "definition", text: "A huge interface hiding almost nothing", at: 55 } }, sounds: [{ asset: "riser", at: 53 }] },
