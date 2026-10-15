@@ -82,6 +82,16 @@ describe("preview", () => {
       ]);
     });
 
+    it("groups Scenes on a Canvas into one unit again when the same video is opened again", async () => {
+      const client = await core();
+      const first = await client.preview.open(await source());
+      // The same source is the same page, served from its first build.
+      const reopened = await client.preview.open(await source());
+
+      expect(reopened.id).toBe(first.id);
+      expect(reopened.timeline.scenes.map(({ unit }) => unit)).toEqual(preview.timeline.scenes.map(({ unit }) => unit));
+    });
+
     it("names the Transition into each Scene", () => {
       expect(preview.timeline.scenes.map(({ transitionIn }) => transitionIn)).toEqual([
         undefined,

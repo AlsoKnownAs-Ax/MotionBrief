@@ -24,7 +24,8 @@ export function timelineOf(
     height,
     duration,
     scenes: timings.map(({ scene, start, end }, index) => {
-      const unit = units.find(({ scenes }) => scenes.includes(scene))?.id ?? scene.id;
+      // By id: a page served from an earlier build holds that build's Scene objects.
+      const unit = units.find(({ scenes }) => scenes.some(({ id }) => id === scene.id))?.id ?? scene.id;
       const status = statusOf(unit, code, pending, notes);
 
       return {
