@@ -7,6 +7,7 @@ import { WordEditor } from "@renderer/components/word-editor";
 import { orpc } from "@renderer/core/connection";
 import { cn, rovingTabIndex } from "@renderer/lib/utils";
 import type { Preview, RevisionStatus, TimelineScene, TimelineWord, VideoTimeline, WordFixOffer } from "../../../contract";
+import { SceneMarks, soundLanesHeight, SoundLanes, TimelineSoundButton, useVariant } from "./assets-prototype";
 import { isGenerating, useGeneration } from "./generation";
 import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } from "./labels";
 import { useOpenVideo } from "./open-video";
@@ -112,7 +113,9 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const canvases = useMemo(() => canvasesOf(timeline.scenes), [timeline.scenes]);
   const brackets = bracketsHeight(canvases);
   const cardTop = RULER + GAP + brackets;
-  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP);
+  const variant = useVariant();
+  const lanes = soundLanesHeight(variant);
+  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP - lanes);
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
   const fixError = useOpenVideo((state) => state.fixError);
@@ -145,6 +148,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
             Retry all flagged ({flagged.length})
           </Button>
         ) : null}
+        <TimelineSoundButton />
         <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
       </header>
       <div ref={scrollRef} className="timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
@@ -181,6 +185,10 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
             <TransitionMarker key={scene.id} scene={scene} px={px} top={cardTop + cardHeight / 2} />
           ))}
           <WordLane words={timeline.words} px={px} top={wordTop} />
+          <SoundLanes timeline={timeline} px={px} top={wordTop + WORD_LANE + GAP} />
+          {timeline.scenes.map((scene) => (
+            <SceneMarks key={scene.id} scene={scene} px={px} top={cardTop} height={cardHeight} />
+          ))}
           <Playhead px={px} scrollRef={scrollRef} />
         </div>
       </div>

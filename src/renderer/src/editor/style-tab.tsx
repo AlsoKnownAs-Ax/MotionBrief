@@ -14,6 +14,7 @@ import { CAPTION_OPTIONS } from "@renderer/style/labels";
 import { PresetSample } from "@renderer/style/preset-sample";
 import { usePresets } from "@renderer/style/presets";
 import { StylePresetSchema, type CaptionStyle, type CostRange, type ListedPreset, type Palette, type StylePreset, type VideoRef } from "../../../contract";
+import { StyleSound } from "./assets-prototype";
 import { isGenerating, useGeneration } from "./generation";
 import { isRevising, useRevision } from "./revision";
 
@@ -67,6 +68,7 @@ function VideoStyle({ video }: { video?: VideoRef }) {
       <Section title="Instant changes" help="No agent run and no cost. Each change saves a Version.">
         <InstantChanges preset={preset} captions={stored.captions ?? false} isBusy={isBusy} onChange={(request) => void change(request)} />
       </Section>
+      <StyleSound />
     </div>
   );
 }
