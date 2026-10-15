@@ -298,7 +298,8 @@ export async function withSession<T, E>(
       session.close();
     }
   } finally {
-    await rm(workspaceDir, { recursive: true, force: true });
+    // Windows locks the folder until the closed agent process, whose cwd it is, exits; a leftover folder must not fail the run.
+    await rm(workspaceDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => undefined);
   }
 }
 
