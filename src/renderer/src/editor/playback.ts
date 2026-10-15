@@ -9,10 +9,14 @@ type Playback = {
   isReady: boolean;
   /** The player was playing when its page was swapped for a newer one, so the new one plays on. */
   resumes: boolean;
+  // shortcut: volume resets to 100% on app restart, persist in localStorage if creators ask
+  /** From 0 to 1, carried over to each new player. */
+  volume: number;
   player?: HyperframesPlayer;
   attach: (player: HyperframesPlayer) => () => void;
   seek: (time: number) => void;
   togglePlay: () => void;
+  setVolume: (volume: number) => void;
 };
 
 /**
@@ -25,6 +29,7 @@ export const usePlayback = create<Playback>((set, get) => ({
   isPlaying: false,
   isReady: false,
   resumes: false,
+  volume: 1,
   attach: (player) => {
     let frame = 0;
 
@@ -60,6 +65,7 @@ export const usePlayback = create<Playback>((set, get) => ({
     const events = { ready: onReady, durationchange: onDuration, play: onPlay, pause: onPause, ended: onPause };
 
     Object.entries(events).forEach(([name, listener]) => player.addEventListener(name, listener));
+    player.volume = get().volume;
     set({ player, isReady: player.ready, isPlaying: false });
 
     if (player.ready) {
@@ -92,6 +98,15 @@ export const usePlayback = create<Playback>((set, get) => ({
     }
 
     player.pause();
+  },
+  setVolume: (volume) => {
+    const { player } = get();
+
+    set({ volume });
+
+    if (player) {
+      player.volume = volume;
+    }
   },
 }));
 

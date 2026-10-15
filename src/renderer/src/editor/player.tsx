@@ -1,6 +1,6 @@
 import "@hyperframes/player";
 import type { HyperframesPlayer } from "@hyperframes/player";
-import { PauseIcon, PlayIcon } from "lucide-react";
+import { PauseIcon, PlayIcon, Volume2Icon, VolumeXIcon } from "lucide-react";
 import { useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Button } from "@renderer/components/ui/button";
 import { cn } from "@renderer/lib/utils";
@@ -88,7 +88,7 @@ const SEGMENT_COLORS = {
 
 /** Play / pause, the time, and a scrubber colored by each Scene's status. */
 export function Transport({ preview }: { preview: Preview }) {
-  const { time, isPlaying, isReady, seek, togglePlay } = usePlayback();
+  const { time, isPlaying, isReady, volume, seek, togglePlay, setVolume } = usePlayback();
   const { duration, scenes } = preview.timeline;
 
   return (
@@ -108,6 +108,21 @@ export function Transport({ preview }: { preview: Preview }) {
         <span className="text-ink-muted"> / {formatTime(duration)}</span>
       </span>
       <Scrubber scenes={scenes} duration={duration} time={time} onSeek={seek} />
+      {volume === 0 ? (
+        <VolumeXIcon aria-hidden="true" className="size-4 shrink-0 text-ink-muted" />
+      ) : (
+        <Volume2Icon aria-hidden="true" className="size-4 shrink-0 text-ink-muted" />
+      )}
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.05}
+        value={volume}
+        aria-label="Volume"
+        className="w-20 shrink-0 cursor-pointer accent-[var(--primary)]"
+        onChange={(event) => setVolume(event.target.valueAsNumber)}
+      />
     </div>
   );
 }
