@@ -78,7 +78,7 @@ it("renders the sound spike variants", async () => {
 
   // Preset rules: a sound on every Transition (cut is silent) and every element entrance.
   const ruleSounds = timings.flatMap(({ scene, start }, index) => [
-    ...elementsOf(scene).map((element) => ({ asset: "tick", t: wordAt(element.at), kind: "entrance" as const })),
+    ...(process.env.SPIKE_ENTRANCES ? elementsOf(scene).map((element) => ({ asset: "tick", t: wordAt(element.at), kind: "entrance" as const })) : []),
     ...(index > 0 && storyboard.scenes[index - 1]!.transition?.type !== "cut" ? [{ asset: storyboard.scenes[index - 1]!.transition?.type === "crossfade" ? "soft" : "whoosh", t: start, kind: "transition" as const }] : []),
   ]);
   const agentSounds = SCENES.flatMap(({ sounds }) => (sounds as readonly AgentSound[]).map(({ asset, at }) => ({ asset, t: wordAt(at), kind: "agent" as const })));
