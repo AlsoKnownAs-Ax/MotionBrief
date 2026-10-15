@@ -1018,7 +1018,18 @@ export function LibraryWorkspace() {
           {isDrawer ? <XIcon /> : <ChevronLeftIcon />}
         </Button>
       </div>
-      {importing ? <ImportForm scope="project" onDone={() => setImporting(false)} /> : null}
+      {importing && !isDrawer ? <ImportForm scope="project" onDone={() => setImporting(false)} /> : null}
+      {isDrawer ? (
+        <Dialog open={importing} onOpenChange={setImporting}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Import an Asset</DialogTitle>
+              <DialogDescription>Name it, pick its kind and tell the agent when to use it.</DialogDescription>
+            </DialogHeader>
+            <ImportForm scope="project" onDone={() => setImporting(false)} />
+          </DialogContent>
+        </Dialog>
+      ) : null}
       <div className="flex min-h-0 flex-1 gap-3">
         <KindNav kind={kind} onKind={setKind} scope={scope} onScope={setScope} />
         <ul aria-label="Assets" tabIndex={0} onKeyDown={onKeyDown} className="flex min-h-0 min-w-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-md outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]">
