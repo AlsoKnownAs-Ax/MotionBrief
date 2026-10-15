@@ -31,6 +31,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 import { Row, Section, Segmented, Select, Slider } from "@renderer/style/controls";
+import { Splitter } from "./splitter";
 import type { TimelineScene, VideoTimeline } from "../../../contract";
 
 export type Variant = "A" | "B" | "C" | "D" | "E" | "F";
@@ -40,7 +41,7 @@ const VARIANTS: { key: Variant; name: string }[] = [
   { key: "C", name: "Library window" },
   { key: "D", name: "Library workspace" },
   { key: "E", name: "Docked browser" },
-  { key: "F", name: "Workspace drawer" },
+  { key: "F", name: "Library drawer, resizable" },
 ];
 
 /** B, D, E and F share the Music and SFX lanes and the timeline's Sound button. */
@@ -971,8 +972,11 @@ export function LibraryWorkspace() {
   const rows = useFiltered(kind, scope, query);
   const selected = rows.find(({ id }) => id === selectedId) ?? rows[0];
   const onKeyDown = useListKeys(rows, selected, setSelectedId, true);
+  /** F only: the drawer's width, dragged on its edge; double-click the edge to reset. */
+  const [width, setWidth] = useState(DRAWER_WIDTH);
+  const isDrawer = variant === "F";
 
-  if (variant !== "D") return null;
+  if (variant !== "D" && !isDrawer) return null;
 
   if (!isOpen) {
     return (
@@ -984,8 +988,18 @@ export function LibraryWorkspace() {
     );
   }
 
+  const maxWidth = Math.round(window.innerWidth * 0.7);
+
   return (
-    <aside aria-label="Library" className="flex w-[min(820px,58%)] shrink-0 flex-col gap-3 border-r border-hairline-soft p-3">
+    <>
+    <aside
+      aria-label="Library"
+      className={cn("flex shrink-0 flex-col gap-3 p-3", isDrawer ? "min-w-0" : "w-[min(820px,58%)] border-r border-hairline-soft")}
+      style={isDrawer ? { width: Math.min(width, maxWidth) } : undefined}
+      onKeyDown={(event) => {
+        if (isDrawer && event.key === "Escape" && !(event.target as HTMLElement).closest("input, textarea")) setIsOpen(false);
+      }}
+    >
       <div className="flex items-center gap-2">
         <h2 className="text-app-body font-medium">Library</h2>
         <SearchField value={query} onChange={setQuery} className="ml-2 max-w-[320px] flex-1" />
@@ -994,8 +1008,14 @@ export function LibraryWorkspace() {
           <UploadIcon />
           Import
         </Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Collapse the Library" title="Collapse" onClick={() => setIsOpen(false)}>
-          <ChevronLeftIcon />
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label={isDrawer ? "Close the Library" : "Collapse the Library"}
+          title={isDrawer ? "Close (Esc)" : "Collapse"}
+          onClick={() => setIsOpen(false)}
+        >
+          {isDrawer ? <XIcon /> : <ChevronLeftIcon />}
         </Button>
       </div>
       {importing ? <ImportForm scope="project" onDone={() => setImporting(false)} /> : null}
@@ -1059,8 +1079,24 @@ export function LibraryWorkspace() {
         ) : null}
       </div>
     </aside>
+    {isDrawer ? (
+      <Splitter
+        axis="x"
+        label="Resize the Library"
+        value={Math.min(width, maxWidth)}
+        min={DRAWER_MIN}
+        max={maxWidth}
+        onChange={setWidth}
+        onReset={() => setWidth(DRAWER_WIDTH)}
+      />
+    ) : null}
+    </>
   );
 }
+
+/** F's drawer: D's layout needs about this much to keep its three columns. */
+const DRAWER_WIDTH = 720;
+const DRAWER_MIN = 560;
 
 /* ───────────────────────── E: Docked browser, the Library as a tab of the bottom dock ───────────────────────── */
 
@@ -1163,138 +1199,5 @@ export function DockedLibrary() {
         </div>
       </div>
     </div>
-  );
-}
-
-/* ───────────────────────── F: D's workspace folded into B's drawer ───────────────────────── */
-
-export function WorkspaceDrawer() {
-  const variant = useVariant();
-  const { music, set, updateAsset } = useAssetsProto();
-  const [isOpen, setIsOpen] = useState(true);
-  const [kind, setKind] = useState<Kind | "all">("all");
-  const [where, setWhere] = useState<"project" | "library">("project");
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState<string>();
-  const [importing, setImporting] = useState(false);
-  const assets = useAssetsProto((state) => state.assets);
-  const rows = assets.filter(
-    (asset) => matches(asset, query) && (kind === "all" || asset.kind === kind) && (where === "project" ? asset.scope === "project" || isUsed(asset) : asset.scope !== "project"),
-  );
-  const selected = rows.find(({ id }) => id === selectedId);
-  const onKeyDown = useListKeys(rows, selected ?? rows[0], setSelectedId, true);
-
-  if (variant !== "F") return null;
-
-  if (!isOpen) {
-    return (
-      <aside className="flex shrink-0 flex-col items-center border-r border-hairline-soft px-1.5 pt-4">
-        <Button variant="ghost" size="icon-sm" aria-label="Open the Library" title="Library" onClick={() => setIsOpen(true)}>
-          <LibraryIcon />
-        </Button>
-      </aside>
-    );
-  }
-
-  return (
-    <aside aria-label="Library" className="flex w-[340px] shrink-0 flex-col gap-3 border-r border-hairline-soft p-3">
-      <div className="flex items-center gap-2">
-        <LibraryIcon className="size-4 text-ink-muted" aria-hidden="true" />
-        <h2 className="flex-1 text-app-sm font-medium">Assets</h2>
-        <Button variant="ghost" size="icon-sm" aria-label="Import" title="Import" onClick={() => setImporting(!importing)}>
-          <UploadIcon />
-        </Button>
-        <Button variant="ghost" size="icon-sm" aria-label="Close" onClick={() => setIsOpen(false)}>
-          <XIcon />
-        </Button>
-      </div>
-      <Segmented
-        label="Where"
-        value={where}
-        options={[
-          { value: "project", label: "This video" },
-          { value: "library", label: "Library" },
-        ]}
-        onChange={setWhere}
-      />
-      <SearchField value={query} onChange={setQuery} />
-      <div className="flex flex-wrap gap-1">
-        {FILTERS.map(({ value, label }) => (
-          <button
-            key={value}
-            type="button"
-            aria-pressed={kind === value}
-            onClick={() => setKind(value)}
-            className={cn("h-6 rounded-pill px-2.5 text-app-xs text-ink-muted hover:text-ink", kind === value && "bg-surface-3 text-ink")}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {importing ? <ImportForm scope={where} onDone={() => setImporting(false)} /> : null}
-      <ul
-        aria-label="Assets"
-        tabIndex={0}
-        onKeyDown={onKeyDown}
-        className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto rounded-md outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]"
-      >
-        {rows.map((asset) => {
-          const isSound = asset.kind === "sfx" || asset.kind === "music";
-          const isSelected = selected?.id === asset.id;
-          return (
-            <li
-              key={asset.id}
-              aria-selected={isSelected}
-              onClick={() => setSelectedId(isSelected ? undefined : asset.id)}
-              className={cn("flex cursor-default flex-col gap-2 rounded-[10px] p-1.5", isSelected ? "bg-surface-2" : "hover:bg-surface-1")}
-            >
-              <span className="flex items-center gap-2">
-                {isSound ? <PreviewButton asset={asset} /> : <KindMark asset={asset} size={30} />}
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-app-sm">{asset.name}</span>
-                  <span className="truncate text-app-xs text-ink-muted">{isSelected ? asset.facts : asset.notes || "No notes"}</span>
-                </span>
-                {asset.id === music ? <span className="text-app-xs text-primary">Music bed</span> : null}
-              </span>
-              {isSound ? (
-                <span className="flex pl-[38px]">
-                  <AuditionWave asset={asset} bars={isSelected ? 56 : 36} />
-                </span>
-              ) : null}
-              {isSelected ? (
-                <span className="flex flex-col gap-2 pl-[38px]" onClick={(event) => event.stopPropagation()}>
-                  {!isSound ? <span className="grid aspect-video w-full place-items-center rounded-sm" style={{ background: asset.tint }}><KindMark asset={asset} size={32} /></span> : null}
-                  <label htmlFor={`proto-f-${asset.id}`} className="text-app-xs text-ink-muted">
-                    Notes for the agent · {SCOPES[asset.scope]}
-                  </label>
-                  <textarea
-                    id={`proto-f-${asset.id}`}
-                    value={asset.notes}
-                    rows={3}
-                    disabled={asset.scope === "bundled"}
-                    onChange={(event) => updateAsset(asset.id, { notes: event.target.value })}
-                    className="resize-none rounded-md bg-surface-3 px-2.5 py-1.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)] disabled:opacity-60"
-                  />
-                  <span className="flex flex-wrap gap-2">
-                    {asset.kind === "music" ? (
-                      <Button size="sm" variant="primary" disabled={asset.id === music} onClick={() => set({ music: asset.id })}>
-                        {asset.id === music ? "The music bed" : "Use as music"}
-                      </Button>
-                    ) : null}
-                    {asset.scope === "project" ? (
-                      <Button size="sm" onClick={() => updateAsset(asset.id, { scope: "library" })}>
-                        Add to Library
-                      </Button>
-                    ) : null}
-                  </span>
-                </span>
-              ) : null}
-            </li>
-          );
-        })}
-        {rows.length === 0 ? <li className="py-8 text-center text-app-xs text-ink-muted">Nothing matches. Try fewer words, or Import a file.</li> : null}
-      </ul>
-      <p className="text-app-xs text-ink-muted">↑/↓ to audition as you go, Space to replay.</p>
-    </aside>
   );
 }
