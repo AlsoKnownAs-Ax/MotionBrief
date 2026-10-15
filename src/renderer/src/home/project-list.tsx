@@ -24,7 +24,7 @@ const usePendingDeletes = create<{ paths: string[] }>(() => ({ paths: [] }));
 
 const pendingTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-function refreshList() {
+export function refreshList() {
   void queryClient.invalidateQueries({ queryKey: orpc.project.list.key() });
 }
 
@@ -105,6 +105,31 @@ export function ProjectList({ projects }: ProjectListProps) {
           onRenamed={() => setRenaming(undefined)}
         />
       ))}
+    </div>
+  );
+}
+
+const SKELETON_ROWS = 3;
+
+/** Stands in for the list while it loads, so a returning creator's Projects never look gone. */
+export function ProjectListSkeleton() {
+  return (
+    <div role="status" aria-busy="true" className="flex flex-col">
+      <span className="sr-only">Loading Projects…</span>
+      <div aria-hidden="true">
+        <div className="h-8" />
+        {Array.from({ length: SKELETON_ROWS }, (_, row) => (
+          <div key={row} className={cn(ROW, "min-h-14 py-2")}>
+            <div className="flex flex-col gap-1.5">
+              <span className="h-3.5 w-40 animate-pulse rounded-sm bg-surface-1" />
+              <span className="h-3 w-24 animate-pulse rounded-sm bg-surface-1" />
+            </div>
+            {[40, 32, 16, 40, 72].map((width, cell) => (
+              <span key={cell} style={{ width }} className="h-3 animate-pulse rounded-sm bg-surface-1" />
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
