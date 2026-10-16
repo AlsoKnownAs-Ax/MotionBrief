@@ -2,9 +2,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { AssetSchema, type Asset, type AssetKind, type AudioFormat, type ImageAsset, type ImageFormat, type SoundAsset } from "../../contract";
+import { AssetSchema, SoundAssetSchema, SoundRoleSchema, type Asset, type AssetKind, type AudioFormat, type BundledCheck, type ImageAsset, type ImageFormat, type SoundAsset } from "../../contract";
 import type { Media, MediaInfo } from "../media";
-import { copyHashed, fileStep, renameRetrying, writeAtomically, type FileError, type Projects } from "../projects";
+import { copyHashed, fileStep, renameRetrying, savedVersions, writeAtomically, type FileError, type Projects, type VideoContent } from "../projects";
 
 export type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
@@ -17,12 +17,24 @@ export type AssetsError =
   | { code: "NOTES_REQUIRED"; kind: AssetKind }
   | { code: "UNKNOWN_ASSET"; id: string };
 
+/** Where a user Asset lives: in an open Project, or in the Library every Project shares. */
+export type UserScope = { scope: "project"; projectId: string } | { scope: "library" };
+
+export type Scope = UserScope | { scope: "bundled" };
+
 /** What the creator writes in the import dialog. */
 export type NewAsset = { path: string; name: string; kind: AssetKind; notes: string };
 
 export type AssetChanges = { name?: string; notes?: string };
 
-export type AssetsOptions = { media: Media; projects: Pick<Projects, "inFolder"> };
+export type AssetsOptions = {
+  media: Media;
+  projects: Pick<Projects, "inFolder">;
+  /** `<userData>/Library`. */
+  libraryDir: string;
+  /** The bundled set's sounds and `manifest.json`, shipped with the app. */
+  bundledDir: string;
+};
 
 export type Assets = ReturnType<typeof createAssets>;
 
@@ -43,6 +55,20 @@ const SidecarMetaSchema = z.object({ schemaVersion: z.literal(1), removed: z.boo
 
 type Sidecar = { asset: Asset; removed: boolean };
 
+/** The bundled set's `manifest.json`: its version and each sound by slug, as `pnpm assets:bundled` wrote them. */
+const BundledSetSchema = z.object({
+  version: z.number().int().positive(),
+  sounds: z.array(SoundAssetSchema.omit({ id: true }).extend({ slug: z.string(), role: SoundRoleSchema })),
+});
+
+/** Versions saved before Versions recorded their bundled set were made with the first one. */
+const INITIAL_BUNDLED_SET = 1;
+
+const BUNDLED_PREFIX = "bundled:";
+
+/** An Asset reference wherever a Version holds one: a sha256 or `bundled:<slug>`, bare or as an `asset:` icon. */
+const ASSET_REFERENCE = /^(?:asset:)?(bundled:[a-z0-9-]+|[0-9a-f]{64})$/;
+
 /** FFprobe container names, as split from its comma list, and the format each is accepted as. */
 const AUDIO_CONTAINERS: Record<string, AudioFormat> = { wav: "wav", mp3: "mp3", m4a: "m4a", ogg: "ogg", flac: "flac" };
 
@@ -53,31 +79,63 @@ const IMAGE_CODECS: Record<string, ImageFormat> = { png: "png", mjpeg: "jpeg", w
 const SVG_ROOT = /^\uFEFF?\s*(?:(?:<\?xml[^>]*>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>)\s*)*<svg\b([^>]*)>/i;
 
 /**
- * Assets: sound effects, music, images and logos the creator imports. A user Asset's id is the sha256 of its bytes,
- * so importing the same file twice gives one Asset.
+ * Assets: sound effects, music, images and logos. A user Asset's id is the sha256 of its bytes, so importing the same
+ * file twice gives one Asset; a bundled one's is `bundled:<slug>`.
  *
- * Project Assets live in `<Project>/assets/` as `<sha256>.<format>` plus a `<sha256>.json` sidecar: the listed Asset
- * (name, kind and notes from the creator; format with duration and loudness for sounds, or width, height and
- * transparency for images) with a `schemaVersion` and, while a Version still uses a removed Asset, `removed: true`.
- * Every file step runs in the Project's folder queue, so it never races a rename of the Project.
+ * User Assets live in a folder as `<sha256>.<format>` plus a `<sha256>.json` sidecar: the listed Asset (name, kind
+ * and notes from the creator; format with duration and loudness for sounds, or width, height and transparency for
+ * images) with a `schemaVersion` and, while a Version still uses a removed Project Asset, `removed: true`. Project
+ * Assets are in `<Project>/assets/`, and their file steps run in the Project's folder queue, so they never race a
+ * rename of the Project; Library Assets are in the Library folder, one change at a time. The bundled set is read-only.
  */
-export function createAssets({ media, projects }: AssetsOptions) {
-  /** The Project's Assets that aren't removed, optionally of one kind, by name. */
-  function list(projectId: string, { kind }: { kind?: AssetKind } = {}): Promise<Result<Asset[], AssetsError>> {
-    return projects.inFolder<Asset[], AssetsError>(projectId, async (projectDir) => {
-      const dir = join(projectDir, ASSETS_DIR);
+export function createAssets({ media, projects, libraryDir, bundledDir }: AssetsOptions) {
+  let libraryQueue: Promise<unknown> = Promise.resolve();
+  let bundled: Promise<z.infer<typeof BundledSetSchema>> | undefined;
+
+  /** The bundled set's manifest, read once; a broken install fails loudly. */
+  function bundledSet() {
+    bundled ??= readFile(join(bundledDir, "manifest.json"), "utf8").then((text) => BundledSetSchema.parse(JSON.parse(text)));
+
+    return bundled;
+  }
+
+  /** Runs a step on the Library folder after its earlier changes. */
+  function inLibrary<T>(step: () => Promise<T>): Promise<T> {
+    const done = libraryQueue.then(step);
+    libraryQueue = done.catch(() => undefined);
+
+    return done;
+  }
+
+  /** Runs a step on the Asset folder of a scope, with the Project folder for Project Assets. */
+  function inFolder<T>(where: UserScope, step: (dir: string, projectDir?: string) => Promise<Result<T, AssetsError>>): Promise<Result<T, AssetsError>> {
+    if (where.scope === "library") {
+      return inLibrary(() => step(libraryDir));
+    }
+
+    return projects.inFolder<T, AssetsError>(where.projectId, (projectDir) => step(join(projectDir, ASSETS_DIR), projectDir));
+  }
+
+  /** A scope's Assets that aren't removed, optionally of one kind, by name. */
+  async function list(where: Scope, { kind }: { kind?: AssetKind } = {}): Promise<Result<Asset[], AssetsError>> {
+    const ofKind = (assets: Asset[]) => assets.filter((asset) => kind === undefined || asset.kind === kind).sort((a, b) => a.name.localeCompare(b.name));
+
+    if (where.scope === "bundled") {
+      const { sounds } = await bundledSet();
+
+      return { data: ofKind(sounds.map(({ slug, ...sound }) => ({ id: `${BUNDLED_PREFIX}${slug}`, ...sound }))), error: null };
+    }
+
+    return inFolder(where, async (dir) => {
       const { data: names } = await fileStep(dir, () => readdir(dir));
       const sidecars = await Promise.all((names ?? []).filter((name) => name.endsWith(".json")).map((name) => readSidecar(join(dir, name))));
-      const assets = sidecars
-        .flatMap((sidecar) => (sidecar && !sidecar.removed && (kind === undefined || sidecar.asset.kind === kind) ? [sidecar.asset] : []))
-        .sort((a, b) => a.name.localeCompare(b.name));
 
-      return { data: assets, error: null };
+      return { data: ofKind(sidecars.flatMap((sidecar) => (sidecar && !sidecar.removed ? [sidecar.asset] : []))), error: null };
     });
   }
 
-  /** Validates and measures the file, then copies it into the Project; the original is never read again. */
-  async function importAsset(projectId: string, { path, name, kind, notes }: NewAsset): Promise<Result<Asset, AssetsError>> {
+  /** Validates and measures the file, then copies it into the scope's folder; the original is never read again. */
+  async function importAsset(where: UserScope, { path, name, kind, notes }: NewAsset): Promise<Result<Asset, AssetsError>> {
     if (needsNotes(kind) && notes.trim() === "") {
       return { data: null, error: { code: "NOTES_REQUIRED", kind } };
     }
@@ -88,8 +146,7 @@ export function createAssets({ media, projects }: AssetsOptions) {
       return { data: null, error };
     }
 
-    return projects.inFolder<Asset, AssetsError>(projectId, async (projectDir) => {
-      const dir = join(projectDir, ASSETS_DIR);
+    return inFolder(where, async (dir) => {
       const { error: dirError } = await fileStep(dir, () => mkdir(dir, { recursive: true }));
 
       if (dirError) {
@@ -119,10 +176,9 @@ export function createAssets({ media, projects }: AssetsOptions) {
     });
   }
 
-  /** Renames an Asset or rewrites its notes. */
-  function update(projectId: string, id: string, { name, notes }: AssetChanges): Promise<Result<Asset, AssetsError>> {
-    return projects.inFolder<Asset, AssetsError>(projectId, async (projectDir) => {
-      const dir = join(projectDir, ASSETS_DIR);
+  /** Renames a user Asset or rewrites its notes. */
+  function update(where: UserScope, id: string, { name, notes }: AssetChanges): Promise<Result<Asset, AssetsError>> {
+    return inFolder(where, async (dir) => {
       const sidecar = await readListed(dir, id);
 
       if (!sidecar) {
@@ -139,17 +195,19 @@ export function createAssets({ media, projects }: AssetsOptions) {
     });
   }
 
-  /** Hides an Asset from listings, and deletes its bytes unless a Version still uses them. */
-  function remove(projectId: string, id: string): Promise<Result<null, AssetsError>> {
-    return projects.inFolder<null, AssetsError>(projectId, async (projectDir) => {
-      const dir = join(projectDir, ASSETS_DIR);
+  /**
+   * Hides a Project Asset from listings, and deletes its bytes unless a Version still uses them. A Library Asset is
+   * deleted outright: every Project that used it has its own copy.
+   */
+  function remove(where: UserScope, id: string): Promise<Result<null, AssetsError>> {
+    return inFolder(where, async (dir, projectDir) => {
       const sidecar = await readListed(dir, id);
 
       if (!sidecar) {
         return { data: null, error: { code: "UNKNOWN_ASSET", id } };
       }
 
-      if (usedByVersions()) {
+      if (projectDir && (await usedByVersions(projectDir, id))) {
         const { error } = await saveSidecar(dir, sidecar.asset, { removed: true });
 
         return error ? { data: null, error } : { data: null, error: null };
@@ -167,6 +225,74 @@ export function createAssets({ media, projects }: AssetsOptions) {
       const { error: rmError } = await fileStep(file, () => rm(file, { force: true }));
 
       return rmError ? { data: null, error: rmError } : { data: null, error: null };
+    });
+  }
+
+  /** Add to Library: copies a Project Asset and what the creator wrote about it into the Library. */
+  function addToLibrary(projectId: string, id: string): Promise<Result<Asset, AssetsError>> {
+    return projects.inFolder<Asset, AssetsError>(projectId, async (projectDir) => {
+      const dir = join(projectDir, ASSETS_DIR);
+      const sidecar = await readListed(dir, id);
+
+      if (!sidecar) {
+        return { data: null, error: { code: "UNKNOWN_ASSET", id } };
+      }
+
+      return inLibrary(() => copyAsset(sidecar.asset, dir, libraryDir));
+    });
+  }
+
+  /** The Library folder, made if it doesn't exist yet, so it can be shown. */
+  async function libraryFolder(): Promise<Result<string, FileError>> {
+    const { error } = await fileStep(libraryDir, () => mkdir(libraryDir, { recursive: true }));
+
+    return error ? { data: null, error } : { data: libraryDir, error: null };
+  }
+
+  /**
+   * Runs in the Project folder before every Version is saved: copies the Library Assets it uses into the Project with
+   * their sidecars, so the Project renders without this Library, and records the bundled set this app ships.
+   */
+  async function beforeVersionSave<T extends VideoContent>(projectDir: string, version: T): Promise<Result<T, FileError>> {
+    const dir = join(projectDir, ASSETS_DIR);
+
+    for (const id of assetUses(version)) {
+      if (id.startsWith(BUNDLED_PREFIX) || (await readSidecar(join(dir, `${id}.json`)))) {
+        continue;
+      }
+
+      // An Asset neither here nor in the Library can't be copied; the Storyboard's validation reports unknown Assets.
+      const { error } = await inLibrary(async (): Promise<Result<unknown, FileError>> => {
+        const sidecar = await readListed(libraryDir, id);
+
+        return sidecar ? copyAsset(sidecar.asset, libraryDir, dir) : { data: null, error: null };
+      });
+
+      if (error) {
+        return { data: null, error };
+      }
+    }
+
+    return { data: { ...version, bundledSet: (await bundledSet()).version }, error: null };
+  }
+
+  /** The bundled set the Project's Versions were saved with, at its newest, and the bundled sounds they use that this app lacks. */
+  async function bundledCheck(projectId: string): Promise<Result<BundledCheck, AssetsError>> {
+    const { version: appSet, sounds } = await bundledSet();
+    const shipped = new Set(sounds.map(({ slug }) => slug));
+
+    return projects.inFolder<BundledCheck, AssetsError>(projectId, async (projectDir) => {
+      const { data: versions, error } = await savedVersions(projectDir);
+
+      if (error) {
+        return { data: null, error: error.code === "FILE_FAILED" ? error : { code: "FILE_FAILED", path: error.path, message: error.message } };
+      }
+
+      const projectSet = Math.max(INITIAL_BUNDLED_SET, ...versions.map(({ bundledSet: set }) => set ?? INITIAL_BUNDLED_SET));
+      const slugs = versions.flatMap(assetUses).flatMap((id) => (id.startsWith(BUNDLED_PREFIX) ? [id.slice(BUNDLED_PREFIX.length)] : []));
+      const missing = [...new Set(slugs)].filter((slug) => !shipped.has(slug)).sort();
+
+      return { data: { projectSet, appSet, missing }, error: null };
     });
   }
 
@@ -237,7 +363,50 @@ export function createAssets({ media, projects }: AssetsOptions) {
     return { data: { kind, format, width: image.width, height: image.height, transparent: image.transparent }, error: null };
   }
 
-  return { list, import: importAsset, update, remove };
+  return { list, import: importAsset, update, remove, addToLibrary, libraryFolder, beforeVersionSave, bundledCheck };
+}
+
+/**
+ * The Assets a Version uses: every Asset reference in its Storyboard (sounds, media, `asset:` icons) and its Style
+ * Preset (the sound block), wherever they sit, so new places that name an Asset count without changes here.
+ */
+export function assetUses({ storyboard, preset }: Pick<VideoContent, "storyboard" | "preset">): string[] {
+  const uses = new Set<string>();
+  const visit = (value: unknown) => {
+    if (typeof value === "string") {
+      const id = ASSET_REFERENCE.exec(value)?.[1];
+
+      if (id) {
+        uses.add(id);
+      }
+    } else if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
+    }
+  };
+  visit([storyboard, preset]);
+
+  return [...uses];
+}
+
+/** Whether any saved Version uses the Asset; a Version that can't be read might, so its bytes are kept. */
+async function usedByVersions(projectDir: string, id: string) {
+  const { data: versions } = await savedVersions(projectDir);
+
+  return !versions || versions.some((version) => assetUses(version).includes(id));
+}
+
+/** Copies an Asset's file and sidecar from one Asset folder to another. */
+async function copyAsset(asset: Asset, from: string, to: string): Promise<Result<Asset, FileError>> {
+  const { error: dirError } = await fileStep(to, () => mkdir(to, { recursive: true }));
+
+  if (dirError) {
+    return { data: null, error: dirError };
+  }
+
+  const file = `${asset.id}.${asset.format}`;
+  const { error } = await copyHashed(join(from, file), join(to, file));
+
+  return error ? { data: null, error } : saveSidecar(to, asset);
 }
 
 /** The sidecar of a listed Asset, or undefined for an id that isn't a sha256, an unknown one or a removed one. */
@@ -265,16 +434,11 @@ async function readSidecar(path: string): Promise<Sidecar | undefined> {
   return { asset, removed: meta.removed ?? false };
 }
 
-async function saveSidecar(dir: string, asset: Asset, { removed = false } = {}): Promise<Result<Asset, AssetsError>> {
+async function saveSidecar(dir: string, asset: Asset, { removed = false } = {}): Promise<Result<Asset, FileError>> {
   const path = join(dir, `${asset.id}.json`);
   const { error } = await writeAtomically(path, `${JSON.stringify({ schemaVersion: 1, ...asset, ...(removed && { removed }) }, null, 2)}\n`);
 
   return error ? { data: null, error } : { data: asset, error: null };
-}
-
-// shortcut: no Version references Assets yet, so none keeps a removed Asset's bytes; check the Versions here once they record Asset uses.
-function usedByVersions() {
-  return false;
 }
 
 function isSound(kind: AssetKind): kind is SoundAsset["kind"] {

@@ -38,6 +38,7 @@ import {
   saveGeneration,
   saveVersion,
   writeUnit,
+  type BeforeVersionSave,
   type GenerationRecord,
   type Version,
   type VersionError,
@@ -56,6 +57,7 @@ export type ProjectsOptions = {
   transcriber: Transcriber;
   clock: Clock;
   trash: Trash;
+  beforeVersionSave: BeforeVersionSave;
 };
 
 export type Projects = ReturnType<typeof createProjects>;
@@ -146,7 +148,7 @@ type OpenProject = {
  * while it is open, a `.lock` (ADR 0004). Open Projects transcribe their Voiceover as soon as they have one. Recent
  * Projects are tracked by path in app data.
  */
-export function createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash }: ProjectsOptions) {
+export function createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash, beforeVersionSave }: ProjectsOptions) {
   const open = new Map<string, OpenProject>();
   /** The last lifecycle step queued on each folder, by `folderKey`. */
   const lifecycle = new Map<string, Promise<unknown>>();
@@ -311,7 +313,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     const recovered: { format: Format; version: number }[] = [];
 
     for (const format of FormatSchema.options) {
-      const { data: version, error } = await recoverGeneration(dir, format, new Date(clock.now()).toISOString());
+      const { data: version, error } = await recoverGeneration(dir, format, new Date(clock.now()).toISOString(), beforeVersionSave);
 
       if (error) {
         return { data: null, error };
@@ -1100,14 +1102,14 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     /** Saves the first generation in progress, so its finished units outlive a crash. */
     saveGeneration: (projectId: string, format: Format, record: GenerationRecord) => write(projectId, (dir) => saveGeneration(dir, format, record)),
     /** Saves the video's next Version; resolves to its number. */
-    saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version)),
+    saveVersion: (projectId: string, format: Format, version: Omit<Version, "version">) => write(projectId, (dir) => saveVersion(dir, format, version, beforeVersionSave)),
     /** A saved Version of the video by number, with its units' Scene code. */
     readVersion: (projectId: string, format: Format, number: number) => read(projectId, (dir) => readVersion(dir, format, number)),
     /** The video's Versions, newest first. */
     versions: (projectId: string, format: Format) => read(projectId, (dir) => listVersions(dir, format)),
     /** Saves a copy of an earlier Version as the newest; resolves to its number. */
     restoreVersion: (projectId: string, format: Format, number: number) =>
-      read(projectId, (dir) => restoreVersion(dir, format, number, new Date(clock.now()).toISOString())),
+      read(projectId, (dir) => restoreVersion(dir, format, number, new Date(clock.now()).toISOString(), beforeVersionSave)),
     /** Adds a line to the video's append-only chat log. */
     appendChat: (projectId: string, format: Format, line: ChatLine) => write(projectId, (dir) => appendChat(dir, format, line)),
     /** The video's chat entries, as its log adds up. */

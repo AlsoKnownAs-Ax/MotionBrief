@@ -270,12 +270,15 @@ export function createCoreRouter({
       clear: api.cache.clear.handler(() => cache.clear()),
     },
     assets: {
-      list: api.assets.list.handler(async ({ input: { projectId, kind } }) => dataOrThrow(await assets.list(projectId, { kind }))),
-      import: api.assets.import.handler(async ({ input: { projectId, ...asset } }) => dataOrThrow(await assets.import(projectId, asset))),
-      update: api.assets.update.handler(async ({ input: { projectId, id, ...changes } }) => dataOrThrow(await assets.update(projectId, id, changes))),
-      remove: api.assets.remove.handler(async ({ input: { projectId, id } }) => {
-        dataOrThrow(await assets.remove(projectId, id));
+      list: api.assets.list.handler(async ({ input }) => dataOrThrow(await assets.list(input, input))),
+      import: api.assets.import.handler(async ({ input }) => dataOrThrow(await assets.import(input, input))),
+      update: api.assets.update.handler(async ({ input }) => dataOrThrow(await assets.update(input, input.id, input))),
+      remove: api.assets.remove.handler(async ({ input }) => {
+        dataOrThrow(await assets.remove(input, input.id));
       }),
+      addToLibrary: api.assets.addToLibrary.handler(async ({ input: { projectId, id } }) => dataOrThrow(await assets.addToLibrary(projectId, id))),
+      libraryFolder: api.assets.libraryFolder.handler(async () => dataOrThrow(await assets.libraryFolder())),
+      bundledCheck: api.assets.bundledCheck.handler(async ({ input: { projectId } }) => dataOrThrow(await assets.bundledCheck(projectId))),
     },
   });
 }

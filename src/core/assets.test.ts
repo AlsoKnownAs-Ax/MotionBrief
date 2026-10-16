@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 function importAsset(asset: { path: string; name: string; kind: "sfx" | "music" | "image" | "logo"; notes?: string }) {
-  return core.assets.import({ projectId: project.id, notes: "", ...asset });
+  return core.assets.import({ scope: "project", projectId: project.id, notes: "", ...asset });
 }
 
 function assetFiles() {
@@ -43,7 +43,7 @@ describe("importing a Project Asset", () => {
     expect(await assetFiles()).toEqual([`${id}.json`, `${id}.wav`]);
     expect(await readFile(join(project.path, "assets", `${id}.wav`))).toEqual(await readFile(path));
     expect(JSON.parse(await readFile(join(project.path, "assets", `${id}.json`), "utf8"))).toMatchObject({ name: "Pop", kind: "sfx", format: "wav" });
-    expect(await core.assets.list({ projectId: project.id })).toEqual([asset]);
+    expect(await core.assets.list({ scope: "project", projectId: project.id })).toEqual([asset]);
   });
 
   it("gives one Asset for the same file imported twice, with what the creator wrote the second time", async () => {
@@ -54,7 +54,7 @@ describe("importing a Project Asset", () => {
 
     expect(second).toMatchObject({ id: first.id, name: "Big whoosh", notes: "For the reveal", format: "flac" });
     expect(await assetFiles()).toEqual([`${first.id}.flac`, `${first.id}.json`]);
-    expect(await core.assets.list({ projectId: project.id })).toEqual([second]);
+    expect(await core.assets.list({ scope: "project", projectId: project.id })).toEqual([second]);
   });
 
   it("measures a sound effect shorter than 400 ms at its loudest, so it doesn't read as silence", async () => {
@@ -138,36 +138,36 @@ describe("managing Project Assets", () => {
     const bed = await importAsset({ path: await voiceover(root, "Bed.wav", [{ tone: 1 }]), name: "Bed", kind: "music" });
     const logo = await importAsset({ path: await picture(root, "Logo.png"), name: "Acme", kind: "logo", notes: "Acme's logo" });
 
-    expect(await core.assets.list({ projectId: project.id })).toEqual([logo, bed, pop]);
-    expect(await core.assets.list({ projectId: project.id, kind: "music" })).toEqual([bed]);
+    expect(await core.assets.list({ scope: "project", projectId: project.id })).toEqual([logo, bed, pop]);
+    expect(await core.assets.list({ scope: "project", projectId: project.id, kind: "music" })).toEqual([bed]);
   });
 
   it("renames an Asset and rewrites its notes, keeping notes on images and logos", async () => {
     const logo = await importAsset({ path: await picture(root, "Logo.png"), name: "Logo", kind: "logo", notes: "Our logo" });
 
-    const renamed = await core.assets.update({ projectId: project.id, id: logo.id, name: "Acme" });
-    const renoted = await core.assets.update({ projectId: project.id, id: logo.id, notes: "Acme's logo, for the outro" });
+    const renamed = await core.assets.update({ scope: "project", projectId: project.id, id: logo.id, name: "Acme" });
+    const renoted = await core.assets.update({ scope: "project", projectId: project.id, id: logo.id, notes: "Acme's logo, for the outro" });
 
     expect(renamed).toMatchObject({ name: "Acme", notes: "Our logo", width: 4 });
     expect(renoted).toMatchObject({ name: "Acme", notes: "Acme's logo, for the outro" });
-    expect(await core.assets.list({ projectId: project.id })).toEqual([renoted]);
-    await expect(core.assets.update({ projectId: project.id, id: logo.id, notes: "" })).rejects.toMatchObject({ code: "NOTES_REQUIRED" });
-    await expect(core.assets.update({ projectId: project.id, id: logo.id, name: " " })).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(await core.assets.list({ scope: "project", projectId: project.id })).toEqual([renoted]);
+    await expect(core.assets.update({ scope: "project", projectId: project.id, id: logo.id, notes: "" })).rejects.toMatchObject({ code: "NOTES_REQUIRED" });
+    await expect(core.assets.update({ scope: "project", projectId: project.id, id: logo.id, name: " " })).rejects.toMatchObject({ code: "BAD_REQUEST" });
   });
 
   it("removes an Asset no Version uses: it leaves the listings and its bytes are deleted", async () => {
     const pop = await importAsset({ path: await voiceover(root, "Pop.wav", [{ tone: 0.3 }]), name: "Pop", kind: "sfx" });
     const bed = await importAsset({ path: await voiceover(root, "Bed.wav", [{ tone: 1 }]), name: "Bed", kind: "music" });
 
-    await core.assets.remove({ projectId: project.id, id: pop.id });
+    await core.assets.remove({ scope: "project", projectId: project.id, id: pop.id });
 
-    expect(await core.assets.list({ projectId: project.id })).toEqual([bed]);
+    expect(await core.assets.list({ scope: "project", projectId: project.id })).toEqual([bed]);
     expect(await assetFiles()).toEqual([`${bed.id}.json`, `${bed.id}.wav`]);
-    await expect(core.assets.remove({ projectId: project.id, id: pop.id })).rejects.toMatchObject({ code: "UNKNOWN_ASSET", data: { id: pop.id } });
+    await expect(core.assets.remove({ scope: "project", projectId: project.id, id: pop.id })).rejects.toMatchObject({ code: "UNKNOWN_ASSET", data: { id: pop.id } });
   });
 
   it("refuses ids that aren't one of the Project's Assets, and Projects that aren't open", async () => {
-    await expect(core.assets.update({ projectId: project.id, id: "../project", name: "x" })).rejects.toMatchObject({ code: "UNKNOWN_ASSET" });
-    await expect(core.assets.list({ projectId: "nope" })).rejects.toMatchObject({ code: "UNKNOWN_PROJECT" });
+    await expect(core.assets.update({ scope: "project", projectId: project.id, id: "../project", name: "x" })).rejects.toMatchObject({ code: "UNKNOWN_ASSET" });
+    await expect(core.assets.list({ scope: "project", projectId: "nope" })).rejects.toMatchObject({ code: "UNKNOWN_PROJECT" });
   });
 });

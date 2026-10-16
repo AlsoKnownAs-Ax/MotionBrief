@@ -35,6 +35,11 @@ export function whisperVadModelPath() {
   return join(ROOT, "vendor", "whisper-vad-model", "model.bin");
 }
 
+/** The bundled sound set and its manifest, checked in under resources/ and unpacked beside vendor/ when packaged. */
+export function bundledAssetsDir() {
+  return join(ROOT, "resources", "assets");
+}
+
 function executable(name: string) {
   if (process.platform === "win32") {
     return `${name}.exe`;

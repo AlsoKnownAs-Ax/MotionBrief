@@ -851,16 +851,21 @@ export const ImageFormatSchema = z.enum(["png", "jpeg", "webp", "svg"]);
 
 /** What the creator writes about an Asset; the agent reads the notes to decide where it goes. */
 const assetWritten = {
-  /** A user Asset's sha256. */
+  /** A user Asset's sha256, or a bundled one's `bundled:<slug>`. */
   id: z.string(),
   name: z.string(),
   notes: z.string(),
 };
 
+/** What a bundled sound effect is for: a Transition, or an impact or sting the agent may place on a word. */
+export const SoundRoleSchema = z.enum(["transition", "impact"]);
+
 /** A sound effect or music bed, with the facts measured on import. */
 export const SoundAssetSchema = z.object({
   ...assetWritten,
   kind: z.enum(["sfx", "music"]),
+  /** Bundled sound effects only. */
+  role: SoundRoleSchema.optional(),
   format: AudioFormatSchema,
   /** Seconds. */
   duration: z.number(),
@@ -898,6 +903,17 @@ const ASSET_ERRORS = {
   UNKNOWN_ASSET: { data: z.object({ id: z.string() }) },
   FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
 };
+
+/** Where Assets live: the open Project, the Library every Project shares, or the bundled set shipped with the app. */
+export const AssetScopeSchema = z.enum(["project", "library", "bundled"]);
+
+/** The fields of a call on the user's Assets, in the open Project or the Library; bundled Assets are read-only. */
+function inUserScope<T extends z.ZodRawShape>(shape: T) {
+  return z.discriminatedUnion("scope", [ProjectIdInput.extend({ scope: z.literal("project"), ...shape }), z.object({ scope: z.literal("library"), ...shape })]);
+}
+
+/** The bundled-set version a Project's Versions were saved with, against this app's, and the bundled slugs they use that it lacks. */
+export const BundledCheckSchema = z.object({ projectSet: z.number().int().positive(), appSet: z.number().int().positive(), missing: z.array(z.string()) });
 
 const ProjectPathInput = z.object({ path: z.string() });
 
@@ -1372,26 +1388,44 @@ export const coreContract = {
     clear: oc.output(CacheStatusSchema),
   },
   assets: {
-    /** The open Project's Assets, optionally of one kind, by name. */
+    /** The Assets of one scope (the open Project's, the Library's or the bundled set), optionally of one kind, by name. */
     list: oc
       .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
-      .input(ProjectIdInput.extend({ kind: AssetKindSchema.optional() }))
+      .input(
+        z.discriminatedUnion("scope", [
+          ProjectIdInput.extend({ scope: z.literal("project"), kind: AssetKindSchema.optional() }),
+          z.object({ scope: z.literal("library"), kind: AssetKindSchema.optional() }),
+          z.object({ scope: z.literal("bundled"), kind: AssetKindSchema.optional() }),
+        ]),
+      )
       .output(z.array(AssetSchema)),
     /**
-     * Copies a file into the open Project as a Project Asset; the original is never read again. Importing the same
-     * bytes again gives the same Asset, with what the creator wrote this time.
+     * Copies a file into the open Project as a Project Asset, or into the Library; the original is never read again.
+     * Importing the same bytes again gives the same Asset, with what the creator wrote this time.
      */
     import: oc
       .errors(ASSET_ERRORS)
-      .input(ProjectIdInput.extend({ path: z.string(), name: AssetNameSchema, kind: AssetKindSchema, notes: z.string() }))
+      .input(inUserScope({ path: z.string(), name: AssetNameSchema, kind: AssetKindSchema, notes: z.string() }))
       .output(AssetSchema),
     /** Renames an Asset or rewrites its notes; notes steer only later generations. */
     update: oc
       .errors(ASSET_ERRORS)
-      .input(ProjectIdInput.extend({ id: z.string(), name: AssetNameSchema.optional(), notes: z.string().optional() }))
+      .input(inUserScope({ id: z.string(), name: AssetNameSchema.optional(), notes: z.string().optional() }))
       .output(AssetSchema),
-    /** Hides an Asset from listings and the agent; its bytes go once no Version uses them. */
-    remove: oc.errors(ASSET_ERRORS).input(ProjectIdInput.extend({ id: z.string() })),
+    /**
+     * Removes an Asset. A Project Asset is hidden from listings and the agent, and its bytes go once no Version uses
+     * them; a Library Asset is deleted, and every Project keeps its own copy.
+     */
+    remove: oc.errors(ASSET_ERRORS).input(inUserScope({ id: z.string() })),
+    /** Add to Library: copies a Project Asset, with what the creator wrote, into the Library. */
+    addToLibrary: oc.errors(ASSET_ERRORS).input(ProjectIdInput.extend({ id: z.string() })).output(AssetSchema),
+    /** The Library's folder, for Open Library folder; created if it doesn't exist yet. */
+    libraryFolder: oc.errors({ FILE_FAILED: PROJECT_ERRORS.FILE_FAILED }).output(z.string()),
+    /** Whether the open Project uses bundled sounds this app's set lacks, so the creator can be asked to update. */
+    bundledCheck: oc
+      .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(ProjectIdInput)
+      .output(BundledCheckSchema),
   },
 };
 
@@ -1406,6 +1440,9 @@ export type ImageFormat = z.infer<typeof ImageFormatSchema>;
 export type SoundAsset = z.infer<typeof SoundAssetSchema>;
 export type ImageAsset = z.infer<typeof ImageAssetSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
+export type AssetScope = z.infer<typeof AssetScopeSchema>;
+export type SoundRole = z.infer<typeof SoundRoleSchema>;
+export type BundledCheck = z.infer<typeof BundledCheckSchema>;
 export type PresetTransition = z.infer<typeof PresetTransitionSchema>;
 export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;

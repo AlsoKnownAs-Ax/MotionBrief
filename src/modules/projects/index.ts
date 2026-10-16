@@ -14,4 +14,4 @@ export { createStatusStore } from "./status";
 export { copyHashed, fileStep, renameRetrying, writeAtomically, type FileError } from "./files";
 export type { VideoDocumentError } from "./video";
 export type { ChatLine } from "./chat";
-export { readVersion, type Flag, type GenerationRecord, type RevisionRecord, type StoredVersion, type Version, type VersionError, type VideoContent } from "./videos";
+export { readVersion, savedVersions, type BeforeVersionSave, type Flag, type GenerationRecord, type RevisionRecord, type StoredVersion, type Version, type VersionError, type VideoContent } from "./videos";
