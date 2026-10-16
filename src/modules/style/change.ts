@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { CaptionStyle, StyleChangeKind, StylePreset } from "../../contract";
+import type { CaptionStyle, PresetSound, SfxDensity, StyleChangeKind, StylePreset } from "../../contract";
 
 /** Whether a video shows Captions before a style change and after it. */
 export type CaptionsChange = { before: boolean; after: boolean };
@@ -19,6 +19,12 @@ const CAPTION_STYLE_LABELS = {
   pop: "Pop",
   plain: "Plain",
 } satisfies Record<CaptionStyle, string>;
+
+const SFX_LABELS = {
+  off: "Off",
+  subtle: "Subtle",
+  lively: "Lively",
+} satisfies Record<SfxDensity, string>;
 
 /**
  * What changing a video's Style Preset snapshot from `current` to `next` costs. Another Preset, or a change to the
@@ -64,9 +70,25 @@ function swapped(current: StylePreset, next: StylePreset, captions: CaptionsChan
     { isChanged: !isSame(current.typography, next.typography), line: `Typography: ${next.typography.name}` },
     { isChanged: current.captions !== next.captions, line: `Caption style: ${CAPTION_STYLE_LABELS[next.captions]}` },
     { isChanged: captions.before !== captions.after, line: captionsLine(captions.after) },
+    ...soundSwaps(current.sound, next.sound),
   ]
     .filter(({ isChanged }) => isChanged)
     .map(({ line }) => line);
+}
+
+/** The Assembler mixes every sound with no agent, so each sound change is a swap; a Preset without sound is silent. */
+function soundSwaps(current: PresetSound | undefined, next: PresetSound | undefined) {
+  if (!next) {
+    return [{ isChanged: current !== undefined, line: "Sound off" }];
+  }
+
+  return [
+    { isChanged: current?.sfx !== next.sfx, line: `Sound effects: ${SFX_LABELS[next.sfx]}` },
+    { isChanged: !isSame(current?.transitionSfx, next.transitionSfx), line: "Transition sounds" },
+    { isChanged: current?.music !== next.music, line: "Music" },
+    { isChanged: current?.musicLevel !== next.musicLevel, line: `Music level: ${next.musicLevel} dB` },
+    { isChanged: current?.sfxLevel !== next.sfxLevel, line: `Effects level: ${next.sfxLevel} dB` },
+  ];
 }
 
 function captionsLine(isOn: boolean) {

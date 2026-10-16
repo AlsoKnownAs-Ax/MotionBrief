@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { access, copyFile, mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import type { ExportError, ExportStatus, VideoRef, VideoSource } from "../../contract";
-import { assemble } from "../assembler";
+import { assemble, type SoundPlan } from "../assembler";
 import { validateStoryboard } from "../storyboard";
 import type { ExportLocations } from "./locations";
 import { renderMp4 } from "./render";
@@ -21,8 +21,8 @@ export type ExporterOptions = {
 };
 
 export type ExportRequest = {
-  /** What the video is assembled from: the same source as the preview the creator watched. */
-  source: VideoSource;
+  /** What the video is assembled from: the same source as the preview the creator watched, with its sound plan. */
+  source: VideoSource & { sound?: SoundPlan };
   /** Where the creator chose to save the MP4. */
   path: string;
   /** The video whose last export path is remembered. */
@@ -83,6 +83,7 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
         voiceover: source.voiceover,
         captions: source.captions ?? source.rules.captions,
         assets: source.rules.assets,
+        sound: source.sound,
       });
 
       const outcome = yield* renderMp4({ pageDir, output, chromePath, ffmpegPath, ffprobePath, signal });

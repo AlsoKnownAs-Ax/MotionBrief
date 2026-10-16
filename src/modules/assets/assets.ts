@@ -1,9 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { z } from "zod";
-import { AssetSchema, SoundAssetSchema, SoundRoleSchema, type Asset, type AssetKind, type AudioFormat, type BundledCheck, type ImageAsset, type ImageFormat, type IndexedAsset, type SoundAsset } from "../../contract";
+import {
+  AssetSchema,
+  NO_ASSET,
+  SoundAssetSchema,
+  SoundRoleSchema,
+  type Asset,
+  type AssetKind,
+  type AudioFormat,
+  type BundledCheck,
+  type ImageAsset,
+  type ImageFormat,
+  type IndexedAsset,
+  type SoundAsset,
+  type StoryboardTranscript,
+  type StylePreset,
+} from "../../contract";
+import { planSound, type SoundFile, type SoundPlan } from "../assembler";
 import type { Media, MediaInfo } from "../media";
+import type { Storyboard } from "../storyboard";
 import { copyHashed, fileStep, renameRetrying, savedVersions, writeAtomically, type FileError, type Projects, type VideoContent } from "../projects";
 
 export type Result<T, E> = { data: T; error: null } | { data: null; error: E };
@@ -91,6 +108,7 @@ const SVG_ROOT = /^\uFEFF?\s*(?:(?:<\?xml[^>]*>|<!--[\s\S]*?-->|<!DOCTYPE[^>]*>)
 export function createAssets({ media, projects, libraryDir, bundledDir }: AssetsOptions) {
   let libraryQueue: Promise<unknown> = Promise.resolve();
   let bundled: Promise<z.infer<typeof BundledSetSchema>> | undefined;
+  const voices = new Map<string, Promise<number>>();
 
   /** The bundled set's manifest, read once; a broken install fails loudly. */
   function bundledSet() {
@@ -400,8 +418,67 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     return { data: { kind, format, width: image.width, height: image.height, transparent: image.transparent }, error: null };
   }
 
-  return { list, index, import: importAsset, update, remove, addToLibrary, file, libraryFolder, beforeVersionSave, bundledCheck };
+  /**
+   * The sound a video plays besides its Voiceover, from its Style Preset: none for a Preset without a sound block.
+   * Asset files are found in the bundled set, then the video's Project, then the Library.
+   */
+  async function soundPlan({ storyboard, transcript, preset, voiceover }: SoundSource): Promise<SoundPlan | undefined> {
+    if (!preset.sound) {
+      return undefined;
+    }
+
+    const ids = Object.values(preset.sound.transitionSfx).filter((id) => id !== NO_ASSET);
+    // shortcut: the Project is the Voiceover's folder, as a source names no Project; pass the Project when sources carry one.
+    const projectAssets = voiceover && join(dirname(voiceover), ASSETS_DIR);
+    const found = await Promise.all([...new Set(ids)].map(async (id) => [id, await soundFile(id, projectAssets)] as const));
+    const files = Object.fromEntries(found.flatMap(([id, file]) => (file ? [[id, file]] : [])));
+
+    return planSound({ storyboard, transcript, sound: preset.sound, files, voice: await voiceLoudness(voiceover) });
+  }
+
+  async function soundFile(id: string, projectAssets: string | undefined): Promise<SoundFile | undefined> {
+    if (id.startsWith(BUNDLED_PREFIX)) {
+      const sound = (await bundledSet()).sounds.find(({ slug }) => `${BUNDLED_PREFIX}${slug}` === id);
+
+      return sound && { file: join(bundledDir, `${sound.slug}.${sound.format}`), name: sound.name, duration: sound.duration, loudness: sound.loudness };
+    }
+
+    for (const dir of [projectAssets, libraryDir]) {
+      const sidecar = dir && /^[0-9a-f]{64}$/.test(id) ? await readSidecar(join(dir, `${id}.json`)) : undefined;
+      const asset = sidecar?.asset;
+
+      if (asset && "loudness" in asset) {
+        return { file: join(dir!, `${id}.${asset.format}`), name: asset.name, duration: asset.duration, loudness: asset.loudness };
+      }
+    }
+
+    return undefined;
+  }
+
+  /** The Voiceover's integrated loudness, measured once per file as it is; a video without one is leveled against speech's usual loudness. */
+  async function voiceLoudness(voiceover: string | undefined): Promise<number> {
+    const stats = voiceover && (await stat(voiceover).catch(() => undefined));
+
+    if (!voiceover || !stats) {
+      return SPEECH_LUFS;
+    }
+
+    // shortcut: kept in memory per file version, so each app run measures a Voiceover once; cache it by sha256 if that shows.
+    const key = `${voiceover} ${stats.size} ${stats.mtimeMs}`;
+    const measured = voices.get(key) ?? media.loudness(voiceover).then(({ data }) => data ?? SPEECH_LUFS);
+    voices.set(key, measured);
+
+    return measured;
+  }
+
+  return { list, index, import: importAsset, update, remove, addToLibrary, file, libraryFolder, beforeVersionSave, bundledCheck, soundPlan };
 }
+
+/** What a video's sound is planned from. */
+export type SoundSource = { storyboard: Storyboard; transcript: StoryboardTranscript; preset: StylePreset; voiceover?: string };
+
+/** Speech's usual integrated loudness, for a video without a Voiceover. */
+const SPEECH_LUFS = -16;
 
 /**
  * The Assets a Version uses: every Asset reference in its Storyboard (sounds, media, `asset:` icons) and its Style
