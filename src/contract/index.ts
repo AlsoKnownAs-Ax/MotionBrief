@@ -102,6 +102,38 @@ export const MotionSchema = z.object({
 /** How Captions show the current word: highlighted, popping, or plain. */
 export const CaptionStyleSchema = z.enum(["highlight", "pop", "plain"]);
 
+/** The Transitions a Storyboard can name: a push has a direction, and a carry-over names the element it morphs. */
+export const TransitionTypeSchema = z.enum([
+  "cut",
+  "crossfade",
+  "push-left",
+  "push-right",
+  "push-up",
+  "push-down",
+  "zoom-through",
+  "carry-over",
+  "camera",
+]);
+
+/** How busy a video's sound effects are: none at all, or the agent places a few (subtle) or more (lively). */
+export const SfxDensitySchema = z.enum(["off", "subtle", "lively"]);
+
+/** No Asset: a Transition without a sound, or a video without a music bed. */
+export const NO_ASSET = "none";
+
+/** What a Style Preset sounds like. Levels are dB relative to the Voiceover's measured loudness. */
+export const PresetSoundSchema = z.object({
+  sfx: SfxDensitySchema,
+  /** The sound effect each Transition plays, by Asset id; one not named, or `none`, plays nothing. */
+  transitionSfx: z.partialRecord(TransitionTypeSchema, z.string()),
+  /** The music bed's Asset id, or `none`. */
+  music: z.string(),
+  /** The music bed before ducking. */
+  musicLevel: z.number().min(-40).max(0),
+  /** Offsets every sound effect's default level. */
+  sfxLevel: z.number().min(-24).max(12),
+});
+
 /** A Style Preset, the same in either Format. A video keeps a snapshot of the one it was generated with. */
 export const StylePresetSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]*$/, "use a kebab-case id"),
@@ -115,6 +147,8 @@ export const StylePresetSchema = z.object({
   transitions: z.array(PresetTransitionSchema).min(1),
   canvas: CanvasPreferenceSchema,
   captions: CaptionStyleSchema,
+  /** Optional, so Presets saved before videos had sound still read; without it a video plays only its Voiceover. */
+  sound: PresetSoundSchema.optional(),
 });
 
 /** A Style Preset as the app lists it: the bundled ones are read-only and are duplicated to edit. */
@@ -134,19 +168,6 @@ export const SceneTypeSchema = z.enum([
   "list",
   "stat-chart",
   "outro",
-]);
-
-/** The Transitions a Storyboard can name: a push has a direction, and a carry-over names the element it morphs. */
-export const TransitionTypeSchema = z.enum([
-  "cut",
-  "crossfade",
-  "push-left",
-  "push-right",
-  "push-up",
-  "push-down",
-  "zoom-through",
-  "carry-over",
-  "camera",
 ]);
 
 /** What a Storyboard is checked against: its video's Format and Captions, the Style Preset's choices and the Assets it may use. */
@@ -272,6 +293,8 @@ export const VideoTimelineSchema = z.object({
   ),
   /** The Transcript's words, each until the next one starts. */
   words: z.array(z.object({ text: z.string(), start: z.number().nonnegative(), end: z.number().nonnegative() })),
+  /** The sound effects the page plays, in time order: from a Transition rule of the Style Preset, or placed by the agent. */
+  sounds: z.array(z.object({ start: z.number().nonnegative(), name: z.string(), source: z.enum(["transition", "agent"]) })),
 });
 
 /** An assembled video the player can load: `url` serves its root composition on this computer. */
@@ -1493,6 +1516,9 @@ export type SceneStatus = z.infer<typeof SceneStatusSchema>;
 export type VideoTimeline = z.infer<typeof VideoTimelineSchema>;
 export type TimelineScene = VideoTimeline["scenes"][number];
 export type TimelineWord = VideoTimeline["words"][number];
+export type TimelineSound = VideoTimeline["sounds"][number];
+export type PresetSound = z.infer<typeof PresetSoundSchema>;
+export type SfxDensity = z.infer<typeof SfxDensitySchema>;
 export type Preview = z.infer<typeof PreviewSchema>;
 export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
 export type VideoRef = z.infer<typeof VideoRefSchema>;

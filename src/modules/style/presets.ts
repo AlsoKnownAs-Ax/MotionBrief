@@ -1,6 +1,26 @@
-import type { ListedPreset, StylePreset } from "../../contract";
+import { NO_ASSET, type ListedPreset, type PresetSound, type StylePreset } from "../../contract";
 import { BLUEPRINT_NAVY, PHOSPHOR, SKETCH_PAPER, WHITEBOARD } from "./palettes";
 import { FREDOKA_NUNITO, INTER_JETBRAINS, MANROPE_PLEX, VT323_PLEX } from "./typography";
+
+/**
+ * How every bundled Preset sounds: a whoosh on a push (the way it moves) and on zoom-through, a soft click on a
+ * crossfade, nothing on a cut, and no music bed, as none is bundled.
+ */
+const SOUND: PresetSound = {
+  sfx: "subtle",
+  transitionSfx: {
+    cut: NO_ASSET,
+    crossfade: "bundled:click-soft",
+    "push-left": "bundled:whoosh-left",
+    "push-right": "bundled:whoosh-right",
+    "push-up": "bundled:whoosh-up",
+    "push-down": "bundled:whoosh-down",
+    "zoom-through": "bundled:zoom-through",
+  },
+  music: NO_ASSET,
+  musicLevel: -18,
+  sfxLevel: 0,
+};
 
 /**
  * The four bundled Style Presets, accepted from the Style Preset spike's look check. Each holds its
@@ -28,6 +48,7 @@ const BUNDLED: readonly StylePreset[] = [
     transitions: ["cut", "crossfade", "push", "zoom-through", "carry-over", "camera"],
     canvas: "where-it-helps",
     captions: "highlight",
+    sound: structuredClone(SOUND),
   },
   {
     id: "whiteboard",
@@ -49,6 +70,7 @@ const BUNDLED: readonly StylePreset[] = [
     transitions: ["crossfade", "push", "carry-over", "camera"],
     canvas: "whenever-possible",
     captions: "plain",
+    sound: structuredClone(SOUND),
   },
   {
     id: "sketchbook",
@@ -70,6 +92,7 @@ const BUNDLED: readonly StylePreset[] = [
     transitions: ["cut", "push", "zoom-through", "camera"],
     canvas: "where-it-helps",
     captions: "pop",
+    sound: structuredClone(SOUND),
   },
   {
     id: "terminal",
@@ -91,6 +114,7 @@ const BUNDLED: readonly StylePreset[] = [
     transitions: ["cut", "crossfade"],
     canvas: "never",
     captions: "plain",
+    sound: structuredClone(SOUND),
   },
 ];
 

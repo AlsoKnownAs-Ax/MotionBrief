@@ -72,7 +72,7 @@ function VideoStyle({ video }: { video?: VideoRef }) {
 }
 
 /** Sends a style change; a restyle comes back unconfirmed first, and waits in `pending` until confirmed or cancelled. */
-function useStyleChange(video: VideoRef | undefined) {
+export function useStyleChange(video: VideoRef | undefined) {
   const reopen = useGeneration((state) => state.reopen);
   const [pending, setPending] = useState<PendingRestyle>();
   const [isChanging, setIsChanging] = useState(false);

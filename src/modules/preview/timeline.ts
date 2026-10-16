@@ -45,6 +45,7 @@ export function timelineOf(
       start,
       end: transcript.words[index + 1]?.start ?? duration,
     })),
+    sounds: page.sounds,
   };
 }
 

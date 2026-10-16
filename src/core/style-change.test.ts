@@ -232,6 +232,11 @@ describe("classifying a style change", () => {
     { change: "typography", preset: { ...BLUEPRINT, typography: OTHER_TYPOGRAPHY } },
     { change: "caption style", preset: { ...BLUEPRINT, captions: "plain" as const } },
     { change: "Captions", captions: true },
+    { change: "sound effects", preset: { ...BLUEPRINT, sound: { ...BLUEPRINT.sound!, sfx: "lively" as const } } },
+    { change: "a Transition sound", preset: { ...BLUEPRINT, sound: { ...BLUEPRINT.sound!, transitionSfx: { crossfade: "bundled:tick-soft" } } } },
+    { change: "the music bed", preset: { ...BLUEPRINT, sound: { ...BLUEPRINT.sound!, music: "bundled:riser" } } },
+    { change: "the music level", preset: { ...BLUEPRINT, sound: { ...BLUEPRINT.sound!, musicLevel: -24 } } },
+    { change: "the effects level", preset: { ...BLUEPRINT, sound: { ...BLUEPRINT.sound!, sfxLevel: -3 } } },
   ])("makes $change a swap", async ({ preset, captions }) => {
     const { core, video } = connected;
     const before = await newestVersion(core, video);

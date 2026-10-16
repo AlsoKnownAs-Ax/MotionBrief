@@ -103,7 +103,7 @@ export function createCore({
   const media = createMedia({ ffmpegPath, ffprobePath });
   // Assembled pages keep themselves to the newest few and export renders delete themselves, so the cache's per-file LRU leaves both alone.
   const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR, EXPORT_DIR] });
-  const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
+  const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath, planSound: (source, storyboard) => assets.soundPlan({ ...source, storyboard }) });
   const stills = createStills({ cache, chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
   // Assets work in Project folders, and every Version save copies the Library Assets it uses into its Project.
