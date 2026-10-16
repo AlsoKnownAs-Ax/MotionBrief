@@ -238,8 +238,13 @@ describe("new Project", { timeout: 30_000 }, () => {
     const longProject = await create(core, { voiceoverPath: long });
     const shortProject = await create(core, { voiceoverPath: short });
 
+    expect(longProject.voiceover.duration).toBeCloseTo(1205, 0);
+    expect(shortProject.voiceover.duration).toBeCloseTo(1195, 0);
     expect(longProject.voiceover.isLong).toBe(true);
     expect(shortProject.voiceover.isLong).toBe(false);
+    for (const path of [long, short]) {
+      expect(await streamsOf(path)).toEqual([{ codec_type: "audio", sample_rate: "16000", channels: 1 }]);
+    }
   });
 
   describe("choices", () => {
