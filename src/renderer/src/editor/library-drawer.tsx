@@ -7,11 +7,15 @@ import { Button } from "@renderer/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@renderer/components/ui/dialog";
 import { core, orpc, queryClient } from "@renderer/core/connection";
 import { cn } from "@renderer/lib/utils";
+import { costLabel } from "@renderer/new-project/generate-bar";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { Select } from "@renderer/style/controls";
-import type { AssetKind, AssetScope } from "../../../contract";
-import { assetFacts, filterAssets, isSound, KIND_ORDER, kindCounts, listKey, type KindFilter, type LibraryAsset, type ScopeFilter } from "./library";
+import type { AssetKind, AssetScope, CostRange } from "../../../contract";
+import { isGenerating, useGeneration } from "./generation";
+import { sceneName } from "./labels";
+import { assetFacts, filterAssets, isSound, KIND_ORDER, kindCounts, listKey, swapTargets, type KindFilter, type LibraryAsset, type ScopeFilter, type SwapTarget } from "./library";
 import { useOpenVideo } from "./open-video";
+import { isRevising, nameOf, useRevision } from "./revision";
 import { Splitter } from "./splitter";
 
 const KINDS: Record<AssetKind, { label: string; plural: string; icon: LucideIcon }> = {
@@ -453,6 +457,7 @@ function Detail({ asset }: { asset: LibraryAsset }) {
           {assetErrorMessage(error)}
         </p>
       ) : null}
+      <SwapInto asset={asset} />
       <div className="flex flex-wrap gap-2">
         {asset.scope === "project" ? (
           <Button size="sm" disabled={addToLibrary.isPending || addToLibrary.isSuccess} onClick={() => addToLibrary.mutate()}>
@@ -468,6 +473,92 @@ function Detail({ asset }: { asset: LibraryAsset }) {
       <p className="mt-auto text-app-xs text-ink-muted">↑/↓ to audition as you go, Space to replay.</p>
     </section>
   );
+}
+
+/** A swap waiting for the creator's go-ahead: it regenerates these Scenes with the agent. */
+type PendingSwap = { target: SwapTarget; scenes: string[]; costUsd?: CostRange };
+
+/**
+ * Swaps the image or logo into a place in the Scenes selected in the timeline. A like-for-like swap only re-renders;
+ * any other regenerates its Scene with the agent, so it asks first, as a restyle does.
+ */
+function SwapInto({ asset }: { asset: LibraryAsset }) {
+  const video = useGeneration((state) => state.video);
+  const scenes = useOpenVideo((state) => state.preview?.timeline.scenes) ?? [];
+  const selection = useRevision((state) => state.selection);
+  const generating = useGeneration((state) => isGenerating(state.status));
+  const revising = useRevision((state) => isRevising(state.status));
+  const isBusy = generating || revising;
+  const [pending, setPending] = useState<PendingSwap>();
+  const swap = useMutation({
+    mutationFn: ({ target, confirmed }: { target: SwapTarget; confirmed?: boolean }) =>
+      core.video.swapAsset({ ...video!, sceneId: target.scene.id, field: target.field, asset: asset.id, confirmed }),
+    onMutate: () => setPending(undefined),
+    onError: (error, { target }) => {
+      if (error instanceof ORPCError && error.code === "SWAP_UNCONFIRMED") {
+        setPending({ target, ...(error.data as Omit<PendingSwap, "target">) });
+      }
+    },
+  });
+  const targets = swapTargets(asset, scenes, selection);
+
+  if (isSound(asset) || !video) {
+    return null;
+  }
+
+  if (targets.length === 0) {
+    return <p className="text-app-xs text-ink-muted">Select a Scene with an image or logo in the timeline to swap this in.</p>;
+  }
+
+  const error = swap.error instanceof ORPCError && swap.error.code === "SWAP_UNCONFIRMED" ? undefined : swap.error;
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap gap-2">
+        {targets.map((target) => (
+          <Button key={`${target.scene.id} ${target.field}`} size="sm" disabled={isBusy || swap.isPending} onClick={() => swap.mutate({ target })}>
+            Swap into {sceneName(target.scene)}
+          </Button>
+        ))}
+      </div>
+      {pending ? (
+        <div role="group" aria-labelledby="confirm-swap" className="flex flex-col gap-2 rounded-lg border border-hairline-soft bg-surface-1 p-3">
+          <p id="confirm-swap" className="text-app-sm font-medium">
+            Regenerate {pending.scenes.map((id) => nameOf(scenes, id)).join(", ")}?
+          </p>
+          <p className="text-app-sm leading-[1.45] text-ink-muted">
+            {asset.name} doesn't fit the place of what it replaces, so the agent rewrites the Scene for it.
+            {pending.costUsd ? ` About ${costLabel(pending.costUsd)} on your API key.` : ""}
+          </p>
+          <div className="flex gap-2">
+            <Button size="sm" onClick={() => setPending(undefined)}>
+              Cancel
+            </Button>
+            <Button variant="primary" size="sm" disabled={isBusy || swap.isPending} onClick={() => swap.mutate({ target: pending.target, confirmed: true })}>
+              Swap and regenerate
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {error ? (
+        <p role="alert" className="text-app-xs text-status-fallback-ink">
+          {swapErrorMessage(error)}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function swapErrorMessage(error: unknown) {
+  if (error instanceof ORPCError && error.code === "INVALID_SWAP") {
+    return (error.data as { message: string }).message;
+  }
+
+  if (error instanceof ORPCError && error.code === "REVISING") {
+    return "The video is being changed. Swap once that's done.";
+  }
+
+  return projectErrorMessage(error);
 }
 
 /** Import: name, kind and notes (required for images and logos); the file is copied and the original never used again. */

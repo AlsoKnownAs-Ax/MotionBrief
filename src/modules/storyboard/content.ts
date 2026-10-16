@@ -72,6 +72,24 @@ export function assetsOf(scene: Scene): SceneAsset[] {
   return assets;
 }
 
+/** The Scene with its Asset references, in `assetsOf` order, pointing at `ids` instead. */
+export function withAssets(scene: Scene, ids: string[]): Scene {
+  const copy = structuredClone(scene);
+  const next = ids.values();
+
+  visit(copy.content, "content", (value) => {
+    if (typeof value.icon === "string" && value.icon.startsWith(ASSET_ICON)) {
+      value.icon = `${ASSET_ICON}${next.next().value}`;
+    }
+
+    if (typeof value.asset === "string") {
+      value.asset = next.next().value;
+    }
+  });
+
+  return copy;
+}
+
 /** Calls `onObject` for every object nested in `value`, with its field path. */
 function visit(value: unknown, field: string, onObject: (value: Record<string, unknown>, field: string) => void) {
   if (Array.isArray(value)) {

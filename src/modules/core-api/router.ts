@@ -9,7 +9,7 @@ import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
 import type { Previews, StillError, Stills, ThumbnailsError } from "../preview";
-import type { ReviseError, Revisions } from "../revision";
+import type { ReviseError, Revisions, SwapError } from "../revision";
 import { validateStoryboard } from "../storyboard";
 import { BUNDLED_PALETTES, bundledFonts, checkContrast, FONT_PAIRINGS, presetSample, type PresetStore, type PresetStoreError } from "../style";
 import type { SettingsError, SettingsStore } from "../settings";
@@ -236,6 +236,9 @@ export function createCoreRouter({
       revise: api.video.revise.handler(async ({ input: { projectId, format, ...request } }) => {
         dataOrThrow(await revisions.start({ projectId, format }, request));
       }),
+      swapAsset: api.video.swapAsset.handler(async ({ input: { projectId, format, ...request } }) => {
+        dataOrThrow(await revisions.swapAsset({ projectId, format }, request));
+      }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
       approveRevision: api.video.approveRevision.handler(async ({ input }) => {
         await history.approve(input);
@@ -298,7 +301,7 @@ type CodedResult =
   | { data: unknown; error: null }
   | {
       data: null;
-      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | UsageError | SettingsError | HistoryError | AssetsError;
+      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | SwapError | UsageError | SettingsError | HistoryError | AssetsError;
     };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
