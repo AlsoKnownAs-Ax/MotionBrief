@@ -204,6 +204,23 @@ describe("a creator's own Style Presets", () => {
     expect((await later.style.presets()).find(({ id }) => id === copy.id)).toEqual({ ...edited, readOnly: false });
   });
 
+  it("save their sound in the same Preset file version, and still read one saved before Presets had sound", async () => {
+    const { client, appDataDir } = await core();
+    const copy = editable(await client.style.duplicate({ id: "blueprint" }));
+    const file = join(appDataDir, "Style Presets", `${copy.id}.json`);
+
+    await client.style.save({ preset: { ...copy, sound: { ...copy.sound!, sfx: "lively", sfxLevel: -4 } } });
+    const saved = JSON.parse(await readFile(file, "utf8")) as { schemaVersion: number; preset: StylePreset };
+    // JSON leaves an undefined field out, as a file saved before Presets had sound did.
+    const silent = { ...saved.preset, sound: undefined };
+    await writeFile(file, JSON.stringify({ ...saved, preset: silent }));
+    const { client: later } = await core(appDataDir);
+
+    expect(saved.schemaVersion).toBe(1);
+    expect(saved.preset.sound).toMatchObject({ sfx: "lively", sfxLevel: -4 });
+    expect((await later.style.presets()).find(({ id }) => id === copy.id)).toEqual({ ...silent, readOnly: false });
+  });
+
   it("save with the warnings the contrast rule has", async () => {
     const { client } = await core();
     const copy = editable(await client.style.duplicate({ id: "sketchbook" }));

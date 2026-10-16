@@ -1,9 +1,10 @@
 import { copyFile, link, mkdir, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
-import type { Format, StoryboardTranscript, StylePreset } from "../../contract";
+import { basename, dirname, extname, join } from "node:path";
+import type { Format, StoryboardTranscript, StylePreset, TimelineSound } from "../../contract";
 import { fallbackCode, FRAME_SIZES, framePage, inlineIcons, wrapUnit, type PageAsset, type UnitCode } from "../frame";
 import type { Storyboard } from "../storyboard";
 import { captionsLayer } from "./captions";
+import type { PlannedSound, SoundPlan } from "./sound";
 import { planUnits, TRANSITION_SECONDS, type Unit } from "./units";
 
 export type AssembleOptions = {
@@ -19,6 +20,8 @@ export type AssembleOptions = {
   voiceover?: string;
   /** Draws Captions from the Transcript over the Scenes, in the Preset's caption style. Off by default. */
   captions?: boolean;
+  /** The sound besides the Voiceover. Absent, the page plays only the Voiceover. */
+  sound?: SoundPlan;
 };
 
 export type AssembledPage = {
@@ -27,6 +30,8 @@ export type AssembledPage = {
   height: number;
   duration: number;
   units: Unit[];
+  /** The sound effects the page plays, in time order. */
+  sounds: TimelineSound[];
 };
 
 /**
@@ -34,7 +39,7 @@ export type AssembledPage = {
  * sub-composition per unit, in Storyboard order and timed from the word anchors, the Transitions
  * between them, the Captions and the Voiceover. The agent writes none of this.
  */
-export async function assemble({ dir, storyboard, transcript, preset, code, voiceover, captions = false }: AssembleOptions): Promise<AssembledPage> {
+export async function assemble({ dir, storyboard, transcript, preset, code, voiceover, captions = false, sound }: AssembleOptions): Promise<AssembledPage> {
   const format = storyboard.format;
   const { width, height } = FRAME_SIZES[format];
   const units = planUnits(storyboard, transcript);
@@ -54,14 +59,40 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
   );
 
   if (voiceover && audio) {
-    await placeVoiceover(voiceover, join(dir, audio));
+    await linkOrCopy(voiceover, join(dir, audio));
   }
+
+  const sfx = sound?.sfx ?? [];
+  await Promise.all([...new Set(sfx.map(({ file }) => file))].map((file) => linkOrCopy(file, join(dir, sfxAsset(file)))));
 
   const layer = captionsWhenOn(captions, { transcript, format, preset });
 
-  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, page, captions: layer, background: preset.palette.colors.bg }));
+  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, sfx, page, captions: layer, background: preset.palette.colors.bg }));
 
-  return { format, width, height, duration, units };
+  return { format, width, height, duration, units, sounds: sfx.map(({ start, name, source }) => ({ start, name, source })) };
+}
+
+/** Sound effects take a track each from here; Scenes use 1 and 2, the Voiceover 10. */
+const SFX_TRACK = 20;
+
+/** Where the page plays a sound effect from: named after its file, a bundled slug or a user Asset's sha256. */
+function sfxAsset(file: string) {
+  return `assets/sfx/${basename(file)}`;
+}
+
+/** The sound effects, each on its own track in the `sfx` group; the Assembler is the only one that writes `<audio>`. */
+function sfxTracks(sfx: PlannedSound[]): string[] {
+  if (sfx.length === 0) {
+    return [];
+  }
+
+  return [
+    `<hf-audio-group id="sfx" data-volume="1"></hf-audio-group>`,
+    ...sfx.map(
+      ({ file, start, duration, volume }, index) =>
+        `<audio id="sfx-${index}" data-audio-group="sfx" src="${sfxAsset(file)}" data-start="${start}" data-duration="${duration}" data-track-index="${SFX_TRACK + index}" data-volume="${volume}"></audio>`,
+    ),
+  ];
 }
 
 /** Where the page plays the Voiceover from, when it has one. */
@@ -102,8 +133,8 @@ async function writeAsset(dir: string, { path, from, content }: PageAsset) {
   await writeFile(target, content ?? "");
 }
 
-/** A Voiceover can run to hundreds of MB: a hard link costs nothing, a copy only where links can't reach. */
-async function placeVoiceover(from: string, to: string) {
+/** A Voiceover can run to hundreds of MB: a hard link costs nothing, a copy only where links can't reach. Sounds go the same way. */
+async function linkOrCopy(from: string, to: string) {
   await mkdir(dirname(to), { recursive: true });
 
   try {
@@ -119,6 +150,7 @@ type RootOptions = {
   duration: number;
   units: Unit[];
   audio?: string;
+  sfx: PlannedSound[];
   /** What the frame puts in the head, before the root composition and at its end. */
   page: { head: string; defs: string; overlay: string };
   /** The Captions layer, when Captions are on. */
@@ -126,7 +158,7 @@ type RootOptions = {
   background: string;
 };
 
-function rootHtml({ width, height, duration, units, audio, page, captions, background }: RootOptions): string {
+function rootHtml({ width, height, duration, units, audio, sfx, page, captions, background }: RootOptions): string {
   const clips = units.map(
     (unit, index) =>
       `<div id="el-${unit.id}" class="scene" data-composition-id="${unit.id}" data-composition-src="compositions/${unit.id}.html" data-start="${unit.start}" data-duration="${unit.duration}" data-track-index="${1 + (index % 2)}"></div>`,
@@ -150,7 +182,7 @@ ${captions?.css ?? ""}
 <body>
 ${page.defs}
 <div id="root" data-composition-id="main" data-start="0" data-duration="${duration}" data-width="${width}" data-height="${height}">
-${[...clips, ...voiceover, captions?.html, page.overlay].filter(Boolean).join("\n")}
+${[...clips, ...voiceover, ...sfxTracks(sfx), captions?.html, page.overlay].filter(Boolean).join("\n")}
 </div>
 <script>
 (function () {

@@ -12,6 +12,7 @@ import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } fro
 import { useOpenVideo } from "./open-video";
 import { formatTime, usePlayback } from "./playback";
 import { isRevising, nameOf, useRevision } from "./revision";
+import { SFX_LANE, SfxLane, SoundButton } from "./sound";
 
 /** How a Scene a Revision is working on reads, whatever its status in the current Version. */
 const REVISING = { label: "Revising, playing the current Version", badge: "working", badgeLabel: "Revising" } as const;
@@ -98,7 +99,7 @@ const TAIL = 24;
 
 /**
  * The Scene timeline: a time ruler, Canvas brackets, a card per Scene sized to its length, Transition
- * markers, and the Transcript's words.
+ * markers, the Transcript's words and the sound effects.
  */
 export function Timeline({ preview, height }: { preview: Preview; height: number }) {
   const { timeline } = preview;
@@ -112,7 +113,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const canvases = useMemo(() => canvasesOf(timeline.scenes), [timeline.scenes]);
   const brackets = bracketsHeight(canvases);
   const cardTop = RULER + GAP + brackets;
-  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - 3 * GAP);
+  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - SFX_LANE - 4 * GAP);
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
   const fixError = useOpenVideo((state) => state.fixError);
@@ -145,6 +146,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
             Retry all flagged ({flagged.length})
           </Button>
         ) : null}
+        <SoundButton />
         <ZoomControls zoom={px} onZoom={(next) => setZoom(clampZoom(next))} onFit={() => setZoom(undefined)} />
       </header>
       <div ref={scrollRef} className="timeline-scroll min-h-0 flex-1 overflow-x-auto overflow-y-hidden">
@@ -181,6 +183,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
             <TransitionMarker key={scene.id} scene={scene} px={px} top={cardTop + cardHeight / 2} />
           ))}
           <WordLane words={timeline.words} px={px} top={wordTop} />
+          <SfxLane sounds={timeline.sounds} px={px} top={wordTop + WORD_LANE + GAP} />
           <Playhead px={px} scrollRef={scrollRef} />
         </div>
       </div>
