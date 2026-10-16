@@ -141,7 +141,7 @@ describe("a generation with the creator's images and logos", () => {
 
     expect(system).toContain(`${image} image "Dashboard" (16x10): The billing dashboard`);
     expect(system).toContain(`${logo} logo "Acme" (8x8, transparent): Acme's logo`);
-    expect(system).not.toContain("bundled:punch");
+    expect(system).not.toContain("bundled:whoosh-left");
   });
 
   it("tells a Scene agent only its own unit's Assets, without notes or paths", () => {

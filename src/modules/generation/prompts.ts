@@ -1,7 +1,7 @@
-import type { CheckFinding, Format, IndexedAsset, StoryboardIssue, StoryboardRules, StylePreset, Transcript } from "../../contract";
+import type { CheckFinding, Format, IndexedAsset, SfxDensity, StoryboardIssue, StoryboardRules, StylePreset, Transcript } from "../../contract";
 import type { Unit } from "../assembler";
 import { FRAME_SIZES } from "../frame";
-import { assetsOf, type Storyboard } from "../storyboard";
+import { assetsOf, isPlaceableSound, type Storyboard } from "../storyboard";
 import { pacingFor, type PresetBrief } from "../style";
 
 /**
@@ -18,7 +18,8 @@ export const REVIEW_TOOL = "submit_review";
 /** Ends a sentence, optionally followed by closing quotes or brackets. */
 const SENTENCE_END = /[.?!]["')\]”’]*$/;
 
-export function storyboardSystem({ format, captions, assets = [] }: StoryboardRules, brief: PresetBrief): string {
+export function storyboardSystem({ format, captions, assets: all = [], sfx }: StoryboardRules, brief: PresetBrief): string {
+  const assets = all.filter((asset) => !asset.removed && (asset.kind === "image" || asset.kind === "logo" || (hasSounds(sfx) && isPlaceableSound(asset))));
   const { width, height } = FRAME_SIZES[format];
   const { min, max } = pacingFor(format, "balanced");
 
@@ -35,7 +36,7 @@ Rules:
 - Every content element has an id and "at": the index of the Transcript word it appears on, the word that names it or starts the phrase it illustrates. Anchors lie inside the Scene's span. Spread them across the Scene; never put everything on its first word.
 - Timing is only ever word indexes, never seconds.
 - On-screen copy is short motion-graphics copy (a label, a hero word, a number), never a narration sentence. Numbers are digits: "two hundred milliseconds" is value 200 with unit "ms".
-- Icons: "lucide:<name>" from Lucide (lucide:server, lucide:database, lucide:globe, lucide:user, lucide:laptop, lucide:shield, lucide:zap, lucide:clock, lucide:cloud, lucide:network, lucide:hard-drive) or "brand:<simple-icons slug>" (brand:github, brand:cloudflare, brand:python). Only use names you are sure exist.${mediaRule(assets)}
+- Icons: "lucide:<name>" from Lucide (lucide:server, lucide:database, lucide:globe, lucide:user, lucide:laptop, lucide:shield, lucide:zap, lucide:clock, lucide:cloud, lucide:network, lucide:hard-drive) or "brand:<simple-icons slug>" (brand:github, brand:cloudflare, brand:python). Only use names you are sure exist.${mediaRule(assets)}${soundRule(sfx)}
 - Every Scene but the last names the Transition into the next Scene.
 - Format: ${format} (${width}x${height}). ${FORMAT_NOTES[format]}
 - ${captionsRule(captions)}
@@ -43,13 +44,12 @@ ${assetIndex(assets)}
 ${brief.storyboard}`;
 }
 
-/** The images and logos the agent may place: the ones the creator hasn't removed. */
-function placeable(assets: IndexedAsset[]): IndexedAsset[] {
-  return assets.filter(({ kind, removed }) => (kind === "image" || kind === "logo") && !removed);
+function hasSounds(sfx: SfxDensity | undefined): sfx is "subtle" | "lively" {
+  return sfx === "subtle" || sfx === "lively";
 }
 
 function mediaRule(assets: IndexedAsset[]): string {
-  if (placeable(assets).length === 0) {
+  if (!assets.some(({ kind }) => kind === "image" || kind === "logo")) {
     return "";
   }
 
@@ -57,18 +57,27 @@ function mediaRule(assets: IndexedAsset[]): string {
 - The creator's images and logos are in the Asset index below. A logo can stand in for an icon as "asset:<id>". An image or logo can appear as "media" ({id, asset, at}) on a hook, key-term, comparison side or outro. Place one only where its notes say it fits what is said, and use only ids from the index.`;
 }
 
+const SOUND_CAPS = { subtle: "at most 1 per Scene and about 1 per 20 s", lively: "at most 2 per Scene and about 1 per 8 s" };
+
+function soundRule(sfx: SfxDensity | undefined): string {
+  if (!hasSounds(sfx)) {
+    return "";
+  }
+
+  return `
+- Sound effects are ${sfx}: a Scene may play the sound effects in the Asset index as "sounds" ([{asset, at}], "at" a word of the Scene), ${SOUND_CAPS[sfx]}. MotionBrief already plays a sound on Transitions, so place one only where a moment should hit harder: a number landing, a reveal, the closing line. Most Scenes have none.`;
+}
+
 /**
  * The Asset index, one line each, in a stable order so the system prompt stays cacheable.
  * shortcut: the whole index goes in the prompt; past about 200 user Assets, switch to a search_assets(kind, query) host tool.
  */
 function assetIndex(assets: IndexedAsset[]): string {
-  const listed = placeable(assets);
-
-  if (listed.length === 0) {
+  if (assets.length === 0) {
     return "";
   }
 
-  const lines = listed.map((asset) => `- ${asset.id} ${asset.kind} ${JSON.stringify(asset.name)} (${factsOf(asset)}): ${asset.notes}`);
+  const lines = assets.map((asset) => `- ${asset.id} ${asset.kind} ${JSON.stringify(asset.name)} (${factsOf(asset)}): ${asset.notes}`);
 
   return `
 ASSET INDEX (id kind "name" (facts): the creator's notes on what it shows and when to use it):
@@ -77,8 +86,8 @@ ${lines.join("\n")}
 }
 
 function factsOf(asset: IndexedAsset): string {
-  if (asset.kind !== "image" && asset.kind !== "logo") {
-    return "";
+  if ("duration" in asset) {
+    return `${asset.duration.toFixed(2)} s`;
   }
 
   return [`${asset.width}x${asset.height}`, asset.transparent && "transparent"].filter(Boolean).join(", ");

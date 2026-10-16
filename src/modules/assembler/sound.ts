@@ -2,7 +2,7 @@ import { NO_ASSET, type PresetSound, type StoryboardTranscript, type TimelineSou
 import { serializeAutomation, VOLUME_TARGET } from "@hyperframes/core/audio-automation";
 import { analyseCarveBands, analyseCarveDuck, carveBandsToChain, carveProfile } from "@hyperframes/core/audio-carve";
 import type { HfAudioFxChain } from "@hyperframes/core/audio-fx";
-import { sceneTimings, type Storyboard } from "../storyboard";
+import { placedSounds, sceneTimings, type Storyboard } from "../storyboard";
 import { planUnits } from "./units";
 
 /** A sound Asset's file and what the plan needs to know of it. */
@@ -40,6 +40,12 @@ export type SoundPlanOptions = {
 /** A Transition sound effect's level relative to the Voiceover, before the Preset's effects level (#70). */
 export const TRANSITION_SFX_DB = -10;
 
+/** An agent sound effect's level relative to the Voiceover, before the Preset's effects level (#70). */
+export const AGENT_SFX_DB = -6;
+
+/** An agent sound effect this close to a Transition sound replaces it (#70). */
+const COLLIDE_SECONDS = 0.15;
+
 /** No sound is ever raised more than this, so a very quiet file can't blow up the mix. */
 const MAX_GAIN_DB = 12;
 
@@ -51,8 +57,9 @@ const BED_CROSSFADE = 2;
 const CARVE_STRENGTH = 0.25;
 
 /**
- * The sound plan of a video: each Transition's sound effect from the Style Preset, at the Transition's start and
- * leveled from its measured loudness against the Voiceover. Sound effects off plays none.
+ * The sound plan of a video, leveled from each file's measured loudness against the Voiceover: each Transition's
+ * sound effect from the Style Preset at the Transition's start, and the agent's sounds on their words, as many as the
+ * density allows in Storyboard order. An agent sound replaces a Transition sound it lands on. Sound effects off plays none.
  */
 export function planSound({ storyboard, transcript, sound, files, voice }: SoundPlanOptions): SoundPlan {
   const bed = planBed({ storyboard, transcript, sound, files, voice });
@@ -61,20 +68,23 @@ export function planSound({ storyboard, transcript, sound, files, voice }: Sound
     return { sfx: [], bed };
   }
 
-  const sfx = planUnits(storyboard, transcript).flatMap(({ start, transitionIn }) => {
-    const asset = transitionIn && sound.transitionSfx[transitionIn];
-    const file = asset && asset !== NO_ASSET ? files[asset] : undefined;
+  const planned = (asset: string, start: number, db: number, source: PlannedSound["source"]): PlannedSound[] => {
+    const file = files[asset];
 
-    if (!asset || !file) {
-      return [];
-    }
+    return file ? [{ asset, file: file.file, name: file.name, start, duration: file.duration, volume: gain(voice + db + sound.sfxLevel - file.loudness), source }] : [];
+  };
+  const agent = placedSounds(storyboard, transcript.duration, sound.sfx)
+    .filter(({ fits }) => fits)
+    .flatMap(({ asset, at }) => planned(asset, transcript.words[at]?.start ?? 0, AGENT_SFX_DB, "agent"));
+  const transitions = planUnits(storyboard, transcript)
+    .flatMap(({ start, transitionIn }) => {
+      const asset = transitionIn && sound.transitionSfx[transitionIn];
 
-    const volume = gain(voice + TRANSITION_SFX_DB + sound.sfxLevel - file.loudness);
+      return asset && asset !== NO_ASSET ? planned(asset, start, TRANSITION_SFX_DB, "transition") : [];
+    })
+    .filter(({ start }) => !agent.some((placed) => Math.abs(placed.start - start) <= COLLIDE_SECONDS + 1e-9));
 
-    return [{ asset, file: file.file, name: file.name, start, duration: file.duration, volume, source: "transition" as const }];
-  });
-
-  return { sfx, bed };
+  return { sfx: [...transitions, ...agent].sort((a, b) => a.start - b.start), bed };
 }
 
 /**

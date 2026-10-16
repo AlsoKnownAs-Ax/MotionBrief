@@ -45,8 +45,8 @@ type RebuildInput = {
  * A changed Scene Type, content or element set, or an instruction, regenerates the Scene's unit; any
  * change inside a Canvas, or to its grouping, regenerates the whole Canvas (the Assembler's
  * `unitsToRegenerate`). Timing changes only re-render, since anchor times are injected at assembly:
- * spans, anchor words, and the Transitions and carry-overs at either edge of a unit. So does swapping an image or logo
- * for one of the same kind within about 15% aspect; any other swap is a content change.
+ * spans, anchor words, and the Transitions and carry-overs at either edge of a unit. So do sound changes, and swapping
+ * an image or logo for one of the same kind within about 15% aspect; any other swap is a content change.
  */
 export function planRebuild({ current, next, transcript, instructions, captionsChanged, assets = [] }: RebuildInput): UnitRebuild[] {
   const before = new Map(planUnits(current, transcript).map((unit) => [unit.id, unit]));
@@ -66,7 +66,10 @@ export function planRebuild({ current, next, transcript, instructions, captionsC
       return { ...plan, rebuild: "regenerate", isInstructionOnly: isInstructionOnly(unit, previous, unitInstructions, timingChanged) };
     }
 
-    return { ...plan, rebuild: rerenderOrKeep(timingChanged || captionsChanged || swaps.length > 0), isInstructionOnly: false };
+    // Scene code never plays sound, so the agent's sounds only change the page.
+    const soundsChanged = !previous || !isDeepStrictEqual(soundsOf(unit), soundsOf(previous));
+
+    return { ...plan, rebuild: rerenderOrKeep(timingChanged || captionsChanged || swaps.length > 0 || soundsChanged), isInstructionOnly: false };
   });
 }
 
@@ -137,13 +140,17 @@ export function swappedCode(code: UnitCode, swaps: Swap[]): UnitCode {
   return { css: swap(code.css), html: swap(code.html), js: swap(code.js) };
 }
 
-/** A Scene on a Canvas that changed in any way but the Transition out of it, which belongs between units. */
+/** A Scene on a Canvas that changed in any way but the Transition out of it, which belongs between units, and its sounds. */
 function isMovedOnCanvas(scene: Scene, previous: Scene): boolean {
   if (scene.canvas === undefined && previous.canvas === undefined) {
     return false;
   }
 
-  return !isDeepStrictEqual({ ...scene, transition: undefined }, { ...previous, transition: undefined });
+  return !isDeepStrictEqual({ ...scene, transition: undefined, sounds: undefined }, { ...previous, transition: undefined, sounds: undefined });
+}
+
+function soundsOf({ scenes }: Unit) {
+  return scenes.map(({ sounds = [] }) => sounds);
 }
 
 function isInstructionOnly(unit: Unit, previous: Unit | undefined, instructions: string[], timingChanged: boolean): boolean {

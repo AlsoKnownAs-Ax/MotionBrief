@@ -178,6 +178,11 @@ export const StoryboardRulesSchema = z.object({
   canvas: CanvasPreferenceSchema,
   /** The Asset index: every Asset a Storyboard may name, with its file for the page. Absent, it may name none. */
   assets: z.array(z.lazy(() => IndexedAssetSchema)).optional(),
+  /**
+   * How many sound effects the agent may place, for the agent writing a Storyboard. Absent, the caps aren't checked:
+   * a saved Storyboard keeps sounds past a lowered density, and the sound plan drops them when it plays.
+   */
+  sfx: SfxDensitySchema.optional(),
 });
 
 /** The part of a Transcript a Storyboard is checked against. Word references are indexes into `words`. */
@@ -204,6 +209,8 @@ export const StoryboardIssueSchema = z.object({
     "SCOPE",
     /** An Asset that isn't in the index, or of a kind that doesn't belong where it is placed. */
     "ASSET",
+    /** A placed sound effect that isn't agent-placeable, sits outside its Scene, or goes past the density's caps. */
+    "SOUND",
   ]),
   /** The Scene at fault; absent when the issue is with the Storyboard as a whole. */
   sceneId: z.string().optional(),

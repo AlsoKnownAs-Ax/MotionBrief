@@ -588,7 +588,7 @@ export function createGeneration({ connector, checker, previews, stills, project
       signal: run.controller.signal,
       model: run.models.storyboard,
       transcript,
-      rules: await rulesFor(projectId, preset, { format, captions }),
+      rules: { ...(await rulesFor(projectId, preset, { format, captions })), sfx: preset.sound?.sfx ?? "off" },
       brief: presetBrief(preset, format),
     });
   }
