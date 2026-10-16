@@ -277,6 +277,7 @@ export function createCoreRouter({
         dataOrThrow(await assets.remove(input, input.id));
       }),
       addToLibrary: api.assets.addToLibrary.handler(async ({ input: { projectId, id } }) => dataOrThrow(await assets.addToLibrary(projectId, id))),
+      url: api.assets.url.handler(async ({ input }) => previews.fileUrl(dataOrThrow(await assets.file(input, input.id)))),
       libraryFolder: api.assets.libraryFolder.handler(async () => dataOrThrow(await assets.libraryFolder())),
       bundledCheck: api.assets.bundledCheck.handler(async ({ input: { projectId } }) => dataOrThrow(await assets.bundledCheck(projectId))),
     },

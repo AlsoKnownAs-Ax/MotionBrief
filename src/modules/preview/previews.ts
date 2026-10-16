@@ -216,11 +216,16 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
     return pages.get(id)?.source;
   }
 
+  /** Serves a file beside the previews, such as an Asset to audition, and answers its URL. */
+  async function fileUrl(file: string) {
+    return (await (server ??= startPreviewServer(rootDir))).share(file);
+  }
+
   async function close() {
     await (await server)?.close();
   }
 
-  return { open, thumbnails, source, close };
+  return { open, thumbnails, source, fileUrl, close };
 }
 
 /** Same source, same id: the Storyboard, Transcript, Style Preset, Captions, code and Voiceover, and the frame they are built in. */

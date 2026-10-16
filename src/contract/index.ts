@@ -1429,6 +1429,17 @@ export const coreContract = {
     remove: oc.errors(ASSET_ERRORS).input(inUserScope({ id: z.string() })),
     /** Add to Library: copies a Project Asset, with what the creator wrote, into the Library. */
     addToLibrary: oc.errors(ASSET_ERRORS).input(ProjectIdInput.extend({ id: z.string() })).output(AssetSchema),
+    /** Where this computer serves an Asset's file, so the Library can audition a sound or show an image. */
+    url: oc
+      .errors({ UNKNOWN_PROJECT, UNKNOWN_ASSET: ASSET_ERRORS.UNKNOWN_ASSET, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(
+        z.discriminatedUnion("scope", [
+          ProjectIdInput.extend({ scope: z.literal("project"), id: z.string() }),
+          z.object({ scope: z.literal("library"), id: z.string() }),
+          z.object({ scope: z.literal("bundled"), id: z.string() }),
+        ]),
+      )
+      .output(z.string()),
     /** The Library's folder, for Open Library folder; created if it doesn't exist yet. */
     libraryFolder: oc.errors({ FILE_FAILED: PROJECT_ERRORS.FILE_FAILED }).output(z.string()),
     /** Whether the open Project uses bundled sounds this app's set lacks, so the creator can be asked to update. */
