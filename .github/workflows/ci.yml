@@ -10,8 +10,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # OS-independent and needs no native binaries, so it runs once.
+  static:
+    name: Lint and typecheck
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+
+      # pnpm comes from package.json's packageManager pin.
+      - run: corepack enable
+
+      - run: pnpm install --frozen-lockfile
+        env:
+          MOTIONBRIEF_SKIP_DEPS: "1"
+          PUPPETEER_SKIP_DOWNLOAD: "1"
+
+      - run: pnpm lint
+
+      - run: pnpm typecheck
+
   check:
-    name: Lint, typecheck and test (${{ matrix.os }}, ${{ matrix.shard }}/4)
+    name: Test (${{ matrix.os }}, ${{ matrix.shard }}/4)
     strategy:
       fail-fast: false
       matrix:
@@ -19,6 +43,7 @@ jobs:
         # The suite is CPU-bound on real Chrome checks (~18 min on one runner), so it is split by file across runners.
         shard: [1, 2, 3, 4]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v7
 
@@ -36,12 +61,6 @@ jobs:
         env:
           # The producer's Puppeteer never fetches a Chrome; exports run the pinned chrome-headless-shell.
           PUPPETEER_SKIP_DOWNLOAD: "1"
-
-      - run: pnpm lint
-        if: matrix.shard == 1
-
-      - run: pnpm typecheck
-        if: matrix.shard == 1
 
       # Tier 1 (seams 1 and 2 on hand-written inputs) and tier 2 (the replay corpus, replay-corpus.test.ts), at zero
       # cost, with the binaries the install above fetched.
