@@ -12,6 +12,7 @@ import { FrameUpdateNotice } from "@renderer/editor/frame-update-notice";
 import { generationErrorMessage, stopHeadline, useGeneration } from "@renderer/editor/generation";
 import { DEFAULT_LAYOUT, PANE_LIMITS, useEditorLayout } from "@renderer/editor/layout";
 import { FORMAT_LABELS } from "@renderer/editor/labels";
+import { LibraryDrawer } from "@renderer/editor/library-drawer";
 import { MissingFormat } from "@renderer/editor/missing-format";
 import { useOpenVideo } from "@renderer/editor/open-video";
 import { usePlayback } from "@renderer/editor/playback";
@@ -270,6 +271,7 @@ export function Editor() {
       <FrameUpdateNotice />
       <ReconnectDialog />
       <div className="flex min-h-0 flex-1">
+        <LibraryDrawer />
         <section aria-label="Player" className="flex min-w-0 flex-1 flex-col gap-3 px-5 pt-4 pb-3.5">
           <GenerationNotice />
           <Player preview={preview} />

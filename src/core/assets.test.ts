@@ -166,6 +166,30 @@ describe("managing Project Assets", () => {
     await expect(core.assets.remove({ scope: "project", projectId: project.id, id: pop.id })).rejects.toMatchObject({ code: "UNKNOWN_ASSET", data: { id: pop.id } });
   });
 
+  it("serves an Asset's file on this computer, for auditions and previews in the Library", async () => {
+    const path = await voiceover(root, "Pop.wav", [{ tone: 0.3 }]);
+    const pop = await importAsset({ path, name: "Pop", kind: "sfx" });
+    const svg = join(root, "Mark.svg");
+    await writeFile(svg, `<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"><script>alert(1)</script></svg>`);
+    const mark = await importAsset({ path: svg, name: "Mark", kind: "logo", notes: "Our mark" });
+
+    const url = await core.assets.url({ scope: "project", projectId: project.id, id: pop.id });
+    const sound = await fetch(url);
+    const image = await fetch(await core.assets.url({ scope: "project", projectId: project.id, id: mark.id }));
+    const bundled = await fetch(await core.assets.url({ scope: "bundled", id: "bundled:click-soft" }));
+
+    expect(url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\//);
+    expect(sound.headers.get("content-type")).toBe("audio/wav");
+    expect(Buffer.from(await sound.arrayBuffer())).toEqual(await readFile(path));
+    expect(image.headers.get("content-type")).toBe("image/svg+xml");
+    expect(image.headers.get("content-security-policy")).toContain("sandbox");
+    expect(bundled.headers.get("content-type")).toBe("audio/ogg");
+    expect((await bundled.arrayBuffer()).byteLength).toBeGreaterThan(0);
+    await core.assets.remove({ scope: "project", projectId: project.id, id: pop.id });
+    await expect(core.assets.url({ scope: "project", projectId: project.id, id: pop.id })).rejects.toMatchObject({ code: "UNKNOWN_ASSET" });
+    await expect(core.assets.url({ scope: "bundled", id: "bundled:nope" })).rejects.toMatchObject({ code: "UNKNOWN_ASSET" });
+  });
+
   it("refuses ids that aren't one of the Project's Assets, and Projects that aren't open", async () => {
     await expect(core.assets.update({ scope: "project", projectId: project.id, id: "../project", name: "x" })).rejects.toMatchObject({ code: "UNKNOWN_ASSET" });
     await expect(core.assets.list({ scope: "project", projectId: "nope" })).rejects.toMatchObject({ code: "UNKNOWN_PROJECT" });
