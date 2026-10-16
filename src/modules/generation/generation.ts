@@ -900,11 +900,18 @@ export function createGeneration({ connector, checker, previews, stills, project
       return undefined;
     }
 
+    let failed = false;
     const results = await inParallel(units, PARALLEL_UNITS, async (unit): Promise<FileFailure | undefined> => {
+      // A unit that couldn't be saved ends the run: start no more paid sessions.
+      if (failed) {
+        return undefined;
+      }
+
       const outcome = await write(unit);
       const keepError = await keep(unit, outcome);
 
       if (keepError) {
+        failed = true;
         return keepError;
       }
 
@@ -912,6 +919,7 @@ export function createGeneration({ connector, checker, previews, stills, project
       await publish({}, { id: unit.id, status: playingStatus(unit.id, code, notes), attempts: outcome.attempts });
 
       if (saved.error) {
+        failed = true;
         return fileErrorOf(saved.error);
       }
 
@@ -1384,7 +1392,14 @@ export async function inParallel<T, R>(items: T[], limit: number, work: (item: T
   const worker = async () => {
     while (next < items.length) {
       const index = next++;
-      results[index] = await work(items[index] as T);
+
+      try {
+        results[index] = await work(items[index] as T);
+      } catch (error) {
+        // Promise.all rejects on the first throw: start nothing more that nobody would await.
+        next = items.length;
+        throw error;
+      }
     }
   };
 

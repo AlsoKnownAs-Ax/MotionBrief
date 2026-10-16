@@ -388,3 +388,22 @@ describe("a generation", { timeout: PROJECT_TIMEOUT_MS }, () => {
     await expect(core.video.generate({ projectId: "nope", format: "horizontal" })).rejects.toMatchObject({ code: "UNKNOWN_PROJECT" });
   });
 });
+
+describe("inParallel", () => {
+  it("starts no more items once one throws", async () => {
+    const { inParallel } = await import("../modules/generation");
+    const started: number[] = [];
+    const run = inParallel([0, 1, 2, 3, 4, 5], 2, async (item) => {
+      started.push(item);
+      await new Promise((resolve) => setTimeout(resolve, item === 0 ? 0 : 20));
+
+      if (item === 0) {
+        throw new Error("boom");
+      }
+    });
+
+    await expect(run).rejects.toThrow("boom");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(started).toEqual([0, 1]);
+  });
+});

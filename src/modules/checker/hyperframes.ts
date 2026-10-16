@@ -18,6 +18,9 @@ const SAMPLES = 15;
  */
 const NAVIGATION_TIMEOUT_MS = 60_000;
 
+/** A hung headless Chrome must not stall the run: the check is killed after this long. */
+const CHECK_TIMEOUT_MS = 120_000;
+
 const FindingSchema = z.looseObject({
   code: z.string(),
   severity: z.string(),
@@ -41,17 +44,18 @@ type HyperframesFinding = z.infer<typeof FindingSchema>;
 
 export type HyperframesError = { code: "HYPERFRAMES_FAILED"; output: string };
 
-type RunOptions = { dir: string; chromePath: string; units: Unit[] };
+type RunOptions = { dir: string; chromePath: string; units: Unit[]; signal?: AbortSignal };
 
 /**
  * Runs `hyperframes check`, which lints the page and then plays it in the pinned
  * chrome-headless-shell for runtime, layout and motion problems. Telemetry and update checks are
  * off. Each error maps to its unit through the file it was found in.
  */
-export async function runHyperframesCheck({ dir, chromePath, units }: RunOptions) {
+export async function runHyperframesCheck({ dir, chromePath, units, signal }: RunOptions) {
   const { stdout, stderr } = await run(
     [CLI, "check", dir, "--json", "--no-contrast", "--no-browser-gpu", "--samples", String(SAMPLES)],
     chromePath,
+    signal,
   );
   const json = parseJson(stdout);
   const { success, data } = CheckOutputSchema.safeParse(json);
@@ -80,7 +84,7 @@ export async function runHyperframesCheck({ dir, chromePath, units }: RunOptions
   return { data: findings, error: null };
 }
 
-function run(args: string[], chromePath: string): Promise<{ stdout: string; stderr: string }> {
+function run(args: string[], chromePath: string, signal?: AbortSignal): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const child = spawn(process.execPath, args, {
       env: {
@@ -96,6 +100,8 @@ function run(args: string[], chromePath: string): Promise<{ stdout: string; stde
         HYPERFRAMES_SKIP_SKILLS: "1",
       },
       stdio: ["ignore", "pipe", "pipe"],
+      signal,
+      timeout: CHECK_TIMEOUT_MS,
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -103,7 +109,12 @@ function run(args: string[], chromePath: string): Promise<{ stdout: string; stde
     child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
     child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
     child.on("error", (error) => resolve({ stdout: "", stderr: error.message }));
-    child.on("close", () => resolve({ stdout: Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") }));
+    // A killed check (Stop or the timeout) reports no JSON, so it resolves as HYPERFRAMES_FAILED.
+    child.on("close", (_code, killedBy) => {
+      const killed = killedBy ? `
+hyperframes check was killed (${killedBy}): stopped or timed out after ${CHECK_TIMEOUT_MS} ms` : "";
+      resolve({ stdout: killedBy ? "" : Buffer.concat(stdout).toString("utf8"), stderr: Buffer.concat(stderr).toString("utf8") + killed });
+    });
   });
 }
 
