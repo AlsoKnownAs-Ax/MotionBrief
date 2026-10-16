@@ -1,4 +1,4 @@
-import type { Asset, AssetKind, AssetScope, SoundAsset } from "../../../contract";
+import type { Asset, AssetKind, AssetScope, SoundAsset, TimelineScene } from "../../../contract";
 
 /** An Asset as the Library drawer lists it: with where it lives. */
 export type LibraryAsset = Asset & { scope: AssetScope };
@@ -27,6 +27,20 @@ export function matches(asset: Asset, query: string) {
     .toLowerCase()
     .split(/\s+/)
     .every((word) => text.includes(word));
+}
+
+/** A place in a Scene where an image or logo can be swapped in. */
+export type SwapTarget = { scene: TimelineScene; field: string };
+
+/** Where the selected Scenes show another image or logo that `asset` can take the place of; an icon slot takes only a logo. */
+export function swapTargets(asset: Asset, scenes: TimelineScene[], selection: string[]): SwapTarget[] {
+  if (isSound(asset)) {
+    return [];
+  }
+
+  return scenes
+    .filter(({ id }) => selection.includes(id))
+    .flatMap((scene) => (scene.assets ?? []).filter(({ id, field }) => id !== asset.id && (asset.kind === "logo" || !field.endsWith(".icon"))).map(({ field }) => ({ scene, field })));
 }
 
 /** How many of the Assets are of each kind, and in all. */

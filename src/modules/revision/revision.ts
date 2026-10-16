@@ -1,6 +1,7 @@
 import type {
   CheckFinding,
   ConnectorError,
+  CostRange,
   GenerationPreviewError,
   Preview,
   RevisionRequest,
@@ -20,14 +21,14 @@ import type { Connector } from "../connector";
 import { endsRun, inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
 import { previewErrorMessage, type Previews, type Stills } from "../preview";
 import { createStatusStore, type Flag, type Projects, type ProjectsError, type RevisionRecord, type Version, type VersionError } from "../projects";
-import { StoryboardSchema, type Storyboard } from "../storyboard";
+import { assetsOf, StoryboardSchema, validateStoryboard, withAssets, type Storyboard } from "../storyboard";
 import { presetBrief, storyboardRules } from "../style";
 import { DEFAULT_MODELS } from "../settings";
 import type { Clock } from "../system";
 import type { Usage, UsageRun } from "../usage";
 import { runRevisionAgent } from "./agent";
 import { regenerateRequest } from "./prompts";
-import { planRebuild, type UnitRebuild } from "./rebuild";
+import { planRebuild, swappedCode, type UnitRebuild } from "./rebuild";
 import { wordFixOffer } from "./word-fix";
 
 /** A Revision's roles: the Revision agent, Scene code for regenerated units, and their visual review. */
@@ -63,6 +64,15 @@ export type ReviseError =
   | { code: "REVISING"; projectId: string }
   | { code: "UNKNOWN_SCENE"; sceneId: string };
 
+/** An image or logo in a Scene swapped for another Asset, by the field `assetsOf` gives its place. */
+export type SwapRequest = { sceneId: string; field: string; asset: string; confirmed?: boolean };
+
+export type SwapError =
+  | ReviseError
+  | { code: "INVALID_SWAP"; message: string }
+  /** The swap regenerates these Scenes: an agent run the creator confirms first; `costUsd` on an API key. */
+  | { code: "SWAP_UNCONFIRMED"; scenes: string[]; costUsd?: CostRange };
+
 export type WordFixOfferError = Extract<ProjectsError, { code: "UNKNOWN_PROJECT" | "FILE_FAILED" }> | { code: "UNKNOWN_WORD"; index: number; words: number };
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
@@ -96,7 +106,7 @@ type Regenerated = { code?: UnitCode; flag?: Flag };
  * (the rebuild rule), re-renders and checks what only moved in time, regenerates what changed, and saves the result
  * as the next Version. The current Version plays on meanwhile; Stop, or any failure, leaves it as it was.
  */
-export function createRevisions({ checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS, assets }: RevisionsOptions) {
+export function createRevisions({ connector, checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS, assets }: RevisionsOptions) {
   const videos = new Map<string, Store>();
   const running = new Map<string, Job>();
 
@@ -120,6 +130,63 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
    * before anything is read, so two requests at once can't both start.
    */
   async function start(ref: VideoRef, request: RevisionRequest): Promise<Result<null, ReviseError>> {
+    return begin<never>(ref, request, async () => ({ data: revise, error: null }));
+  }
+
+  /**
+   * Swaps an image or logo in a Scene for another Asset, with no Revision agent: a swap the rebuild rule only
+   * re-renders runs at once; one that regenerates units waits for `confirmed`, which on an API key also approves its
+   * cost. It runs and streams as a Revision does, and saves the next Version.
+   */
+  async function swapAsset(ref: VideoRef, { sceneId, field, asset, confirmed = false }: SwapRequest): Promise<Result<null, SwapError>> {
+    const index = await indexOf(ref.projectId);
+    const name = index.find(({ id }) => id === asset)?.name ?? asset;
+
+    return begin<SwapError>(ref, { message: `Swap in "${name}"`, scope: [sceneId] }, async (run) => {
+      const { current, transcript } = run;
+      const { preset, captions: writtenFor } = current.version;
+      const { data: storyboard, error } = swapped(current.storyboard, sceneId, field, asset);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      const rules = storyboardRules(preset, { format: ref.format, captions: writtenFor }, index);
+      const issue = validateStoryboard(storyboard, transcript, rules).error?.issues.find((found) => found.sceneId === sceneId);
+
+      if (issue) {
+        return { data: null, error: { code: "INVALID_SWAP", message: issue.message } };
+      }
+
+      const plans = planRebuild({ current: current.storyboard, next: storyboard, transcript, instructions: {}, captionsChanged: false, assets: index });
+      const regenerating = plans.filter(({ rebuild: need }) => need === "regenerate");
+
+      if (regenerating.length > 0 && !confirmed) {
+        const scenes = regenerating.flatMap(({ unit }) => unit.scenes.map(({ id }) => id));
+
+        return { data: null, error: { code: "SWAP_UNCONFIRMED", scenes, costUsd: await regenerationCost(run.duration * (regenerating.length / plans.length)) } };
+      }
+
+      run.isConfirmed = confirmed;
+
+      return { data: () => rebuild(run, { storyboard, plans, writtenFor, captions: current.captions, summary: `Swapped in "${name}".`, preset }), error: null };
+    });
+  }
+
+  /** On an API key, what regenerating `voiceoverSeconds` worth of Scenes is estimated to cost; a subscription isn't billed per run. */
+  async function regenerationCost(voiceoverSeconds: number): Promise<CostRange | undefined> {
+    if ((await connector.status()).method !== "api-key") {
+      return undefined;
+    }
+
+    return usage.estimateCost(voiceoverSeconds);
+  }
+
+  /**
+   * Starts a run on the video's current Version: `plan` reads it and answers with the work to run, or why none runs.
+   * The video is reserved before anything is read, so two runs at once can't both start.
+   */
+  async function begin<E>(ref: VideoRef, request: RevisionRequest, plan: (run: Run) => Promise<Result<(run: Run) => Promise<void>, E>>): Promise<Result<null, ReviseError | E>> {
     const { key, store } = storeOf(ref);
 
     // Reserved before the current Version is read, so no other job saves one under this Revision.
@@ -147,8 +214,28 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
       return { data: null, error: null };
     }
 
+    const { data: work, error: planError } = await plan(run);
+
+    if (!work) {
+      void run.usage.finish({ completed: false });
+
+      // A run Stop ended meanwhile already let the video go.
+      if (running.get(key) === job) {
+        running.delete(key);
+        release();
+      }
+
+      return { data: null, error: planError! };
+    }
+
+    if (job.controller.signal.aborted) {
+      void run.usage.finish({ completed: false });
+
+      return { data: null, error: null };
+    }
+
     store.set({ state: "revising", request, affected: request.scope, units: [] });
-    void revise(run)
+    void work(run)
       .catch((cause: unknown) => publish(run, { state: "failed", error: { code: "FILE_FAILED", path: workDir, message: String(cause) } }))
       .finally(() => {
         // Only a first generation feeds the running cost per Voiceover minute.
@@ -287,6 +374,8 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     /** Its agents start their sessions through it, so what they use is counted and the cap can stop them. */
     usage: UsageRun;
     models: RevisionModels;
+    /** The creator confirmed it before it started, cost and all, so it never waits for approval. */
+    isConfirmed?: boolean;
   };
 
   /** Updates the Revision's status, unless it was stopped: a stopped Revision says nothing more. */
@@ -341,7 +430,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     // A Captions switch in the patch shows in its Version from now on, and the Storyboard is written for it.
     const nextCaptions = patch.captions ?? captions;
     const instructions = Object.fromEntries(patch.instructions.map(({ scene, text }) => [scene, text]));
-    const plans = planRebuild({ current: current.storyboard, next: storyboard, transcript, instructions, captionsChanged: nextCaptions !== captions });
+    const plans = planRebuild({ current: current.storyboard, next: storyboard, transcript, instructions, captionsChanged: nextCaptions !== captions, assets: index });
 
     // A patch that changes nothing makes no Version: its summary is the reply.
     if (plans.every(({ rebuild }) => rebuild === "keep")) {
@@ -374,9 +463,11 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
       progress.set(unit.id, unit);
       publish(run, { units: [...progress.values()] });
     };
-    // Every unit starts from its previous code; a unit the patch made, or a fallback, has none.
+    // Every unit starts from its previous code, pointing at any Assets swapped in; a unit the patch made, or a fallback, has none.
     const code: Record<string, UnitCode> = Object.fromEntries(
-      plans.filter(({ previous }) => previous && current.code[previous.id]).map(({ unit, previous }) => [unit.id, current.code[previous!.id]!]),
+      plans
+        .filter(({ previous }) => previous && current.code[previous.id])
+        .map(({ unit, previous, swaps }) => [unit.id, swaps.length > 0 ? swappedCode(current.code[previous!.id]!, swaps) : current.code[previous!.id]!]),
     );
 
     publish(run, { state: "rebuilding", affected: affectedScenes(current.storyboard, plans), units: [...progress.values()], summary });
@@ -483,7 +574,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
   async function approval(run: Run, share: number): Promise<boolean> {
     const { job } = run;
 
-    if (share === 0 || !(await usage.needsApproval())) {
+    if (share === 0 || run.isConfirmed || !(await usage.needsApproval())) {
       return !job.controller.signal.aborted;
     }
 
@@ -667,7 +758,22 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     return { data: wordFixOffer(storyboard, spellings, word.text), error: null };
   }
 
-  return { start, approve, stop, watch, offerWordFix, isRunning, whenEnded };
+  return { start, swapAsset, approve, stop, watch, offerWordFix, isRunning, whenEnded };
+}
+
+/** The Storyboard with the Asset at `field` of Scene `sceneId` swapped for `asset`. */
+function swapped(storyboard: Storyboard, sceneId: string, field: string, asset: string): Result<Storyboard, { code: "INVALID_SWAP"; message: string }> {
+  // The run's scope already holds only Scenes of the Storyboard.
+  const scene = storyboard.scenes.find(({ id }) => id === sceneId)!;
+  const places = assetsOf(scene);
+
+  if (!places.some(({ field: place }) => place === field)) {
+    return { data: null, error: { code: "INVALID_SWAP", message: `Scene ${sceneId} shows no Asset at ${field}.` } };
+  }
+
+  const ids = places.map(({ id, field: place }) => (place === field ? asset : id));
+
+  return { data: { ...storyboard, scenes: storyboard.scenes.map((candidate) => (candidate === scene ? withAssets(scene, ids) : candidate)) }, error: null };
 }
 
 function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {

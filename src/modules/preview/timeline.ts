@@ -1,6 +1,6 @@
 import type { SceneStatus, StoryboardTranscript, UnitCode, UnitWork, VideoTimeline } from "../../contract";
 import type { AssembledPage } from "../assembler";
-import { sceneTimings, type Storyboard } from "../storyboard";
+import { assetsOf, sceneTimings, type Storyboard } from "../storyboard";
 
 /**
  * The assembled video as the editor shows it: each Scene's timing, unit, status and Transition in, and the words.
@@ -27,6 +27,7 @@ export function timelineOf(
       // By id: a page served from an earlier build holds that build's Scene objects.
       const unit = units.find(({ scenes }) => scenes.some(({ id }) => id === scene.id))?.id ?? scene.id;
       const status = statusOf(unit, code, pending, notes);
+      const assets = assetsOf(scene).map(({ field, id }) => ({ field, id }));
 
       return {
         id: scene.id,
@@ -38,6 +39,7 @@ export function timelineOf(
         status,
         note: noteOf(status, notes[unit]),
         transitionIn: timings[index - 1]?.scene.transition?.type,
+        ...(assets.length > 0 && { assets }),
       };
     }),
     words: transcript.words.map(({ text, start }, index) => ({

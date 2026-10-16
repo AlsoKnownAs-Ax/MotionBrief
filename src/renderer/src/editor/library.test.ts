@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { assetFacts, filterAssets, kindCounts, listKey, type LibraryAsset } from "./library";
+import type { TimelineScene } from "../../../contract";
+import { assetFacts, filterAssets, kindCounts, listKey, swapTargets, type LibraryAsset } from "./library";
 
 const WHOOSH: LibraryAsset = { scope: "bundled", id: "bundled:whoosh", kind: "sfx", role: "transition", name: "Whoosh", notes: "For a push.", format: "opus", duration: 0.6, loudness: -29.9 };
 const IMPACT: LibraryAsset = { scope: "bundled", id: "bundled:impact", kind: "sfx", role: "impact", name: "Impact", notes: "A stat landing.", format: "opus", duration: 1.2, loudness: -14 };
@@ -58,5 +59,24 @@ describe("an Asset's facts", () => {
     expect(assetFacts(WHOOSH)).toBe("0.6 s · −30 LUFS");
     expect(assetFacts(BED)).toBe("1:05 · −14 LUFS");
     expect(assetFacts(LOGO)).toBe("120×40 · SVG · transparent");
+  });
+});
+
+describe("where an image or logo can be swapped in", () => {
+  const SHOT: LibraryAsset = { scope: "project", id: "c".repeat(64), kind: "image", name: "Dashboard", notes: "The billing page.", format: "png", width: 16, height: 10, transparent: false };
+  const scene = (id: string, assets?: TimelineScene["assets"]): TimelineScene => ({ id, number: 1, type: "hook", unit: id, start: 0, end: 1, status: "ready", assets });
+  const HOOK = scene("s01", [{ field: "content.media.asset", id: "d".repeat(64) }]);
+  const LIST = scene("s02", [{ field: "content.items[0].icon", id: LOGO.id }]);
+  const SCENES = [HOOK, LIST, scene("s03")];
+
+  it("offers each image or logo in the selected Scenes", () => {
+    expect(swapTargets(LOGO, SCENES, ["s01"])).toEqual([{ scene: HOOK, field: "content.media.asset" }]);
+    expect(swapTargets(SHOT, SCENES, ["s01", "s02", "s03"])).toEqual([{ scene: HOOK, field: "content.media.asset" }]);
+  });
+
+  it("never offers an icon slot to an image, the Asset's own place, or anything to a sound", () => {
+    expect(swapTargets(LOGO, SCENES, ["s02"])).toEqual([]);
+    expect(swapTargets(SHOT, SCENES, ["s02"])).toEqual([]);
+    expect(swapTargets(BED, SCENES, ["s01"])).toEqual([]);
   });
 });

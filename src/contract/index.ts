@@ -289,6 +289,8 @@ export const VideoTimelineSchema = z.object({
       note: z.string().optional(),
       /** The Transition from the Scene before into this one; the first Scene has none. */
       transitionIn: TransitionTypeSchema.optional(),
+      /** The images and logos the Scene shows, each by its place in the Scene (`video.swapAsset`); absent when none. */
+      assets: z.array(z.object({ field: z.string(), id: z.string() })).optional(),
     }),
   ),
   /** The Transcript's words, each until the next one starts. */
@@ -1310,6 +1312,33 @@ export const coreContract = {
         FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
       })
       .input(VideoRefSchema.extend(RevisionRequestSchema.shape)),
+    /**
+     * Swaps an image or logo in a Scene for another Asset, with no Revision agent. A swap for one of the same kind
+     * within about 15% aspect only re-renders; any other regenerates the unit, so it needs `confirmed`, which on an API
+     * key also approves its cost (ADR 0003). It starts and returns at once; progress streams through `revision`.
+     */
+    swapAsset: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        NOT_GENERATED: { data: z.object({ projectId: z.string() }) },
+        REVISING: { data: z.object({ projectId: z.string() }) },
+        UNKNOWN_SCENE: { data: z.object({ sceneId: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+        /** The Scene shows no Asset at `field`, or can't show this Asset there. */
+        INVALID_SWAP: { data: z.object({ message: z.string() }) },
+        /** The swap regenerates these Scenes: ask the creator, then swap again with `confirmed`; `costUsd` on an API key. */
+        SWAP_UNCONFIRMED: { data: z.object({ scenes: z.array(z.string()), costUsd: CostRangeSchema.optional() }) },
+      })
+      .input(
+        VideoRefSchema.extend({
+          sceneId: z.string(),
+          /** The Asset's place in the Scene, as the timeline lists it. */
+          field: z.string(),
+          asset: z.string(),
+          /** The creator confirmed the agent run, and on an API key its cost. */
+          confirmed: z.boolean().optional(),
+        }),
+      ),
     /** Streams the video's Revision now and after every change, until the window stops listening. */
     revision: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(RevisionStatusSchema)),
     /** Lets a Revision waiting in `approval` regenerate its Scenes; no-op otherwise. */
