@@ -148,6 +148,10 @@ const sceneBase = {
   transition: TransitionSchema.optional().describe(
     'the Transition into the next Scene; every Scene but the last has one; "camera" only between Scenes on the same Canvas',
   ),
+  sounds: z
+    .array(z.strictObject({ asset: z.string().describe("a sound effect id from the Asset index"), at: wordIndex.describe("index of the Transcript word it plays on") }))
+    .optional()
+    .describe("sparse sound effects on meaningful words, such as an impact as a number lands"),
 };
 
 /** The 9 Scene Types, each with its own content shape. There is no "custom" type: gaps are fixed by adding a Scene Type. */

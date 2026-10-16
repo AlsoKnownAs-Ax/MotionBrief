@@ -419,7 +419,8 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
   }
 
   /**
-   * The sound a video plays besides its Voiceover, from its Style Preset: none for a Preset without a sound block.
+   * The sound a video plays besides its Voiceover, from its Style Preset and the agent's sounds in its Storyboard:
+   * none for a Preset without a sound block.
    * Asset files are found in the bundled set, then the video's Project, then the Library.
    */
   async function soundPlan({ storyboard, transcript, preset, voiceover }: SoundSource): Promise<SoundPlan | undefined> {
@@ -427,7 +428,8 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       return undefined;
     }
 
-    const ids = Object.values(preset.sound.transitionSfx).filter((id) => id !== NO_ASSET);
+    const placed = storyboard.scenes.flatMap(({ sounds = [] }) => sounds.map(({ asset }) => asset));
+    const ids = [...Object.values(preset.sound.transitionSfx), ...placed].filter((id) => id !== NO_ASSET);
     // shortcut: the Project is the Voiceover's folder, as a source names no Project; pass the Project when sources carry one.
     const projectAssets = voiceover && join(dirname(voiceover), ASSETS_DIR);
     const found = await Promise.all([...new Set(ids)].map(async (id) => [id, await soundFile(id, projectAssets)] as const));

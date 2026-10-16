@@ -1,6 +1,7 @@
-import type { AssetKind, Format, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
+import type { AssetKind, Format, IndexedAsset, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
 import { assetsOf, copyOf, elementsOf, type SceneAsset } from "./content";
 import type { Scene, SceneType, Storyboard, Transition, TransitionType } from "./schema";
+import { placedSounds } from "./sounds";
 import { sceneTimings } from "./timing";
 
 /** What every check sees: a Storyboard that already fits the schema, and what it is checked against. */
@@ -484,6 +485,56 @@ function checkAssets({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   );
 }
 
+/** Whether the agent may place an Asset as a sound: an impact or sting, never a Transition sound or music. */
+export function isPlaceableSound(asset: IndexedAsset): boolean {
+  return asset.kind === "sfx" && asset.role === "impact";
+}
+
+/**
+ * Every sound a Scene places is an agent-placeable sound effect, on a word of the Scene, and, for the agent writing
+ * the Storyboard, within the density's caps.
+ */
+function checkSounds({ storyboard, transcript, rules }: CheckInput): StoryboardIssue[] {
+  const index = new Map((rules.assets ?? []).map((asset) => [asset.id, asset]));
+  const scenes = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
+
+  return placedSounds(storyboard, transcript.duration, rules.sfx ?? "lively").flatMap(({ sceneId, index: position, asset: id, at, fits }) => {
+    const scene = scenes.get(sceneId)!;
+    const asset = index.get(id);
+
+    return issuesFor(sceneId, [
+      {
+        broken: !asset || !isPlaceableSound(asset),
+        code: "SOUND",
+        field: `sounds[${position}].asset`,
+        message: `"${id}" isn't a sound effect you may place; use an id from the sound effects in the Asset index.`,
+      },
+      {
+        broken: at < scene.from || at > scene.to,
+        code: "SOUND",
+        field: `sounds[${position}].at`,
+        message: `Word ${at} is outside the Scene (words ${scene.from}-${scene.to}); a sound plays on a word of its own Scene.`,
+      },
+      {
+        broken: rules.sfx !== undefined && !fits,
+        code: "SOUND",
+        field: `sounds[${position}]`,
+        message: soundCapMessage(rules.sfx),
+      },
+    ]);
+  });
+}
+
+function soundCapMessage(sfx: CheckInput["rules"]["sfx"]): string {
+  if (sfx === "subtle" || sfx === "lively") {
+    const caps = sfx === "subtle" ? "at most 1 per Scene and about 1 per 20 s" : "at most 2 per Scene and about 1 per 8 s";
+
+    return `Too many sound effects: ${sfx} allows ${caps}. Keep only the ones on the moments that matter most.`;
+  }
+
+  return "Sound effects are off for this video; place no sounds.";
+}
+
 /** The rules a Storyboard must meet beyond its schema, in the order their issues are reported. */
 export const CHECKS: Check[] = [
   checkFormat,
@@ -497,4 +548,5 @@ export const CHECKS: Check[] = [
   checkCanvases,
   checkCaptions,
   checkAssets,
+  checkSounds,
 ];

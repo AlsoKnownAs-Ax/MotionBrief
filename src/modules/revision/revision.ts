@@ -302,7 +302,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     const { captions } = current;
     const brief = presetBrief(preset, ref.format);
     const index = await indexOf(ref.projectId);
-    const rulesFor = (withCaptions: boolean) => storyboardRules(preset, { format: ref.format, captions: withCaptions }, index);
+    const rulesFor = (withCaptions: boolean) => ({ ...storyboardRules(preset, { format: ref.format, captions: withCaptions }, index), sfx: preset.sound?.sfx ?? "off" });
     const { data: outcome, error } = await runRevisionAgent({
       connector: run.usage.connector("revision"),
       workDir,
