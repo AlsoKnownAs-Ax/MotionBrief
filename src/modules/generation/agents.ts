@@ -158,7 +158,7 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
 
   /** The unit's own findings on the code; an error when the checks couldn't run. */
   async function findingsOf(code: UnitCode): Promise<Result<CheckFinding[], string>> {
-    const { data: report, error } = await checker.check({ storyboard, transcript, rules, preset, code: { [unit.id]: code } }, run.signal);
+    const { data: report, error } = await checker.check({ storyboard, transcript, rules, preset, code: { [unit.id]: code } });
 
     if (error) {
       return { data: null, error: error.code };
