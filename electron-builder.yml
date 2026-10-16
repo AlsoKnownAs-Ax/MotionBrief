@@ -21,12 +21,16 @@ files:
   # Pin files and postinstall's staging folders.
   - "!vendor/*.sha256"
   - "!vendor/.*/**"
+  # The bundled sound set (pnpm assets:bundled), resolved beside vendor/ by src/core/native.ts.
+  - resources/assets/**
   - package.json
 
 # Every executable MotionBrief spawns must sit on disk, outside the archive. Their whole folders are
 # unpacked, since whisper-cli loads its ggml DLLs and chrome-headless-shell its resources from next to it.
 asarUnpack:
   - vendor/**
+  # FFmpeg and the render's browser read the bundled sounds as plain files.
+  - resources/assets/**
   - node_modules/@anthropic-ai/claude-agent-sdk-*/**
 
 extraResources:

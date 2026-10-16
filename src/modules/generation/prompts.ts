@@ -1,7 +1,7 @@
-import type { CheckFinding, Format, StoryboardIssue, StoryboardRules, StylePreset, Transcript } from "../../contract";
+import type { CheckFinding, Format, ImageAsset, IndexedAsset, SfxDensity, StoryboardIssue, StoryboardRules, StylePreset, Transcript } from "../../contract";
 import type { Unit } from "../assembler";
 import { FRAME_SIZES } from "../frame";
-import type { Storyboard } from "../storyboard";
+import { assetsOf, isPlaceableSound, sfxCapsText, type Storyboard } from "../storyboard";
 import { pacingFor, type PresetBrief } from "../style";
 
 /**
@@ -18,7 +18,8 @@ export const REVIEW_TOOL = "submit_review";
 /** Ends a sentence, optionally followed by closing quotes or brackets. */
 const SENTENCE_END = /[.?!]["')\]”’]*$/;
 
-export function storyboardSystem({ format, captions }: StoryboardRules, brief: PresetBrief): string {
+export function storyboardSystem({ format, captions, assets: all = [], sfx }: StoryboardRules, brief: PresetBrief): string {
+  const assets = all.filter((asset) => !asset.removed && (asset.kind === "image" || asset.kind === "logo" || (hasSounds(sfx) && isPlaceableSound(asset))));
   const { width, height } = FRAME_SIZES[format];
   const { min, max } = pacingFor(format, "balanced");
 
@@ -35,12 +36,59 @@ Rules:
 - Every content element has an id and "at": the index of the Transcript word it appears on, the word that names it or starts the phrase it illustrates. Anchors lie inside the Scene's span. Spread them across the Scene; never put everything on its first word.
 - Timing is only ever word indexes, never seconds.
 - On-screen copy is short motion-graphics copy (a label, a hero word, a number), never a narration sentence. Numbers are digits: "two hundred milliseconds" is value 200 with unit "ms".
-- Icons: "lucide:<name>" from Lucide (lucide:server, lucide:database, lucide:globe, lucide:user, lucide:laptop, lucide:shield, lucide:zap, lucide:clock, lucide:cloud, lucide:network, lucide:hard-drive) or "brand:<simple-icons slug>" (brand:github, brand:cloudflare, brand:python). Only use names you are sure exist.
+- Icons: "lucide:<name>" from Lucide (lucide:server, lucide:database, lucide:globe, lucide:user, lucide:laptop, lucide:shield, lucide:zap, lucide:clock, lucide:cloud, lucide:network, lucide:hard-drive) or "brand:<simple-icons slug>" (brand:github, brand:cloudflare, brand:python). Only use names you are sure exist.${mediaRule(assets)}${soundRule(sfx)}
 - Every Scene but the last names the Transition into the next Scene.
 - Format: ${format} (${width}x${height}). ${FORMAT_NOTES[format]}
 - ${captionsRule(captions)}
-
+${assetIndex(assets)}
 ${brief.storyboard}`;
+}
+
+function hasSounds(sfx: SfxDensity | undefined): sfx is "subtle" | "lively" {
+  return sfx === "subtle" || sfx === "lively";
+}
+
+function mediaRule(assets: IndexedAsset[]): string {
+  if (!assets.some(({ kind }) => kind === "image" || kind === "logo")) {
+    return "";
+  }
+
+  return `
+- The creator's images and logos are in the Asset index below. A logo can stand in for an icon as "asset:<id>". An image or logo can appear as "media" ({id, asset, at}) on a hook, key-term, comparison side or outro. Place one only where its notes say it fits what is said, and use only ids from the index.`;
+}
+
+function soundRule(sfx: SfxDensity | undefined): string {
+  if (!hasSounds(sfx)) {
+    return "";
+  }
+
+  return `
+- Sound effects are ${sfx}: a Scene may play the sound effects in the Asset index as "sounds" ([{asset, at}], "at" a word of the Scene), ${sfxCapsText(sfx)}. MotionBrief already plays a sound on Transitions, so place one only where a moment should hit harder: a number landing, a reveal, the closing line. Most Scenes have none.`;
+}
+
+/**
+ * The Asset index, one line each, in a stable order so the system prompt stays cacheable.
+ * shortcut: the whole index goes in the prompt; past about 200 user Assets, switch to a search_assets(kind, query) host tool.
+ */
+function assetIndex(assets: IndexedAsset[]): string {
+  if (assets.length === 0) {
+    return "";
+  }
+
+  const lines = assets.map((asset) => `- ${asset.id} ${asset.kind} ${JSON.stringify(asset.name)} (${factsOf(asset)}): ${asset.notes}`);
+
+  return `
+ASSET INDEX (id kind "name" (facts): the creator's notes on what it shows and when to use it):
+${lines.join("\n")}
+`;
+}
+
+function factsOf(asset: IndexedAsset): string {
+  if ("duration" in asset) {
+    return `${asset.duration.toFixed(2)} s`;
+  }
+
+  return [`${asset.width}x${asset.height}`, asset.transparent && "transparent"].filter(Boolean).join(", ");
 }
 
 const FORMAT_NOTES = {
@@ -132,6 +180,7 @@ THE FRAME (already there; never re-create it):
 - Classes: .mb-safe (an absolute box over the safe area), .mb-card (a surface in the Style Preset's treatment), .mb-display .mb-title .mb-body .mb-label .mb-mono (type), .mb-accent, .mb-icon, .mb-wire (an SVG connector layer).
 - Colors and fonts come only from the tokens: no hex, rgb(), hsl() or color names, and no font-family but var(--font-*). Tints are color-mix(in srgb, var(--accent) 20%, transparent).
 - Icons: <i data-icon="lucide:server"></i> becomes an inline SVG 1em in size; set font-size to size it and color to color it.
+- Images and logos (a "media" element, or an "asset:<id>" icon): <img src="asset(<id>)"> with the element's DOM id, using only the Assets your unit lists. Size its box; the frame fits the picture inside it and draws its frame or chip. In JS, asset(id) answers the same src. Never another <img>, a CSS url(), a path, or an Asset's markup copied into your code.
 
 YOUR HTML goes inside the unit's root. Lay it out with absolute boxes, flex or grid. Every id you create starts with this unit's id or one of its Scene ids.
 
@@ -166,7 +215,7 @@ ${brief.sceneCode}`;
 }
 
 /** What a Scene-code subagent writes from: the Storyboard, the Style Preset, its own entries, and exact anchor and spoken-word times. */
-export function unitMessage({ storyboard, preset, unit, transcript }: { storyboard: Storyboard; preset: StylePreset; unit: Unit; transcript: Transcript }): string {
+export function unitMessage({ storyboard, preset, unit, transcript, assets = [] }: { storyboard: Storyboard; preset: StylePreset; unit: Unit; transcript: Transcript; assets?: IndexedAsset[] }): string {
   const first = unit.scenes[0]?.from ?? 0;
   const last = unit.scenes.at(-1)?.to ?? first;
   const spoken = transcript.words
@@ -195,8 +244,26 @@ ${anchors}
 
 Spoken words, in seconds from the unit's start:
 ${spoken}
-
+${unitAssets(unit, assets)}
 Write the unit and hand it in with ${SCENE_CODE_TOOL}.`;
+}
+
+/** The Assets the unit shows, by the facts its layout needs: never notes or paths. */
+function unitAssets(unit: Unit, assets: IndexedAsset[]): string {
+  const ids = new Set(unit.scenes.flatMap((scene) => assetsOf(scene).map(({ id }) => id)));
+  const shown = assets
+    .filter((asset) => ids.has(asset.id))
+    .filter((asset): asset is IndexedAsset & ImageAsset => asset.kind === "image" || asset.kind === "logo")
+    .map((asset) => ({ id: asset.id, kind: asset.kind, width: asset.width, height: asset.height, transparent: asset.transparent }));
+
+  if (shown.length === 0) {
+    return "";
+  }
+
+  return `
+Assets your unit shows, each only as <img src="asset(<id>)">:
+${shown.map((asset) => JSON.stringify(asset)).join("\n")}
+`;
 }
 
 function unitKind(sceneCount: number, scenes: string): string {
@@ -235,7 +302,7 @@ export function reviewSystem(format: Format, brief: PresetBrief): string {
 
 The frames are ${width}x${height} (${format}), drawn the way the video renders. Open each still with the Read tool.
 
-Report only concrete, fixable visual defects a viewer would notice: overlapping or colliding elements, text clipped or overflowing its box, content outside the frame${OUT_OF_BOUNDS[format]}, unreadably small text, a Storyboard element missing, connectors that don't touch their nodes, a badly unbalanced or mostly empty composition, cramped layout, colors or treatments that ignore the Style Preset. Don't nitpick taste. Elements may still be arriving in a still taken mid-Scene; judge those by the Scene's last still.
+Report only concrete, fixable visual defects a viewer would notice: overlapping or colliding elements, text clipped or overflowing its box, content outside the frame${OUT_OF_BOUNDS[format]}, unreadably small text, a Storyboard element missing, connectors that don't touch their nodes, a badly unbalanced or mostly empty composition, cramped layout, colors or treatments that ignore the Style Preset, an image or logo that is distorted, stretched, badly cropped or too small to read. Don't nitpick taste. Elements may still be arriving in a still taken mid-Scene; judge those by the Scene's last still.
 
 If nothing is wrong, hand in looksRight true with no problems. Otherwise list each problem precisely enough for the unit's author to fix it (which element, where, what is wrong), and write the note: one plain sentence for the creator naming what still looks wrong, shown if the fix doesn't work out.
 

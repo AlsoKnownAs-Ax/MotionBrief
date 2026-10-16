@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { StoryboardTranscript, StylePreset, UnitCode } from "../../contract";
+import type { IndexedAsset, StoryboardTranscript, StylePreset, UnitCode } from "../../contract";
 import { assemble } from "../../modules/assembler";
 import { openFramePage, type FramePage } from "../../modules/checker";
 import type { Storyboard } from "../../modules/storyboard";
@@ -24,10 +24,10 @@ export async function openFrame(
   transcript: StoryboardTranscript,
   code: Record<string, UnitCode>,
   preset: StylePreset,
-  { captions = false, scale }: { captions?: boolean; scale?: number } = {},
+  { captions = false, scale, assets }: { captions?: boolean; scale?: number; assets?: IndexedAsset[] } = {},
 ): Promise<OpenFrame> {
   const dir = await mkdtemp(join(tmpdir(), "motionbrief-frame-"));
-  const { width, height } = await assemble({ dir, storyboard, transcript, preset, code, captions });
+  const { width, height } = await assemble({ dir, storyboard, transcript, preset, code, captions, assets });
   const { data: page, error } = await openFramePage({ dir, chromePath: chromeHeadlessShellPath(), width, height, scale });
 
   if (error) {

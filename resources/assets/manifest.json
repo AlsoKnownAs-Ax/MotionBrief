@@ -1,0 +1,635 @@
+{
+  "version": 1,
+  "sounds": [
+    {
+      "slug": "whoosh-left",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Whoosh left",
+      "notes": "Air moving right to left. For a push to the left.",
+      "format": "opus",
+      "duration": 0.603,
+      "loudness": -29.9
+    },
+    {
+      "slug": "whoosh-right",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Whoosh right",
+      "notes": "Air moving left to right. For a push to the right.",
+      "format": "opus",
+      "duration": 0.603,
+      "loudness": -30.1
+    },
+    {
+      "slug": "whoosh-up",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Whoosh up",
+      "notes": "A bright, rising whoosh. For a push up.",
+      "format": "opus",
+      "duration": 0.603,
+      "loudness": -25.3
+    },
+    {
+      "slug": "whoosh-down",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Whoosh down",
+      "notes": "A darker, falling whoosh. For a push down.",
+      "format": "opus",
+      "duration": 0.603,
+      "loudness": -25.6
+    },
+    {
+      "slug": "whoosh-soft",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Soft whoosh",
+      "notes": "A gentle, low whoosh that stays under the voice. A safe default for any push.",
+      "format": "opus",
+      "duration": 0.552,
+      "loudness": -25.9
+    },
+    {
+      "slug": "whoosh-fast",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Fast whoosh",
+      "notes": "A quick swipe for short, snappy pushes.",
+      "format": "opus",
+      "duration": 0.352,
+      "loudness": -27.9
+    },
+    {
+      "slug": "whoosh-long",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Long whoosh",
+      "notes": "A slow pass of air for long or calm Transitions.",
+      "format": "opus",
+      "duration": 1.002,
+      "loudness": -23.6
+    },
+    {
+      "slug": "whoosh-airy",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Airy whoosh",
+      "notes": "Thin, bright air with little body. For light, minimal styles.",
+      "format": "opus",
+      "duration": 0.603,
+      "loudness": -21.9
+    },
+    {
+      "slug": "whoosh-deep",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Deep whoosh",
+      "notes": "A heavy, low rush. For dramatic Scene changes.",
+      "format": "opus",
+      "duration": 0.752,
+      "loudness": -21
+    },
+    {
+      "slug": "swish",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Swish",
+      "notes": "A very short swish for quick cuts between related Scenes.",
+      "format": "opus",
+      "duration": 0.253,
+      "loudness": -28.8
+    },
+    {
+      "slug": "zoom-in",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Zoom in",
+      "notes": "A whoosh that builds to the end, as if flying into the next Scene. For a zoom-through.",
+      "format": "opus",
+      "duration": 0.703,
+      "loudness": -25.1
+    },
+    {
+      "slug": "zoom-out",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Zoom out",
+      "notes": "A whoosh that starts strong and trails off, as if pulling back. For a zoom-through out of detail.",
+      "format": "opus",
+      "duration": 0.703,
+      "loudness": -23.9
+    },
+    {
+      "slug": "zoom-through",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Zoom through",
+      "notes": "A full rise and fall that peaks in the middle. The default for a zoom-through.",
+      "format": "opus",
+      "duration": 0.802,
+      "loudness": -24.5
+    },
+    {
+      "slug": "click-soft",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Soft click",
+      "notes": "A rounded, quiet click. The default for a crossfade.",
+      "format": "opus",
+      "duration": 0.122,
+      "loudness": -22.7
+    },
+    {
+      "slug": "click-low",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Low click",
+      "notes": "A muted, woody click for crossfades in calm videos.",
+      "format": "opus",
+      "duration": 0.152,
+      "loudness": -23.6
+    },
+    {
+      "slug": "tick-soft",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Soft tick",
+      "notes": "A tiny, high tick for crossfades that should barely be heard.",
+      "format": "opus",
+      "duration": 0.063,
+      "loudness": -24.1
+    },
+    {
+      "slug": "click-crisp",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Crisp click",
+      "notes": "A sharp interface click for crossfades in techy styles.",
+      "format": "opus",
+      "duration": 0.103,
+      "loudness": -32
+    },
+    {
+      "slug": "click-plastic",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Plastic click",
+      "notes": "A light plastic click, like a button press.",
+      "format": "opus",
+      "duration": 0.013,
+      "loudness": -29.8
+    },
+    {
+      "slug": "tick",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Tick",
+      "notes": "A small mechanical tick for crossfades.",
+      "format": "opus",
+      "duration": 0.05,
+      "loudness": -28.9
+    },
+    {
+      "slug": "select",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Select",
+      "notes": "A short interface blip, like selecting an item.",
+      "format": "opus",
+      "duration": 0.046,
+      "loudness": -21.9
+    },
+    {
+      "slug": "switch",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Switch",
+      "notes": "A switch flipping. For a crossfade between two views of the same thing.",
+      "format": "opus",
+      "duration": 0.613,
+      "loudness": -20.3
+    },
+    {
+      "slug": "toggle",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Toggle",
+      "notes": "A toggle click with a little body.",
+      "format": "opus",
+      "duration": 0.142,
+      "loudness": -16.9
+    },
+    {
+      "slug": "pop-open",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Pop open",
+      "notes": "A quick upward pop, like a window opening. For a Scene that springs in.",
+      "format": "opus",
+      "duration": 0.261,
+      "loudness": -11.7
+    },
+    {
+      "slug": "pop-close",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Pop close",
+      "notes": "A quick downward pop, like a window closing.",
+      "format": "opus",
+      "duration": 0.261,
+      "loudness": -11.5
+    },
+    {
+      "slug": "slide-open",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Slide open",
+      "notes": "A mechanical sci-fi door sliding open. For a push in technical videos.",
+      "format": "opus",
+      "duration": 0.534,
+      "loudness": -13.3
+    },
+    {
+      "slug": "slide-close",
+      "kind": "sfx",
+      "role": "transition",
+      "name": "Slide close",
+      "notes": "A mechanical sci-fi door sliding shut.",
+      "format": "opus",
+      "duration": 0.534,
+      "loudness": -13.3
+    },
+    {
+      "slug": "punch-heavy",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Heavy punch",
+      "notes": "A big, solid hit. For the single most important number or claim.",
+      "format": "opus",
+      "duration": 0.652,
+      "loudness": -15.3
+    },
+    {
+      "slug": "punch",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Punch",
+      "notes": "A medium hit. For a number landing or a strong word.",
+      "format": "opus",
+      "duration": 0.433,
+      "loudness": -16.7
+    },
+    {
+      "slug": "thud-soft",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Soft thud",
+      "notes": "A padded, heavy thud. For a reveal that should feel weighty but not loud.",
+      "format": "opus",
+      "duration": 0.532,
+      "loudness": -15.8
+    },
+    {
+      "slug": "thud-light",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Light thud",
+      "notes": "A small soft thud. For list items or minor emphasis.",
+      "format": "opus",
+      "duration": 0.12,
+      "loudness": -19.3
+    },
+    {
+      "slug": "metal-hit",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Metal hit",
+      "notes": "A hard metallic clank. For something breaking, failing or locking.",
+      "format": "opus",
+      "duration": 0.17,
+      "loudness": -23.9
+    },
+    {
+      "slug": "plate-hit",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Plate hit",
+      "notes": "A ringing metal plate. For a warning or a hard limit.",
+      "format": "opus",
+      "duration": 0.491,
+      "loudness": -20.8
+    },
+    {
+      "slug": "knock",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Knock",
+      "notes": "A dry wooden knock. For a plain, physical emphasis.",
+      "format": "opus",
+      "duration": 0.316,
+      "loudness": -20.4
+    },
+    {
+      "slug": "bell-strike",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Bell strike",
+      "notes": "A struck bell with a ring. A sting for a conclusion or the key takeaway.",
+      "format": "opus",
+      "duration": 1.483,
+      "loudness": -18.8
+    },
+    {
+      "slug": "bell-strike-long",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Long bell strike",
+      "notes": "A bell with a longer ring. A sting for the closing line.",
+      "format": "opus",
+      "duration": 1.743,
+      "loudness": -16.8
+    },
+    {
+      "slug": "glass-tap",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Glass tap",
+      "notes": "A light tap on glass. For something delicate or fragile.",
+      "format": "opus",
+      "duration": 0.236,
+      "loudness": -19.8
+    },
+    {
+      "slug": "stone-hit",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Stone hit",
+      "notes": "A pick striking rock. For digging into a detail.",
+      "format": "opus",
+      "duration": 0.94,
+      "loudness": -16.3
+    },
+    {
+      "slug": "boom-low",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Low boom",
+      "notes": "A deep, distant boom. For a dramatic reveal or a big number.",
+      "format": "opus",
+      "duration": 2.003,
+      "loudness": -11.8
+    },
+    {
+      "slug": "boom-short",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Short boom",
+      "notes": "A short low thump. For a stat landing.",
+      "format": "opus",
+      "duration": 1.003,
+      "loudness": -11.3
+    },
+    {
+      "slug": "tech-hit",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Tech hit",
+      "notes": "A sci-fi metallic impact. For systems, servers and hardware.",
+      "format": "opus",
+      "duration": 0.637,
+      "loudness": -21.4
+    },
+    {
+      "slug": "force-field",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Force field",
+      "notes": "A humming energy shimmer. For something switching on or a shield.",
+      "format": "opus",
+      "duration": 0.957,
+      "loudness": -8.8
+    },
+    {
+      "slug": "crunch",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Crunch",
+      "notes": "A crunchy explosion. For something crashing or being destroyed.",
+      "format": "opus",
+      "duration": 0.78,
+      "loudness": -14.9
+    },
+    {
+      "slug": "confirm",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Confirm",
+      "notes": "A positive interface chime. For a success, a fix or a yes.",
+      "format": "opus",
+      "duration": 0.292,
+      "loudness": -13.3
+    },
+    {
+      "slug": "confirm-bright",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Bright confirm",
+      "notes": "A brighter success chime. For a win or a result that works.",
+      "format": "opus",
+      "duration": 0.542,
+      "loudness": -12
+    },
+    {
+      "slug": "confirm-short",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Short confirm",
+      "notes": "A short positive blip. For ticking off a step.",
+      "format": "opus",
+      "duration": 0.493,
+      "loudness": -10.3
+    },
+    {
+      "slug": "ding",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Ding",
+      "notes": "A glassy ding. For an idea, a notification or a highlighted term.",
+      "format": "opus",
+      "duration": 0.281,
+      "loudness": -19.4
+    },
+    {
+      "slug": "bong",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Bong",
+      "notes": "A low, round bong. For a key term appearing.",
+      "format": "opus",
+      "duration": 0.125,
+      "loudness": -22.6
+    },
+    {
+      "slug": "pluck",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Pluck",
+      "notes": "A short plucked note. For a light, friendly emphasis.",
+      "format": "opus",
+      "duration": 0.105,
+      "loudness": -21.6
+    },
+    {
+      "slug": "drop",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Drop",
+      "notes": "A small drop sound. For an item falling into place.",
+      "format": "opus",
+      "duration": 0.137,
+      "loudness": -21.7
+    },
+    {
+      "slug": "question",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Question",
+      "notes": "A rising, questioning blip. For a question the video asks.",
+      "format": "opus",
+      "duration": 0.493,
+      "loudness": -9.6
+    },
+    {
+      "slug": "error",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Error",
+      "notes": "A short error buzz. For a mistake, a bug or a wrong answer.",
+      "format": "opus",
+      "duration": 0.11,
+      "loudness": -19.2
+    },
+    {
+      "slug": "glitch",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Glitch",
+      "notes": "A 20 ms digital glitch. For corruption, bugs or something going wrong.",
+      "format": "opus",
+      "duration": 0.023,
+      "loudness": -23.2
+    },
+    {
+      "slug": "power-up",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Power up",
+      "notes": "A rising retro power-up. For an upgrade or something getting faster.",
+      "format": "opus",
+      "duration": 1.204,
+      "loudness": -10.8
+    },
+    {
+      "slug": "phaser-up",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Phaser up",
+      "notes": "A rising retro phaser sweep. Game-like: use sparingly.",
+      "format": "opus",
+      "duration": 0.523,
+      "loudness": -14
+    },
+    {
+      "slug": "three-tone",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Three tones",
+      "notes": "Three rising tones. For a three-part list landing or a sequence completing.",
+      "format": "opus",
+      "duration": 0.854,
+      "loudness": -9.7
+    },
+    {
+      "slug": "two-tone",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Two tones",
+      "notes": "Two tones, like a notification. For a message or an alert.",
+      "format": "opus",
+      "duration": 0.726,
+      "loudness": -12.6
+    },
+    {
+      "slug": "zap-up",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Zap up",
+      "notes": "An electric zap rising in three steps. For energy or a sudden change.",
+      "format": "opus",
+      "duration": 1.204,
+      "loudness": -6.8
+    },
+    {
+      "slug": "blip-up",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Blip up",
+      "notes": "A small rising blip. For something increasing.",
+      "format": "opus",
+      "duration": 0.551,
+      "loudness": -10.6
+    },
+    {
+      "slug": "blip-down",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Blip down",
+      "notes": "A small falling blip. For something decreasing.",
+      "format": "opus",
+      "duration": 0.786,
+      "loudness": -10.8
+    },
+    {
+      "slug": "sub-drop",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Sub drop",
+      "notes": "A deep falling tone. Felt more than heard, for a big reveal.",
+      "format": "opus",
+      "duration": 0.902,
+      "loudness": -10.5
+    },
+    {
+      "slug": "riser",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Riser",
+      "notes": "Noise and a tone building for 1.5 s and stopping dead. Place it to end on the word it leads into.",
+      "format": "opus",
+      "duration": 1.502,
+      "loudness": -15.2
+    },
+    {
+      "slug": "riser-short",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Short riser",
+      "notes": "A 0.8 s build that stops dead, to lead into a word.",
+      "format": "opus",
+      "duration": 0.802,
+      "loudness": -16.8
+    },
+    {
+      "slug": "ding-soft",
+      "kind": "sfx",
+      "role": "impact",
+      "name": "Soft ding",
+      "notes": "A pure, soft bell tone. A calm sting for a takeaway.",
+      "format": "opus",
+      "duration": 1.202,
+      "loudness": -10.1
+    }
+  ]
+}

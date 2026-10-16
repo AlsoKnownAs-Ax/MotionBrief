@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -8,6 +9,9 @@ import { hyperframesRuntime } from "./runtime";
 /** Where the page loads the HyperFrames runtime from. */
 const RUNTIME_PATH = "/hyperframes-runtime.js";
 
+/** Where files shared one by one are served, each under a random name. */
+const FILES_PATH = "/files/";
+
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "application/javascript; charset=utf-8",
@@ -15,6 +19,8 @@ const CONTENT_TYPES: Record<string, string> = {
   ".json": "application/json; charset=utf-8",
   ".svg": "image/svg+xml",
   ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
   ".png": "image/png",
   ".woff2": "font/woff2",
   ".woff": "font/woff",
@@ -34,6 +40,8 @@ const CONTENT_TYPES: Record<string, string> = {
 export type PreviewServer = {
   /** `http://127.0.0.1:<port>`, reachable from this computer only. */
   origin: string;
+  /** Serves one file outside the pages, such as an Asset, and answers its URL; a file keeps its URL. */
+  share: (file: string) => string;
   close: () => Promise<void>;
 };
 
@@ -44,8 +52,11 @@ export type PreviewServer = {
  */
 export async function startPreviewServer(rootDir: string): Promise<PreviewServer> {
   const root = resolve(rootDir);
+  /** Shared files by their served name, and their names by file. */
+  const shared = new Map<string, string>();
+  const names = new Map<string, string>();
   const server = createServer((request, response) => {
-    serve(root, request, response).catch(() => {
+    serve(root, shared, request, response).catch(() => {
       if (!response.headersSent) {
         response.writeHead(500);
       }
@@ -57,8 +68,17 @@ export async function startPreviewServer(rootDir: string): Promise<PreviewServer
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
   const { port } = server.address() as AddressInfo;
 
+  const origin = `http://127.0.0.1:${port}`;
+
   return {
-    origin: `http://127.0.0.1:${port}`,
+    origin,
+    share: (file) => {
+      const name = names.get(file) ?? `${randomUUID()}${extname(file).toLowerCase()}`;
+      names.set(file, name);
+      shared.set(name, file);
+
+      return `${origin}${FILES_PATH}${name}`;
+    },
     close: () =>
       new Promise((done) => {
         server.closeAllConnections();
@@ -67,7 +87,7 @@ export async function startPreviewServer(rootDir: string): Promise<PreviewServer
   };
 }
 
-async function serve(root: string, request: IncomingMessage, response: ServerResponse) {
+async function serve(root: string, shared: Map<string, string>, request: IncomingMessage, response: ServerResponse) {
   const path = decodedPath(request.url ?? "/");
 
   if (path === RUNTIME_PATH) {
@@ -78,6 +98,11 @@ async function serve(root: string, request: IncomingMessage, response: ServerRes
 
   if (path === undefined) {
     notFound(response);
+    return;
+  }
+
+  if (path.startsWith(FILES_PATH)) {
+    await serveShared(shared.get(path.slice(FILES_PATH.length)), request, response);
     return;
   }
 
@@ -104,6 +129,24 @@ async function serve(root: string, request: IncomingMessage, response: ServerRes
   }
 
   sendFile(file, info.size, type, request.headers.range, response);
+}
+
+/** A shared file never runs script, even an SVG opened on its own. */
+async function serveShared(file: string | undefined, request: IncomingMessage, response: ServerResponse) {
+  if (!file) {
+    notFound(response);
+    return;
+  }
+
+  const info = await stat(file).catch(() => undefined);
+
+  if (!info?.isFile()) {
+    notFound(response);
+    return;
+  }
+
+  response.setHeader("content-security-policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'");
+  sendFile(file, info.size, CONTENT_TYPES[extname(file).toLowerCase()] ?? "application/octet-stream", request.headers.range, response);
 }
 
 /** The page's own scripts register their timelines first; the runtime then picks them up, as in a render. */

@@ -1,7 +1,7 @@
 import type { StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
 import { validateStoryboard, type Storyboard } from "../storyboard";
 import { applyPatch, type Patch } from "./patch";
-import { scopeIssues } from "./scope";
+import { changeableScenes, scopeIssues } from "./scope";
 
 type Result<T, E> = { data: T; error: null } | { data: null; error: E };
 
@@ -23,7 +23,8 @@ export type PatchCheck = {
  * Scenes it has, and changing nothing outside the selected Scenes. Answers with the revised Storyboard or every issue.
  */
 export function validatePatch({ current, patch, transcript, rulesFor, writtenFor, scope }: PatchCheck): Result<Storyboard, StoryboardIssue[]> {
-  const { data: revised, error } = validateStoryboard(applyPatch(current, patch), transcript, rulesFor(patch.captions ?? writtenFor));
+  const rules = { ...rulesFor(patch.captions ?? writtenFor), cappedScenes: changeableScenes(current, patch, scope) };
+  const { data: revised, error } = validateStoryboard(applyPatch(current, patch), transcript, rules);
 
   if (error) {
     return { data: null, error: error.issues };

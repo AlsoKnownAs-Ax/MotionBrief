@@ -1,9 +1,10 @@
 import { copyFile, link, mkdir, writeFile } from "node:fs/promises";
-import { dirname, extname, join } from "node:path";
-import type { Format, StoryboardTranscript, StylePreset } from "../../contract";
-import { fallbackCode, FRAME_SIZES, framePage, inlineIcons, wrapUnit, type PageAsset, type UnitCode } from "../frame";
-import type { Storyboard } from "../storyboard";
+import { basename, dirname, extname, join } from "node:path";
+import type { Format, IndexedAsset, StoryboardTranscript, StylePreset, TimelineMusic, TimelineSound } from "../../contract";
+import { assetPath, fallbackCode, FRAME_SIZES, framePage, inlineIcons, placeAssets, wrapUnit, type PageAsset, type UnitCode } from "../frame";
+import { assetsOf, type Storyboard } from "../storyboard";
 import { captionsLayer } from "./captions";
+import type { PlannedBed, PlannedSound, SoundPlan } from "./sound";
 import { planUnits, TRANSITION_SECONDS, type Unit } from "./units";
 
 export type AssembleOptions = {
@@ -19,6 +20,10 @@ export type AssembleOptions = {
   voiceover?: string;
   /** Draws Captions from the Transcript over the Scenes, in the Preset's caption style. Off by default. */
   captions?: boolean;
+  /** The video's Asset index; the Assets the Storyboard shows are linked into the page. */
+  assets?: IndexedAsset[];
+  /** The sound besides the Voiceover. Absent, the page plays only the Voiceover. */
+  sound?: SoundPlan;
 };
 
 export type AssembledPage = {
@@ -27,6 +32,10 @@ export type AssembledPage = {
   height: number;
   duration: number;
   units: Unit[];
+  /** The sound effects the page plays, in time order. */
+  sounds: TimelineSound[];
+  /** The music bed under the whole video, or none. */
+  music: TimelineMusic | null;
 };
 
 /**
@@ -34,12 +43,13 @@ export type AssembledPage = {
  * sub-composition per unit, in Storyboard order and timed from the word anchors, the Transitions
  * between them, the Captions and the Voiceover. The agent writes none of this.
  */
-export async function assemble({ dir, storyboard, transcript, preset, code, voiceover, captions = false }: AssembleOptions): Promise<AssembledPage> {
+export async function assemble({ dir, storyboard, transcript, preset, code, voiceover, captions = false, assets = [], sound }: AssembleOptions): Promise<AssembledPage> {
   const format = storyboard.format;
   const { width, height } = FRAME_SIZES[format];
   const units = planUnits(storyboard, transcript);
   const duration = transcript.duration;
-  const page = await framePage({ format, units, style: preset });
+  const shown = shownAssets(storyboard, assets);
+  const page = await framePage({ format, units, style: preset, assets: Object.fromEntries(shown.map((asset) => [asset.id, assetPath(asset)])) });
   const audio = audioAsset(voiceover);
 
   await mkdir(join(dir, "compositions"), { recursive: true });
@@ -47,21 +57,103 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
   await Promise.all(
     units.map(async (unit) => {
       const unitCode = code[unit.id] ?? fallbackCode(unit.scenes, unit, format);
-      const { html } = await inlineIcons(unitCode.html, preset.treatments.icons);
+      const { html: withIcons } = await inlineIcons(unitCode.html, preset.treatments.icons);
+      const { html } = placeAssets(withIcons, shown);
 
       await writeFile(join(dir, "compositions", `${unit.id}.html`), wrapUnit({ unit, format, style: preset, code: { ...unitCode, html } }));
     }),
   );
 
   if (voiceover && audio) {
-    await placeVoiceover(voiceover, join(dir, audio));
+    await placeFile(voiceover, join(dir, audio));
+  }
+
+  await Promise.all(shown.map((asset) => placeFile(asset.file, join(dir, assetPath(asset)))));
+
+  const sfx = sound?.sfx ?? [];
+  await Promise.all([...new Set(sfx.map(({ file }) => file))].map((file) => placeFile(file, join(dir, sfxAsset(file)))));
+
+  const bed = sound?.bed;
+
+  if (bed) {
+    await placeFile(bed.file, join(dir, musicAsset(bed.file)));
   }
 
   const layer = captionsWhenOn(captions, { transcript, format, preset });
 
-  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, page, captions: layer, background: preset.palette.colors.bg }));
+  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, sfx, bed, page, captions: layer, background: preset.palette.colors.bg }));
 
-  return { format, width, height, duration, units };
+  return { format, width, height, duration, units, sounds: sfx.map(({ start, name, source }) => ({ start, name, source })), music: musicOf(bed) };
+}
+
+/** The bed as the timeline draws it: its name and fade shape. */
+function musicOf(bed: PlannedBed | undefined): TimelineMusic | null {
+  if (!bed) {
+    return null;
+  }
+
+  return { name: bed.name, fadeIn: bed.passes[0]!.fadeIn, fadeOut: bed.passes.at(-1)!.fadeOut };
+}
+
+/** The music bed takes tracks 11 and 12, alternating, so the passes of a looping bed can overlap. */
+const MUSIC_TRACK = 11;
+
+function musicAsset(file: string) {
+  return `assets/music/${basename(file)}`;
+}
+
+/** The music bed, one `<audio>` per pass through its file, each fading, carved and ducked under the Voiceover. */
+function bedTracks(bed: PlannedBed | undefined): string[] {
+  if (!bed) {
+    return [];
+  }
+
+  const chain = optionalAttribute("data-fx-chain", bed.chain && JSON.stringify(bed.chain));
+
+  return bed.passes.map(({ start, duration, fadeIn, fadeOut, automation }, index) => {
+    const lane = optionalAttribute("data-automation", automation);
+
+    return `<audio id="music-bed-${index}" src="${musicAsset(bed.file)}" data-start="${start}" data-duration="${duration}" data-track-index="${MUSIC_TRACK + (index % 2)}" data-volume="${bed.volume}" data-fade-in="${fadeIn}" data-fade-out="${fadeOut}"${chain}${lane}></audio>`;
+  });
+}
+
+/** ` name='value'`, single-quoted for JSON values, or nothing without a value. */
+function optionalAttribute(name: string, value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  return ` ${name}='${value}'`;
+}
+
+/** Sound effects take a track each from here; Scenes use 1 and 2, the Voiceover 10. */
+const SFX_TRACK = 20;
+
+/** Where the page plays a sound effect from: named after its file, a bundled slug or a user Asset's sha256. */
+function sfxAsset(file: string) {
+  return `assets/sfx/${basename(file)}`;
+}
+
+/** The sound effects, each on its own track in the `sfx` group; the Assembler is the only one that writes `<audio>`. */
+function sfxTracks(sfx: PlannedSound[]): string[] {
+  if (sfx.length === 0) {
+    return [];
+  }
+
+  return [
+    `<hf-audio-group id="sfx" data-volume="1"></hf-audio-group>`,
+    ...sfx.map(
+      ({ file, start, duration, volume }, index) =>
+        `<audio id="sfx-${index}" data-audio-group="sfx" src="${sfxAsset(file)}" data-start="${start}" data-duration="${duration}" data-track-index="${SFX_TRACK + index}" data-volume="${volume}"></audio>`,
+    ),
+  ];
+}
+
+/** The indexed Assets the Storyboard's Scenes show; Scene code may show only these. */
+function shownAssets(storyboard: Storyboard, assets: IndexedAsset[]): IndexedAsset[] {
+  const ids = new Set(storyboard.scenes.flatMap((scene) => assetsOf(scene).map(({ id }) => id)));
+
+  return assets.filter(({ id }) => ids.has(id));
 }
 
 /** Where the page plays the Voiceover from, when it has one. */
@@ -102,8 +194,8 @@ async function writeAsset(dir: string, { path, from, content }: PageAsset) {
   await writeFile(target, content ?? "");
 }
 
-/** A Voiceover can run to hundreds of MB: a hard link costs nothing, a copy only where links can't reach. */
-async function placeVoiceover(from: string, to: string) {
+/** A Voiceover, Asset or sound can run to hundreds of MB: a hard link costs nothing, a copy only where links can't reach. */
+async function placeFile(from: string, to: string) {
   await mkdir(dirname(to), { recursive: true });
 
   try {
@@ -119,6 +211,8 @@ type RootOptions = {
   duration: number;
   units: Unit[];
   audio?: string;
+  sfx: PlannedSound[];
+  bed?: PlannedBed;
   /** What the frame puts in the head, before the root composition and at its end. */
   page: { head: string; defs: string; overlay: string };
   /** The Captions layer, when Captions are on. */
@@ -126,7 +220,7 @@ type RootOptions = {
   background: string;
 };
 
-function rootHtml({ width, height, duration, units, audio, page, captions, background }: RootOptions): string {
+function rootHtml({ width, height, duration, units, audio, sfx, bed, page, captions, background }: RootOptions): string {
   const clips = units.map(
     (unit, index) =>
       `<div id="el-${unit.id}" class="scene" data-composition-id="${unit.id}" data-composition-src="compositions/${unit.id}.html" data-start="${unit.start}" data-duration="${unit.duration}" data-track-index="${1 + (index % 2)}"></div>`,
@@ -150,7 +244,7 @@ ${captions?.css ?? ""}
 <body>
 ${page.defs}
 <div id="root" data-composition-id="main" data-start="0" data-duration="${duration}" data-width="${width}" data-height="${height}">
-${[...clips, ...voiceover, captions?.html, page.overlay].filter(Boolean).join("\n")}
+${[...clips, ...voiceover, ...bedTracks(bed), ...sfxTracks(sfx), captions?.html, page.overlay].filter(Boolean).join("\n")}
 </div>
 <script>
 (function () {

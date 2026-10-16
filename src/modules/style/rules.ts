@@ -1,11 +1,14 @@
-import type { Format, Motion, StoryboardRules, StylePreset } from "../../contract";
+import type { Format, IndexedAsset, Motion, StoryboardRules, StylePreset } from "../../contract";
 
 /** The video a Storyboard is planned for: its Format, and whether Captions are on. */
 export type VideoOptions = { format: Format; captions: boolean };
 
-/** What the Storyboard validator checks a Storyboard against: the video's Format and Captions, and the Preset's Transitions and Canvas preference. */
-export function storyboardRules({ transitions, canvas }: Pick<StylePreset, "transitions" | "canvas">, { format, captions }: VideoOptions): StoryboardRules {
-  return { format, captions, transitions: [...transitions], canvas };
+/**
+ * What the Storyboard validator checks a Storyboard against: the video's Format and Captions, the Preset's Transitions
+ * and Canvas preference, and the Project's Asset index.
+ */
+export function storyboardRules({ transitions, canvas }: Pick<StylePreset, "transitions" | "canvas">, { format, captions }: VideoOptions, assets?: IndexedAsset[]): StoryboardRules {
+  return { format, captions, transitions: [...transitions], canvas, ...(assets && { assets }) };
 }
 
 /** Scene lengths in seconds: the Format's hard range, which the validator enforces, and the narrower range Motion energy aims for. */

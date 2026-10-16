@@ -9,7 +9,7 @@ import type { ExportStatus, UnitCode, VideoRef, VideoSource } from "../contract"
 import storyboard from "./fixtures/checker/storyboard.json";
 import { createCore } from "./composition-root";
 import transcript from "./fixtures/checker/transcript.json";
-import { ffprobePath } from "./native";
+import { ffmpegPath, ffprobePath } from "./native";
 import { BLUEPRINT, connect, RULES } from "./test-support/checker";
 import { silentWav } from "./test-support/voiceover";
 
@@ -88,6 +88,13 @@ async function probe(file: string): Promise<Probe> {
   return JSON.parse(stdout) as Probe;
 }
 
+/** The loudest sample of a file's audio, in dB. */
+async function peakDb(file: string): Promise<number> {
+  const { stderr } = await promisify(execFile)(ffmpegPath(), ["-hide_banner", "-nostats", "-i", file, "-af", "volumedetect", "-f", "null", "-"]);
+
+  return Number(/max_volume:\s*(-?[\d.]+) dB/.exec(stderr)?.[1]);
+}
+
 async function exists(path: string): Promise<boolean> {
   return stat(path).then(
     () => true,
@@ -152,6 +159,21 @@ describe("Export MP4", () => {
       expect(running).toEqual([1, 0]);
     });
   });
+
+  it(
+    "plays the Transition sounds the preview plays",
+    async () => {
+      const client = connect({ appDataDir: await mkdtemp(join(workDir, "app-data-")) });
+      const crossfade = { ...storyboard, scenes: [{ ...storyboard.scenes[0]!, transition: { type: "crossfade" } }, ...storyboard.scenes.slice(1)] };
+      const { id: previewId } = await client.preview.open({ ...(await source()), storyboard: crossfade });
+      const target = join(workDir, "With sound.mp4");
+
+      expect((await collect(await client.export.mp4({ previewId, path: target, video: UNOPENED }))).at(-1)).toEqual({ state: "done", path: target });
+      // The Voiceover is digital silence, so anything heard is the crossfade's soft click, leveled far down against it.
+      expect(await peakDb(target)).toBeGreaterThan(-80);
+    },
+    EXPORT_TIMEOUT_MS,
+  );
 
   it(
     "stops when the creator cancels, leaving no file behind and the last path as it was",

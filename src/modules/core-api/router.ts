@@ -1,5 +1,6 @@
 import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
+import type { Assets, AssetsError } from "../assets";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
 import type { GenerateError, Generation, OpenVideoError, RegenerateError, RetryError, StyleChangeError } from "../generation";
@@ -8,7 +9,7 @@ import type { Projects, ProjectsError } from "../projects";
 import type { ConnectionStatus, Connector, Result, SetupError } from "../connector";
 import type { Exporter } from "../exporter";
 import type { Previews, StillError, Stills, ThumbnailsError } from "../preview";
-import type { ReviseError, Revisions } from "../revision";
+import type { ReviseError, Revisions, SwapError } from "../revision";
 import { validateStoryboard } from "../storyboard";
 import { BUNDLED_PALETTES, bundledFonts, checkContrast, FONT_PAIRINGS, presetSample, type PresetStore, type PresetStoreError } from "../style";
 import type { SettingsError, SettingsStore } from "../settings";
@@ -36,6 +37,7 @@ export type CoreRouterDeps = {
   usage: Usage;
   settings: SettingsStore;
   history: History;
+  assets: Assets;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -61,6 +63,7 @@ export function createCoreRouter({
   usage,
   settings,
   history,
+  assets,
 }: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
@@ -233,6 +236,9 @@ export function createCoreRouter({
       revise: api.video.revise.handler(async ({ input: { projectId, format, ...request } }) => {
         dataOrThrow(await revisions.start({ projectId, format }, request));
       }),
+      swapAsset: api.video.swapAsset.handler(async ({ input: { projectId, format, ...request } }) => {
+        dataOrThrow(await revisions.swapAsset({ projectId, format }, request));
+      }),
       revision: api.video.revision.handler(async ({ input, signal }) => dataOrThrow(await revisions.watch(input, signal))),
       approveRevision: api.video.approveRevision.handler(async ({ input }) => {
         await history.approve(input);
@@ -266,6 +272,18 @@ export function createCoreRouter({
       status: api.cache.status.handler(() => cache.status()),
       clear: api.cache.clear.handler(() => cache.clear()),
     },
+    assets: {
+      list: api.assets.list.handler(async ({ input }) => dataOrThrow(await assets.list(input, input))),
+      import: api.assets.import.handler(async ({ input }) => dataOrThrow(await assets.import(input, input))),
+      update: api.assets.update.handler(async ({ input }) => dataOrThrow(await assets.update(input, input.id, input))),
+      remove: api.assets.remove.handler(async ({ input }) => {
+        dataOrThrow(await assets.remove(input, input.id));
+      }),
+      addToLibrary: api.assets.addToLibrary.handler(async ({ input: { projectId, id } }) => dataOrThrow(await assets.addToLibrary(projectId, id))),
+      url: api.assets.url.handler(async ({ input }) => previews.fileUrl(dataOrThrow(await assets.file(input, input.id)))),
+      libraryFolder: api.assets.libraryFolder.handler(async () => dataOrThrow(await assets.libraryFolder())),
+      bundledCheck: api.assets.bundledCheck.handler(async ({ input: { projectId } }) => dataOrThrow(await assets.bundledCheck(projectId))),
+    },
   });
 }
 
@@ -283,7 +301,7 @@ type CodedResult =
   | { data: unknown; error: null }
   | {
       data: null;
-      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | UsageError | SettingsError | HistoryError;
+      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | SwapError | UsageError | SettingsError | HistoryError | AssetsError;
     };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */

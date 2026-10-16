@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import deps from "../../deps.json";
+import { createAssets } from "../modules/assets";
 import { createCache, DEFAULT_CACHE_CAP_BYTES } from "../modules/cache";
 import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
@@ -20,7 +21,7 @@ import { createTranscriptionModel } from "../modules/transcription-model";
 import { createUsage } from "../modules/usage";
 import { ModelDepSchema, type ModelDep } from "../shared/deps-manifest";
 import { bundledClaudePath } from "./claude-binary";
-import { chromeHeadlessShellPath, ffmpegPath as pinnedFfmpegPath, ffprobePath as pinnedFfprobePath, whisperCliPath, whisperVadModelPath } from "./native";
+import { bundledAssetsDir, chromeHeadlessShellPath, ffmpegPath as pinnedFfmpegPath, ffprobePath as pinnedFfprobePath, whisperCliPath, whisperVadModelPath } from "./native";
 import { sampleProject } from "./sample-project";
 
 /**
@@ -102,10 +103,12 @@ export function createCore({
   const media = createMedia({ ffmpegPath, ffprobePath });
   // Assembled pages keep themselves to the newest few and export renders delete themselves, so the cache's per-file LRU leaves both alone.
   const cache = createCache({ dir: cacheDir, capBytes: cacheCapBytes, unmanaged: [PREVIEW_DIR, EXPORT_DIR] });
-  const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath });
+  const previews = createPreviews({ rootDir: join(cacheDir, PREVIEW_DIR), chromePath, planSound: (source, storyboard) => assets.soundPlan({ ...source, storyboard }) });
   const stills = createStills({ cache, chromePath });
   const transcriber = createWhisperTranscriber({ engine: whisper, media, cache, model: transcriptionModel });
-  const projects = createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash });
+  // Assets work in Project folders, and every Version save copies the Library Assets it uses into its Project.
+  const projects = createProjects({ projectsDir, appDataDir, appVersion, media, transcriber, clock, trash, beforeVersionSave: (dir, version) => assets.beforeVersionSave(dir, version) });
+  const assets = createAssets({ media, projects, libraryDir: join(appDataDir, "Library"), bundledDir: bundledAssetsDir() });
   const presets = createPresetStore({ dir: join(appDataDir, "Style Presets") });
   const exporter = createExporter({
     workDir: join(cacheDir, EXPORT_DIR),
@@ -118,13 +121,13 @@ export function createCore({
   const settings = createSettings({ appDataDir });
   const usage = createUsage({ connector, settings, projects, clock, appDataDir });
   const models = async () => (await settings.get()).models;
-  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
-  const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
+  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models, assets });
+  const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models, assets });
   const history = createHistory({ projects, revisions, generation, clock });
   const sample = sampleIn(sampleDir);
 
   return {
-    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, usage, settings, history }),
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, usage, settings, history, assets }),
     /** A window's connection closed: its Project is closed and unlocked. */
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */

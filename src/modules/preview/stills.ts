@@ -99,7 +99,7 @@ export function createStills({ cache, chromePath }: StillsOptions) {
 
     try {
       await mkdir(dir, { recursive: true });
-      const { width, height } = await assemble({ dir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code });
+      const { width, height } = await assemble({ dir, storyboard, transcript: source.transcript, preset: source.preset, code: source.code, assets: source.rules.assets });
       const { data: frame, error: frameError } = await openFramePage({ dir, chromePath, width, height, scale: stillWidth / width });
 
       if (frameError) {

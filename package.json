@@ -28,6 +28,7 @@
     "deps:fetch": "node scripts/deps/postinstall.ts",
     "deps:pin": "node scripts/deps/pin.ts",
     "eval": "node scripts/eval.ts",
+    "assets:bundled": "node scripts/assets/bundled-set.ts",
     "package": "electron-vite build && node scripts/release/licenses.ts && electron-builder --publish never",
     "package:smoke": "node scripts/release/smoke.ts"
   },
@@ -40,6 +41,7 @@
     "@fontsource/manrope": "5.3.0",
     "@fontsource/nunito": "5.3.0",
     "@fontsource/vt323": "5.3.0",
+    "@hyperframes/core": "0.8.113",
     "@hyperframes/producer": "0.8.113",
     "@orpc/client": "1.15.4",
     "@orpc/contract": "1.15.4",

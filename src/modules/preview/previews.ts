@@ -2,10 +2,10 @@ import { createHash } from "node:crypto";
 import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Preview, SceneThumbnail, StoryboardIssue, VideoSource, VideoTimeline } from "../../contract";
-import { assemble, planUnits, type AssembledPage } from "../assembler";
+import { assemble, planUnits, type AssembledPage, type SoundPlan } from "../assembler";
 import { openFramePage, type FramePage, type FramePageError } from "../checker";
 import { FRAME_CONTRACT_VERSION } from "../frame";
-import { validateStoryboard } from "../storyboard";
+import { validateStoryboard, type Storyboard } from "../storyboard";
 import { startPreviewServer, type PreviewServer } from "./server";
 import { timelineOf } from "./timeline";
 
@@ -14,7 +14,12 @@ export type PreviewsOptions = {
   rootDir: string;
   /** The pinned chrome-headless-shell, for thumbnails. */
   chromePath: string;
+  /** The sound a video plays besides its Voiceover, from its Style Preset; none when absent. */
+  planSound?: (source: VideoSource, storyboard: Storyboard) => Promise<SoundPlan | undefined>;
 };
+
+/** A video's source with the sound planned for it, so an export plays what the preview played. */
+export type PlannedSource = VideoSource & { sound?: SoundPlan };
 
 export type PreviewError =
   | { code: "INVALID_STORYBOARD"; issues: StoryboardIssue[] }
@@ -57,13 +62,13 @@ const THUMBNAIL_SIZE = 180;
 /** A thumbnail shows its Scene just before it ends, with every element in. */
 const THUMBNAIL_BEFORE_END = 0.15;
 
-type OpenPage = { dir: string; page: AssembledPage; timeline: VideoTimeline; source: VideoSource };
+type OpenPage = { dir: string; page: AssembledPage; timeline: VideoTimeline; source: PlannedSource };
 
 /**
  * Previews of videos: each is assembled into its own folder, named by a hash of its source so the
  * same source always builds the same page, and served on this computer for the player.
  */
-export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
+export function createPreviews({ rootDir, chromePath, planSound }: PreviewsOptions) {
   const pages = new Map<string, OpenPage>();
   const building = new Map<string, Promise<OpenPage>>();
   let server: Promise<PreviewServer> | undefined;
@@ -88,7 +93,8 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
       return { data: null, error: { code: "VOICEOVER_MISSING", path: source.voiceover } };
     }
 
-    const id = pageId({ ...source, storyboard }, voiceover && { size: voiceover.size, modified: voiceover.mtimeMs });
+    const planned: PlannedSource = { ...source, sound: await planSound?.(source, storyboard) };
+    const id = pageId({ ...planned, storyboard }, voiceover && { size: voiceover.size, modified: voiceover.mtimeMs });
     const page = await build(id, async (dir) => {
       const assembled = await assemble({
         dir,
@@ -98,9 +104,11 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
         code: source.code,
         voiceover: source.voiceover,
         captions: source.captions ?? source.rules.captions,
+        assets: source.rules.assets,
+        sound: planned.sound,
       });
 
-      return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source };
+      return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source: planned };
     });
     const { origin } = await (server ??= startPreviewServer(rootDir));
     // Units still being generated and review notes don't change the page, only how the timeline shows them.
@@ -211,19 +219,24 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
   }
 
   /** What an open page was assembled from, so an export builds the same video; `undefined` if it isn't open. */
-  function source(id: string): VideoSource | undefined {
+  function source(id: string): PlannedSource | undefined {
     return pages.get(id)?.source;
+  }
+
+  /** Serves a file beside the previews, such as an Asset to audition, and answers its URL. */
+  async function fileUrl(file: string) {
+    return (await (server ??= startPreviewServer(rootDir))).share(file);
   }
 
   async function close() {
     await (await server)?.close();
   }
 
-  return { open, thumbnails, source, close };
+  return { open, thumbnails, source, fileUrl, close };
 }
 
-/** Same source, same id: the Storyboard, Transcript, Style Preset, Captions, code and Voiceover, and the frame they are built in. */
-function pageId(source: VideoSource, voiceover: { size: number; modified: number } | undefined): string {
+/** Same source, same id: the Storyboard, Transcript, Style Preset, Captions, code, Voiceover and sound plan, and the frame they are built in. */
+function pageId(source: PlannedSource, voiceover: { size: number; modified: number } | undefined): string {
   const code = Object.fromEntries(Object.entries(source.code).sort(([a], [b]) => a.localeCompare(b)));
   const key = JSON.stringify({
     frame: FRAME_CONTRACT_VERSION,
@@ -233,6 +246,7 @@ function pageId(source: VideoSource, voiceover: { size: number; modified: number
     captions: source.captions ?? source.rules.captions,
     code,
     voiceover: source.voiceover && { path: source.voiceover, ...voiceover },
+    sound: source.sound,
   });
 
   return createHash("sha256").update(key).digest("hex").slice(0, 16);

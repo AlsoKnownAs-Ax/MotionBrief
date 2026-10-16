@@ -29,14 +29,22 @@ const anchor = wordIndex.describe("index of the Transcript word this element app
 
 const text = (max: number) => z.string().trim().min(1).max(max);
 
-/** The frame inlines icons from two bundled sets whose names overlap, so the set is part of the name. */
+/** An Asset by id: a user Asset's sha256, or a bundled one's `bundled:<slug>`. */
+const ASSET_ID = "(?:bundled:[a-z0-9-]+|[0-9a-f]{64})";
+
+/** The frame inlines icons from two bundled sets whose names overlap, so the set is part of the name; a logo Asset is `asset:<id>`. */
 const icon = z
   .string()
-  .regex(/^(lucide|brand):[a-z0-9-]+$/, 'use "lucide:<name>" or "brand:<simple-icons slug>"')
-  .describe('"lucide:<name>" (lucide:server) or "brand:<simple-icons slug>" (brand:cloudflare)');
+  .regex(new RegExp(`^(?:(?:lucide|brand):[a-z0-9-]+|asset:${ASSET_ID})$`), 'use "lucide:<name>", "brand:<simple-icons slug>" or "asset:<logo id>"')
+  .describe('"lucide:<name>" (lucide:server), "brand:<simple-icons slug>" (brand:cloudflare), or "asset:<id>" for a logo from the Asset index');
 
 /** One piece of on-screen copy that appears on a word. */
 const element = (max: number) => z.strictObject({ id: elementId, text: text(max), at: anchor });
+
+/** An image or logo from the Asset index, shown on a word. */
+const media = z
+  .strictObject({ id: elementId, asset: z.string().regex(new RegExp(`^${ASSET_ID}$`), "use an image or logo id from the Asset index"), at: anchor })
+  .describe("an image or logo from the Asset index");
 
 const edge = z.strictObject({ id: elementId, from: elementId, to: elementId, label: text(24).optional(), at: anchor });
 
@@ -44,12 +52,14 @@ const hook = z.strictObject({
   headline: element(60),
   kicker: element(60).optional(),
   source: element(80).optional().describe("optional quoted source card"),
+  media: media.optional(),
 });
 
 const keyTerm = z.strictObject({
   term: element(40),
   definition: element(90).optional(),
   related: z.array(element(30)).max(3).optional(),
+  media: media.optional(),
 });
 
 const architectureDiagram = z.strictObject({
@@ -91,7 +101,7 @@ const code = z.strictObject({
     .max(4),
 });
 
-const comparisonSide = z.strictObject({ id: elementId, title: text(24), at: anchor, items: z.array(element(40)).max(4) });
+const comparisonSide = z.strictObject({ id: elementId, title: text(24), at: anchor, items: z.array(element(40)).max(4), media: media.optional() });
 
 const comparison = z.strictObject({ left: comparisonSide, right: comparisonSide, verdict: element(50).optional() });
 
@@ -119,7 +129,7 @@ const statChart = z.strictObject({
   caption: element(60).optional(),
 });
 
-const outro = z.strictObject({ headline: element(50), cta: element(40).optional() });
+const outro = z.strictObject({ headline: element(50), cta: element(40).optional(), media: media.optional() });
 
 /** A carry-over names the element it morphs, so the Assembler never has to choose one. */
 const TransitionSchema = z.discriminatedUnion("type", [
@@ -138,6 +148,10 @@ const sceneBase = {
   transition: TransitionSchema.optional().describe(
     'the Transition into the next Scene; every Scene but the last has one; "camera" only between Scenes on the same Canvas',
   ),
+  sounds: z
+    .array(z.strictObject({ asset: z.string().describe("a sound effect id from the Asset index"), at: wordIndex.describe("index of the Transcript word it plays on") }))
+    .optional()
+    .describe("sparse sound effects on meaningful words, such as an impact as a number lands"),
 };
 
 /** The 9 Scene Types, each with its own content shape. There is no "custom" type: gaps are fixed by adding a Scene Type. */

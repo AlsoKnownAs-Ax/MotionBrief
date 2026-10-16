@@ -211,7 +211,7 @@ export async function writeUnitCode({ checker, storyboard, transcript, rules, pr
   }
 
   const outcome = await withSession(run, options, async (session): Promise<Result<UnitOutcome, never>> => {
-    let message = [unitMessage({ storyboard, preset, unit, transcript }), request].filter(Boolean).join("\n\n");
+    let message = [unitMessage({ storyboard, preset, unit, transcript, assets: rules.assets }), request].filter(Boolean).join("\n\n");
     let reason = "";
 
     for (let attempt = 0; attempt <= RETRIES; attempt++) {

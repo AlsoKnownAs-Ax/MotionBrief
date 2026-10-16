@@ -1,5 +1,6 @@
 export { validateStoryboard, type StoryboardResult } from "./validate";
-export { copyOf, elementsOf, type SceneCopy, type SceneElement } from "./content";
+export { assetsOf, copyOf, elementsOf, withAssets, type SceneAsset, type SceneCopy, type SceneElement } from "./content";
 export { SCENE_LEAD_SECONDS, sceneTimings, type SceneTiming } from "./timing";
-export { transitionTypesFor } from "./checks";
+export { isPlaceableSound, transitionTypesFor } from "./checks";
+export { placedSounds, sfxCapsText, type PlacedSound } from "./sounds";
 export { StoryboardSchema, type Scene, type SceneType, type Storyboard, type Transition, type TransitionType } from "./schema";

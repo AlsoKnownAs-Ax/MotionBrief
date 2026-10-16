@@ -1,6 +1,7 @@
-import type { Format, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
-import { copyOf, elementsOf } from "./content";
+import type { AssetKind, Format, IndexedAsset, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
+import { assetsOf, copyOf, elementsOf, type SceneAsset } from "./content";
 import type { Scene, SceneType, Storyboard, Transition, TransitionType } from "./schema";
+import { placedSounds, sfxCapsText } from "./sounds";
 import { sceneTimings } from "./timing";
 
 /** What every check sees: a Storyboard that already fits the schema, and what it is checked against. */
@@ -449,6 +450,94 @@ function checkCaptions({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   );
 }
 
+/** The Asset kinds each place in a Scene shows. */
+const ASSET_SLOTS: Record<SceneAsset["slot"], { kinds: AssetKind[]; says: string }> = {
+  icon: { kinds: ["logo"], says: "An icon slot shows only a logo; put an image in a Scene's media" },
+  media: { kinds: ["image", "logo"], says: "Media shows only an image or a logo" },
+};
+
+const ASSET_KIND_NAMES = { sfx: "a sfx", music: "a music", image: "an image", logo: "a logo" } satisfies Record<AssetKind, string>;
+
+/** Every Asset a Scene names is in the Asset index, and of a kind its place shows. */
+function checkAssets({ storyboard, rules }: CheckInput): StoryboardIssue[] {
+  const index = new Map((rules.assets ?? []).map((asset) => [asset.id, asset]));
+
+  return storyboard.scenes.flatMap((scene) =>
+    issuesFor(
+      scene.id,
+      assetsOf(scene).flatMap(({ id, slot, field }) => {
+        const kind = index.get(id)?.kind;
+
+        return [
+          {
+            broken: kind === undefined,
+            code: "ASSET",
+            field,
+            message: `There is no Asset "${id}"; use an id from the Asset index.`,
+          },
+          {
+            broken: kind !== undefined && !ASSET_SLOTS[slot].kinds.includes(kind),
+            code: "ASSET",
+            field,
+            message: `"${id}" is ${kind && ASSET_KIND_NAMES[kind]}. ${ASSET_SLOTS[slot].says}.`,
+          },
+        ] satisfies SceneRule[];
+      }),
+    ),
+  );
+}
+
+/**
+ * Whether the agent may place an Asset as a sound: an impact or sting, never a Transition sound or music. A sound
+ * effect the creator imported has no role and is an impact: the Preset's Transition sounds are picked, not placed.
+ */
+export function isPlaceableSound(asset: IndexedAsset): boolean {
+  return asset.kind === "sfx" && asset.role !== "transition";
+}
+
+/**
+ * Every sound a Scene places is an agent-placeable sound effect, on a word of the Scene, and, for the agent writing
+ * the Storyboard, within the density's caps.
+ */
+function checkSounds({ storyboard, transcript, rules }: CheckInput): StoryboardIssue[] {
+  const index = new Map((rules.assets ?? []).map((asset) => [asset.id, asset]));
+  const scenes = new Map(storyboard.scenes.map((scene) => [scene.id, scene]));
+
+  return placedSounds(storyboard, transcript.duration, rules.sfx ?? "lively").flatMap(({ sceneId, index: position, asset: id, at, fits }) => {
+    const scene = scenes.get(sceneId)!;
+    const asset = index.get(id);
+
+    return issuesFor(sceneId, [
+      {
+        broken: !asset || !isPlaceableSound(asset),
+        code: "SOUND",
+        field: `sounds[${position}].asset`,
+        message: `"${id}" isn't a sound effect you may place; use an id from the sound effects in the Asset index.`,
+      },
+      {
+        broken: at < scene.from || at > scene.to,
+        code: "SOUND",
+        field: `sounds[${position}].at`,
+        message: `Word ${at} is outside the Scene (words ${scene.from}-${scene.to}); a sound plays on a word of its own Scene.`,
+      },
+      {
+        broken: rules.sfx !== undefined && !fits && (rules.cappedScenes?.includes(sceneId) ?? true),
+        code: "SOUND",
+        field: `sounds[${position}]`,
+        message: soundCapMessage(rules.sfx),
+      },
+    ]);
+  });
+}
+
+function soundCapMessage(sfx: CheckInput["rules"]["sfx"]): string {
+  if (sfx === "subtle" || sfx === "lively") {
+    return `Too many sound effects: ${sfx} allows ${sfxCapsText(sfx)}. Keep only the ones on the moments that matter most.`;
+  }
+
+  return "Sound effects are off for this video; place no sounds.";
+}
+
 /** The rules a Storyboard must meet beyond its schema, in the order their issues are reported. */
 export const CHECKS: Check[] = [
   checkFormat,
@@ -461,4 +550,6 @@ export const CHECKS: Check[] = [
   checkTransitions,
   checkCanvases,
   checkCaptions,
+  checkAssets,
+  checkSounds,
 ];

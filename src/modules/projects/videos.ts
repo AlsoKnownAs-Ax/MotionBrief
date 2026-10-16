@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { StylePresetSchema, UnitCodeSchema, VersionOriginSchema, type Format, type UnitCode, type VersionSummary } from "../../contract";
+import { FormatSchema, StylePresetSchema, UnitCodeSchema, VersionOriginSchema, type Format, type UnitCode, type VersionSummary } from "../../contract";
 import { fileStep, writeAtomically, type FileError, type Result } from "./files";
 
 /**
@@ -46,6 +46,8 @@ const VideoContentSchema = z.object({
   models: z.record(z.string(), z.string()),
   /** The frame contract the units were written against. */
   frameContractVersion: z.string(),
+  /** The bundled Asset set the app that saved it shipped; absent in Versions saved before Assets, which read as set 1. */
+  bundledSet: z.number().int().positive().optional(),
 });
 
 /** What the creator asked of a Revision and what it did; the next Revision's agent reads these as the video's history. */
@@ -138,8 +140,20 @@ export async function saveGeneration(dir: string, format: Format, record: Genera
   return { data: null, error: null };
 }
 
+/**
+ * Runs in the Project folder before every Version is saved and answers the Version to save, so the Project holds
+ * whatever it uses (ADR 0004): the Assets module copies used Library Assets in and records the bundled set.
+ */
+export type BeforeVersionSave = <T extends VideoContent>(dir: string, version: T) => Promise<Result<T, FileError>>;
+
 /** Saves the next Version of the video, which ends any generation in progress. */
-export async function saveVersion(dir: string, format: Format, version: Omit<Version, "version">): Promise<Result<number, FileError>> {
+export async function saveVersion(dir: string, format: Format, content: Omit<Version, "version">, beforeSave: BeforeVersionSave): Promise<Result<number, FileError>> {
+  const { data: version, error: hookError } = await beforeSave(dir, content);
+
+  if (hookError) {
+    return { data: null, error: hookError };
+  }
+
   const number = ((await latestVersion(dir, format)) ?? 0) + 1;
   const path = join(dir, format, VERSIONS_DIR, `${number}.json`);
   const { error } = await fileStep(path, () => mkdir(join(dir, format, VERSIONS_DIR), { recursive: true }));
@@ -169,7 +183,7 @@ export async function saveVersion(dir: string, format: Format, version: Omit<Ver
  * fallbacks, and the whole is saved as the next Version. A run whose Version was saved before the crash is only
  * cleaned up. Resolves to the new Version's number; none without one.
  */
-export async function recoverGeneration(dir: string, format: Format, createdAt: string): Promise<Result<number | undefined, FileError>> {
+export async function recoverGeneration(dir: string, format: Format, createdAt: string, beforeSave: BeforeVersionSave): Promise<Result<number | undefined, FileError>> {
   const path = join(dir, format, GENERATION_FILE);
   const { data: text } = await fileStep(path, () => readFile(path, "utf8"));
 
@@ -205,7 +219,7 @@ export async function recoverGeneration(dir: string, format: Format, createdAt: 
       .map((unit) => ({ unit, kind: "fallback" as const, reason: RECOVERED_REASON })),
   ].sort((a, b) => order(a.unit) - order(b.unit));
 
-  return saveVersion(dir, format, { ...content, flags, origin, runId, createdAt });
+  return saveVersion(dir, format, { ...content, flags, origin, runId, createdAt }, beforeSave);
 }
 
 /** The run that saved the video's newest Version, if it says. */
@@ -282,7 +296,7 @@ function summaryOf({ version, origin, createdAt, revision, restoredFrom, style, 
  * Saves a copy of an earlier Version as the newest, so restoring loses nothing. Its units are the same files, shared
  * by hash; only the manifest is new. Resolves to the new Version's number.
  */
-export async function restoreVersion(dir: string, format: Format, number: number, createdAt: string): Promise<Result<number, VersionError>> {
+export async function restoreVersion(dir: string, format: Format, number: number, createdAt: string, beforeSave: BeforeVersionSave): Promise<Result<number, VersionError>> {
   const { data: version, error } = await readDocument(join(dir, format, VERSIONS_DIR, `${number}.json`), VersionSchema);
 
   if (error) {
@@ -291,7 +305,26 @@ export async function restoreVersion(dir: string, format: Format, number: number
 
   const content = VideoContentSchema.parse(version);
 
-  return saveVersion(dir, format, { ...content, origin: "restore", restoredFrom: number, createdAt });
+  return saveVersion(dir, format, { ...content, origin: "restore", restoredFrom: number, createdAt }, beforeSave);
+}
+
+/** Every saved Version of every Format's video in the Project folder. */
+export async function savedVersions(dir: string): Promise<Result<Version[], VersionError>> {
+  const versions: Version[] = [];
+
+  for (const format of FormatSchema.options) {
+    for (const number of await versionNumbers(dir, format)) {
+      const { data: version, error } = await readDocument(join(dir, format, VERSIONS_DIR, `${number}.json`), VersionSchema);
+
+      if (error) {
+        return { data: null, error };
+      }
+
+      versions.push(version);
+    }
+  }
+
+  return { data: versions, error: null };
 }
 
 async function readDocument<T>(path: string, schema: z.ZodType<T>): Promise<Result<T, VersionError>> {

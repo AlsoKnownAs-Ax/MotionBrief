@@ -69,8 +69,27 @@ export async function openStoredVideo(project: Project): Promise<"opened" | "no-
   useGeneration.getState().follow(project, video, opened);
   useFrameUpdate.setState({ notice: noticeOf(video, opened.frameUpdate), retryError: undefined });
   useNavigation.getState().openEditor();
+  void askToUpdateForBundledSounds(project.id);
 
   return "opened";
+}
+
+/** A Project made with a newer bundled set plays without the sounds this app lacks; nothing is regenerated. */
+async function askToUpdateForBundledSounds(projectId: string) {
+  const { data: check } = await safe(core.assets.bundledCheck({ projectId }));
+  const count = check?.missing.length ?? 0;
+
+  if (count > 0) {
+    useToast.getState().show({ text: `This Project uses ${bundledSounds(count)} this version of MotionBrief doesn't have. Update MotionBrief to hear them.` });
+  }
+}
+
+function bundledSounds(count: number) {
+  if (count === 1) {
+    return "1 bundled sound";
+  }
+
+  return `${count} bundled sounds`;
 }
 
 function noticeOf(video: VideoRef, frameUpdate: FrameUpdate | undefined) {

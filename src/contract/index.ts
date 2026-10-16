@@ -102,6 +102,38 @@ export const MotionSchema = z.object({
 /** How Captions show the current word: highlighted, popping, or plain. */
 export const CaptionStyleSchema = z.enum(["highlight", "pop", "plain"]);
 
+/** The Transitions a Storyboard can name: a push has a direction, and a carry-over names the element it morphs. */
+export const TransitionTypeSchema = z.enum([
+  "cut",
+  "crossfade",
+  "push-left",
+  "push-right",
+  "push-up",
+  "push-down",
+  "zoom-through",
+  "carry-over",
+  "camera",
+]);
+
+/** How busy a video's sound effects are: none at all, or the agent places a few (subtle) or more (lively). */
+export const SfxDensitySchema = z.enum(["off", "subtle", "lively"]);
+
+/** No Asset: a Transition without a sound, or a video without a music bed. */
+export const NO_ASSET = "none";
+
+/** What a Style Preset sounds like. Levels are dB relative to the Voiceover's measured loudness. */
+export const PresetSoundSchema = z.object({
+  sfx: SfxDensitySchema,
+  /** The sound effect each Transition plays, by Asset id; one not named, or `none`, plays nothing. */
+  transitionSfx: z.partialRecord(TransitionTypeSchema, z.string()),
+  /** The music bed's Asset id, or `none`. */
+  music: z.string(),
+  /** The music bed before ducking. */
+  musicLevel: z.number().min(-40).max(0),
+  /** Offsets every sound effect's default level. */
+  sfxLevel: z.number().min(-24).max(12),
+});
+
 /** A Style Preset, the same in either Format. A video keeps a snapshot of the one it was generated with. */
 export const StylePresetSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]*$/, "use a kebab-case id"),
@@ -115,6 +147,8 @@ export const StylePresetSchema = z.object({
   transitions: z.array(PresetTransitionSchema).min(1),
   canvas: CanvasPreferenceSchema,
   captions: CaptionStyleSchema,
+  /** Optional, so Presets saved before videos had sound still read; without it a video plays only its Voiceover. */
+  sound: PresetSoundSchema.optional(),
 });
 
 /** A Style Preset as the app lists it: the bundled ones are read-only and are duplicated to edit. */
@@ -136,25 +170,21 @@ export const SceneTypeSchema = z.enum([
   "outro",
 ]);
 
-/** The Transitions a Storyboard can name: a push has a direction, and a carry-over names the element it morphs. */
-export const TransitionTypeSchema = z.enum([
-  "cut",
-  "crossfade",
-  "push-left",
-  "push-right",
-  "push-up",
-  "push-down",
-  "zoom-through",
-  "carry-over",
-  "camera",
-]);
-
-/** What a Storyboard is checked against: its video's Format and Captions, and the Style Preset's choices. */
+/** What a Storyboard is checked against: its video's Format and Captions, the Style Preset's choices and the Assets it may use. */
 export const StoryboardRulesSchema = z.object({
   format: FormatSchema,
   captions: z.boolean(),
   transitions: z.array(PresetTransitionSchema),
   canvas: CanvasPreferenceSchema,
+  /** The Asset index: every Asset a Storyboard may name, with its file for the page. Absent, it may name none. */
+  assets: z.array(z.lazy(() => IndexedAssetSchema)).optional(),
+  /**
+   * How many sound effects the agent may place, for the agent writing a Storyboard. Absent, the caps aren't checked:
+   * a saved Storyboard keeps sounds past a lowered density, and the sound plan drops them when it plays.
+   */
+  sfx: SfxDensitySchema.optional(),
+  /** The Scenes the caps hold in: a scoped Revision can't take sounds off the rest. Absent, every Scene. */
+  cappedScenes: z.array(z.string()).optional(),
 });
 
 /** The part of a Transcript a Storyboard is checked against. Word references are indexes into `words`. */
@@ -179,6 +209,10 @@ export const StoryboardIssueSchema = z.object({
     "CAPTIONS",
     /** A Revision's patch changes Scenes outside the ones the creator selected. */
     "SCOPE",
+    /** An Asset that isn't in the index, or of a kind that doesn't belong where it is placed. */
+    "ASSET",
+    /** A placed sound effect that isn't agent-placeable, sits outside its Scene, or goes past the density's caps. */
+    "SOUND",
   ]),
   /** The Scene at fault; absent when the issue is with the Storyboard as a whole. */
   sceneId: z.string().optional(),
@@ -195,9 +229,9 @@ export const CheckFindingSchema = z.object({
   unit: z.string().optional(),
   /**
    * `hyperframes lint`, `hyperframes check`, the anchor contract, the token lint, icon inlining, or
-   * the Checker's own rules (an icon or image over text, a texture overlay too opaque).
+   * the Checker's own rules (an icon or image over text, a texture overlay too opaque), or how Scene code shows Assets.
    */
-  source: z.enum(["lint", "check", "contract", "tokens", "icons", "rules"]),
+  source: z.enum(["lint", "check", "contract", "tokens", "icons", "rules", "assets"]),
   code: z.string(),
   message: z.string(),
   selector: z.string().optional(),
@@ -264,10 +298,16 @@ export const VideoTimelineSchema = z.object({
       note: z.string().optional(),
       /** The Transition from the Scene before into this one; the first Scene has none. */
       transitionIn: TransitionTypeSchema.optional(),
+      /** The images and logos the Scene shows, each by its place in the Scene (`video.swapAsset`); absent when none. */
+      assets: z.array(z.object({ field: z.string(), id: z.string() })).optional(),
     }),
   ),
   /** The Transcript's words, each until the next one starts. */
   words: z.array(z.object({ text: z.string(), start: z.number().nonnegative(), end: z.number().nonnegative() })),
+  /** The sound effects the page plays, in time order: from a Transition rule of the Style Preset, or placed by the agent. */
+  sounds: z.array(z.object({ start: z.number().nonnegative(), name: z.string(), source: z.enum(["transition", "agent"]) })),
+  /** The music bed under the whole video, with the seconds it fades in over and out over, or none. */
+  music: z.object({ name: z.string(), fadeIn: z.number().nonnegative(), fadeOut: z.number().nonnegative() }).nullable(),
 });
 
 /** An assembled video the player can load: `url` serves its root composition on this computer. */
@@ -842,6 +882,85 @@ const WORD_FIX_ERRORS = {
   FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
 };
 
+/** What an Asset is for: a sound effect, a music bed, an image or a logo. */
+export const AssetKindSchema = z.enum(["sfx", "music", "image", "logo"]);
+
+export const AudioFormatSchema = z.enum(["wav", "mp3", "m4a", "ogg", "opus", "flac"]);
+
+export const ImageFormatSchema = z.enum(["png", "jpeg", "webp", "svg"]);
+
+/** What the creator writes about an Asset; the agent reads the notes to decide where it goes. */
+const assetWritten = {
+  /** A user Asset's sha256, or a bundled one's `bundled:<slug>`. */
+  id: z.string(),
+  name: z.string(),
+  notes: z.string(),
+};
+
+/** What a bundled sound effect is for: a Transition, or an impact or sting the agent may place on a word. */
+export const SoundRoleSchema = z.enum(["transition", "impact"]);
+
+/** A sound effect or music bed, with the facts measured on import. */
+export const SoundAssetSchema = z.object({
+  ...assetWritten,
+  kind: z.enum(["sfx", "music"]),
+  /** Bundled sound effects only; one the creator imported is an impact. */
+  role: SoundRoleSchema.optional(),
+  format: AudioFormatSchema,
+  /** Seconds. */
+  duration: z.number(),
+  /** LUFS: integrated for music, the loudest padded 400 ms for a sound effect, so a short one never reads as silence. */
+  loudness: z.number(),
+});
+
+/** An image or logo, with the facts read on import. */
+export const ImageAssetSchema = z.object({
+  ...assetWritten,
+  kind: z.enum(["image", "logo"]),
+  format: ImageFormatSchema,
+  width: z.number(),
+  height: z.number(),
+  /** Some pixels are see-through, so a logo can sit bare on the Scene. */
+  transparent: z.boolean(),
+});
+
+export const AssetSchema = z.union([SoundAssetSchema, ImageAssetSchema]);
+
+/**
+ * An Asset in a video's Asset index: where its file is, and whether it is a Project Asset removed while a Version
+ * still uses it, which still plays but is hidden from the agent.
+ */
+export const IndexedAssetSchema = z.intersection(AssetSchema, z.object({ file: z.string(), removed: z.boolean().optional() }));
+
+/** A name and notes as the creator writes them; notes are required for images and logos. */
+const AssetNameSchema = z.string().trim().min(1);
+
+/** Why an Asset change was refused; UI copy maps the codes to messages. */
+const ASSET_ERRORS = {
+  UNKNOWN_PROJECT,
+  /** The file isn't one of the formats its kind accepts, or can't be read as one. */
+  UNSUPPORTED_FORMAT: { data: z.object({ path: z.string(), kind: AssetKindSchema, detail: z.string() }) },
+  /** An image over the size cap. */
+  ASSET_TOO_LARGE: { data: z.object({ path: z.string(), bytes: z.number(), maxBytes: z.number() }) },
+  /** A sound over the length cap. */
+  ASSET_TOO_LONG: { data: z.object({ path: z.string(), duration: z.number(), maxSeconds: z.number() }) },
+  /** Images and logos need notes saying what they show. */
+  NOTES_REQUIRED: { data: z.object({ kind: AssetKindSchema }) },
+  UNKNOWN_ASSET: { data: z.object({ id: z.string() }) },
+  FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+};
+
+/** Where Assets live: the open Project, the Library every Project shares, or the bundled set shipped with the app. */
+export const AssetScopeSchema = z.enum(["project", "library", "bundled"]);
+
+/** The fields of a call on the user's Assets, in the open Project or the Library; bundled Assets are read-only. */
+function inUserScope<T extends z.ZodRawShape>(shape: T) {
+  return z.discriminatedUnion("scope", [ProjectIdInput.extend({ scope: z.literal("project"), ...shape }), z.object({ scope: z.literal("library"), ...shape })]);
+}
+
+/** The bundled-set version a Project's Versions were saved with, against this app's, and the bundled slugs they use that it lacks. */
+export const BundledCheckSchema = z.object({ projectSet: z.number().int().positive(), appSet: z.number().int().positive(), missing: z.array(z.string()) });
+
 const ProjectPathInput = z.object({ path: z.string() });
 
 const LockedPathInput = ProjectPathInput.extend({
@@ -1202,6 +1321,33 @@ export const coreContract = {
         FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
       })
       .input(VideoRefSchema.extend(RevisionRequestSchema.shape)),
+    /**
+     * Swaps an image or logo in a Scene for another Asset, with no Revision agent. A swap for one of the same kind
+     * within about 15% aspect only re-renders; any other regenerates the unit, so it needs `confirmed`, which on an API
+     * key also approves its cost (ADR 0003). It starts and returns at once; progress streams through `revision`.
+     */
+    swapAsset: oc
+      .errors({
+        UNKNOWN_PROJECT,
+        NOT_GENERATED: { data: z.object({ projectId: z.string() }) },
+        REVISING: { data: z.object({ projectId: z.string() }) },
+        UNKNOWN_SCENE: { data: z.object({ sceneId: z.string() }) },
+        FILE_FAILED: { data: z.object({ path: z.string(), message: z.string() }) },
+        /** The Scene shows no Asset at `field`, or can't show this Asset there. */
+        INVALID_SWAP: { data: z.object({ message: z.string() }) },
+        /** The swap regenerates these Scenes: ask the creator, then swap again with `confirmed`; `costUsd` on an API key. */
+        SWAP_UNCONFIRMED: { data: z.object({ scenes: z.array(z.string()), costUsd: CostRangeSchema.optional() }) },
+      })
+      .input(
+        VideoRefSchema.extend({
+          sceneId: z.string(),
+          /** The Asset's place in the Scene, as the timeline lists it. */
+          field: z.string(),
+          asset: z.string(),
+          /** The creator confirmed the agent run, and on an API key its cost. */
+          confirmed: z.boolean().optional(),
+        }),
+      ),
     /** Streams the video's Revision now and after every change, until the window stops listening. */
     revision: oc.errors({ UNKNOWN_PROJECT }).input(VideoRefSchema).output(eventIterator(RevisionStatusSchema)),
     /** Lets a Revision waiting in `approval` regenerate its Scenes; no-op otherwise. */
@@ -1314,6 +1460,57 @@ export const coreContract = {
     /** Deletes everything in the cache that isn't in use right now. */
     clear: oc.output(CacheStatusSchema),
   },
+  assets: {
+    /** The Assets of one scope (the open Project's, the Library's or the bundled set), optionally of one kind, by name. */
+    list: oc
+      .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(
+        z.discriminatedUnion("scope", [
+          ProjectIdInput.extend({ scope: z.literal("project"), kind: AssetKindSchema.optional() }),
+          z.object({ scope: z.literal("library"), kind: AssetKindSchema.optional() }),
+          z.object({ scope: z.literal("bundled"), kind: AssetKindSchema.optional() }),
+        ]),
+      )
+      .output(z.array(AssetSchema)),
+    /**
+     * Copies a file into the open Project as a Project Asset, or into the Library; the original is never read again.
+     * Importing the same bytes again gives the same Asset, with what the creator wrote this time.
+     */
+    import: oc
+      .errors(ASSET_ERRORS)
+      .input(inUserScope({ path: z.string(), name: AssetNameSchema, kind: AssetKindSchema, notes: z.string() }))
+      .output(AssetSchema),
+    /** Renames an Asset or rewrites its notes; notes steer only later generations. */
+    update: oc
+      .errors(ASSET_ERRORS)
+      .input(inUserScope({ id: z.string(), name: AssetNameSchema.optional(), notes: z.string().optional() }))
+      .output(AssetSchema),
+    /**
+     * Removes an Asset. A Project Asset is hidden from listings and the agent, and its bytes go once no Version uses
+     * them; a Library Asset is deleted, and every Project keeps its own copy.
+     */
+    remove: oc.errors(ASSET_ERRORS).input(inUserScope({ id: z.string() })),
+    /** Add to Library: copies a Project Asset, with what the creator wrote, into the Library. */
+    addToLibrary: oc.errors(ASSET_ERRORS).input(ProjectIdInput.extend({ id: z.string() })).output(AssetSchema),
+    /** Where this computer serves an Asset's file, so the Library can audition a sound or show an image. */
+    url: oc
+      .errors({ UNKNOWN_PROJECT, UNKNOWN_ASSET: ASSET_ERRORS.UNKNOWN_ASSET, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(
+        z.discriminatedUnion("scope", [
+          ProjectIdInput.extend({ scope: z.literal("project"), id: z.string() }),
+          z.object({ scope: z.literal("library"), id: z.string() }),
+          z.object({ scope: z.literal("bundled"), id: z.string() }),
+        ]),
+      )
+      .output(z.string()),
+    /** The Library's folder, for Open Library folder; created if it doesn't exist yet. */
+    libraryFolder: oc.errors({ FILE_FAILED: PROJECT_ERRORS.FILE_FAILED }).output(z.string()),
+    /** Whether the open Project uses bundled sounds this app's set lacks, so the creator can be asked to update. */
+    bundledCheck: oc
+      .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(ProjectIdInput)
+      .output(BundledCheckSchema),
+  },
 };
 
 export type CoreContract = typeof coreContract;
@@ -1321,6 +1518,16 @@ export type CoreClient = ContractRouterClient<CoreContract>;
 export type CoreInfo = z.infer<typeof CoreInfoSchema>;
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
 export type Format = z.infer<typeof FormatSchema>;
+export type AssetKind = z.infer<typeof AssetKindSchema>;
+export type AudioFormat = z.infer<typeof AudioFormatSchema>;
+export type ImageFormat = z.infer<typeof ImageFormatSchema>;
+export type SoundAsset = z.infer<typeof SoundAssetSchema>;
+export type ImageAsset = z.infer<typeof ImageAssetSchema>;
+export type Asset = z.infer<typeof AssetSchema>;
+export type IndexedAsset = z.infer<typeof IndexedAssetSchema>;
+export type AssetScope = z.infer<typeof AssetScopeSchema>;
+export type SoundRole = z.infer<typeof SoundRoleSchema>;
+export type BundledCheck = z.infer<typeof BundledCheckSchema>;
 export type PresetTransition = z.infer<typeof PresetTransitionSchema>;
 export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;
@@ -1349,6 +1556,10 @@ export type SceneStatus = z.infer<typeof SceneStatusSchema>;
 export type VideoTimeline = z.infer<typeof VideoTimelineSchema>;
 export type TimelineScene = VideoTimeline["scenes"][number];
 export type TimelineWord = VideoTimeline["words"][number];
+export type TimelineSound = VideoTimeline["sounds"][number];
+export type TimelineMusic = NonNullable<VideoTimeline["music"]>;
+export type PresetSound = z.infer<typeof PresetSoundSchema>;
+export type SfxDensity = z.infer<typeof SfxDensitySchema>;
 export type Preview = z.infer<typeof PreviewSchema>;
 export type SceneThumbnail = z.infer<typeof SceneThumbnailSchema>;
 export type VideoRef = z.infer<typeof VideoRefSchema>;
