@@ -50,8 +50,13 @@ function ffmpeg(args: string[]) {
   return run(ffmpegPath(), ["-hide_banner", "-loglevel", "error", "-y", ...args]);
 }
 
-/** An `aevalsrc` source: a 220 Hz tone, silent inside every `silence` stretch. */
+/** An `aevalsrc` source: a 220 Hz tone, silent inside every `silence` stretch. All silence is an `anullsrc`. */
 function toneSource(stretches: Stretch[]) {
+  // `aevalsrc` evaluates every sample, too slow for 20 minutes of silence on a busy CI runner.
+  if (stretches.every((stretch) => "silence" in stretch)) {
+    return `anullsrc=r=16000:cl=mono:d=${lengthOf(stretches)}`;
+  }
+
   const starts = stretches.map((_, index) => lengthOf(stretches.slice(0, index)));
   const silent = stretches
     .map((stretch, index) => ({ stretch, start: starts[index] ?? 0 }))
