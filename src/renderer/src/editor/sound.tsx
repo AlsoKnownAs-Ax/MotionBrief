@@ -4,12 +4,8 @@ import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 import { Row, Segmented, Slider } from "@renderer/style/controls";
-import { usePresets } from "@renderer/style/presets";
-import { NO_ASSET, type PresetSound, type SfxDensity, type StylePreset, type TimelineMusic, type TimelineSound } from "../../../contract";
-import { isGenerating, useGeneration } from "./generation";
-import { useAssets } from "./library-drawer";
-import { isRevising, useRevision } from "./revision";
-import { useStyleChange } from "./style-tab";
+import { NO_ASSET, type SfxDensity, type TimelineMusic, type TimelineSound } from "../../../contract";
+import { useAssets, useVideoSound } from "./video-assets";
 
 const SFX_OPTIONS: { value: SfxDensity; label: string }[] = [
   { value: "off", label: "Off" },
@@ -17,25 +13,11 @@ const SFX_OPTIONS: { value: SfxDensity; label: string }[] = [
   { value: "lively", label: "Lively" },
 ];
 
-/**
- * The video's sound and a way to change it. Each change is a swap, a re-render with no agent that saves a Version, so
- * a music bed picked here is this video's alone.
- */
-export function useVideoSound() {
-  const video = useGeneration((state) => state.video);
-  const preset = useGeneration((state) => state.stored?.preset);
-  const generating = useGeneration((state) => isGenerating(state.status));
-  const revising = useRevision((state) => isRevising(state.status));
-  const { change, isChanging, error } = useStyleChange(video);
-  const sound = useSoundOf(preset);
-  const set = (changes: Partial<PresetSound>) => {
-    if (preset && sound) {
-      void change({ preset: { ...preset, sound: { ...sound, ...changes } } });
-    }
-  };
-
-  return { sound, set, isBusy: generating || revising || isChanging, error };
-}
+/** How a sound effect's chip reads, by who placed it. */
+const SOUND_SOURCES = {
+  agent: { title: (name: string) => `${name}: placed by the agent; revise it by prompt`, className: "bg-status-flagged-tint text-status-flagged" },
+  transition: { title: (name: string) => `${name}: the Style Preset's Transition sound`, className: "bg-surface-2 text-ink-muted" },
+} satisfies Record<TimelineSound["source"], { title: (name: string) => string; className: string }>;
 
 /** The timeline's sound controls. */
 export function SoundButton() {
@@ -68,13 +50,6 @@ export function SoundButton() {
       </PopoverContent>
     </Popover>
   );
-}
-
-/** The video's sound: its snapshot's, or for a snapshot from before Presets had sound, its bundled Preset's. */
-function useSoundOf(preset: StylePreset | undefined): PresetSound | undefined {
-  const { data: presets = [] } = usePresets();
-
-  return preset?.sound ?? (presets.find(({ id }) => id === preset?.id) ?? presets[0])?.sound;
 }
 
 /** A dB slider that saves once the creator lets go, not on every step of a drag. */
@@ -116,8 +91,8 @@ export function MusicLane({ music, duration, px, top }: { music: TimelineMusic |
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label={music ? `Music: ${music.name}. Pick another bed` : "No music. Pick a bed"}
-          className="absolute left-0 flex items-center rounded-sm text-left text-[11px] text-ink-muted outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]"
+          aria-label={musicLabel(music)}
+          className="absolute left-0 flex items-center rounded-sm text-left text-app-xs text-ink-muted outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]"
           style={{ top, height: MUSIC_LANE, width: duration * px }}
         >
           {music ? (
@@ -163,6 +138,14 @@ export function MusicLane({ music, duration, px, top }: { music: TimelineMusic |
   );
 }
 
+function musicLabel(music: TimelineMusic | null) {
+  if (!music) {
+    return "No music. Pick a bed";
+  }
+
+  return `Music: ${music.name}. Pick another bed`;
+}
+
 /** The SFX lane's height, under the Transcript. */
 export const SFX_LANE = 22;
 
@@ -173,11 +156,8 @@ export function SfxLane({ sounds, px, top }: { sounds: TimelineSound[]; px: numb
       {sounds.map((sound) => (
         <span
           key={`${sound.start} ${sound.name}`}
-          title={sound.source === "agent" ? `${sound.name}: placed by the agent; revise it by prompt` : `${sound.name}: the Style Preset's Transition sound`}
-          className={cn(
-            "absolute flex h-full items-center gap-1 rounded-sm px-1.5 text-[11px] whitespace-nowrap",
-            sound.source === "agent" ? "bg-status-flagged-tint text-status-flagged" : "bg-surface-2 text-ink-muted",
-          )}
+          title={SOUND_SOURCES[sound.source].title(sound.name)}
+          className={cn("absolute flex h-full items-center gap-1 rounded-sm px-1.5 text-app-xs whitespace-nowrap", SOUND_SOURCES[sound.source].className)}
           style={{ left: sound.start * px }}
         >
           <Volume2Icon className="size-3" aria-hidden="true" />

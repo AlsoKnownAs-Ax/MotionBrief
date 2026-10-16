@@ -108,13 +108,22 @@ function bedTracks(bed: PlannedBed | undefined): string[] {
     return [];
   }
 
-  const chain = bed.chain ? ` data-fx-chain='${JSON.stringify(bed.chain)}'` : "";
+  const chain = optionalAttribute("data-fx-chain", bed.chain && JSON.stringify(bed.chain));
 
   return bed.passes.map(({ start, duration, fadeIn, fadeOut, automation }, index) => {
-    const lane = automation ? ` data-automation='${automation}'` : "";
+    const lane = optionalAttribute("data-automation", automation);
 
     return `<audio id="music-bed-${index}" src="${musicAsset(bed.file)}" data-start="${start}" data-duration="${duration}" data-track-index="${MUSIC_TRACK + (index % 2)}" data-volume="${bed.volume}" data-fade-in="${fadeIn}" data-fade-out="${fadeOut}"${chain}${lane}></audio>`;
   });
+}
+
+/** ` name='value'`, single-quoted for JSON values, or nothing without a value. */
+function optionalAttribute(name: string, value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+
+  return ` ${name}='${value}'`;
 }
 
 /** Sound effects take a track each from here; Scenes use 1 and 2, the Voiceover 10. */

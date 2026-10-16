@@ -39,6 +39,17 @@ export function scopeIssues(current: Storyboard, revised: Storyboard, { instruct
   return [...changed, ...removed, ...instructed];
 }
 
+/** The Scenes a patch may change: the selected ones, their Canvas mates and the ones it adds. No selection, all of them. */
+export function changeableScenes(current: Storyboard, { scenes }: Patch, scope: string[]): string[] | undefined {
+  if (scope.length === 0) {
+    return undefined;
+  }
+
+  const added = scenes.filter(({ id }) => !current.scenes.some((scene) => scene.id === id)).map(({ id }) => id);
+
+  return [...withCanvasMates([...current.scenes, ...scenes], scope), ...added];
+}
+
 /** The selected Scenes and every Scene sharing a Canvas with one of them. */
 function withCanvasMates(scenes: Scene[], scope: string[]): Set<string> {
   const canvases = new Set(scenes.filter(({ id }) => scope.includes(id)).flatMap(({ canvas }) => canvas ?? []));

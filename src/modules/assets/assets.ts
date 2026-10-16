@@ -19,7 +19,7 @@ import {
   type StylePreset,
 } from "../../contract";
 import { carveBed, planSound, type PlannedBed, type SoundFile, type SoundPlan } from "../assembler";
-import type { Media, MediaInfo } from "../media";
+import type { Media, MediaError, MediaInfo } from "../media";
 import type { Storyboard } from "../storyboard";
 import { copyHashed, fileStep, renameRetrying, savedVersions, writeAtomically, type FileError, type Projects, type VideoContent } from "../projects";
 
@@ -89,6 +89,13 @@ const ASSET_REFERENCE = /^(?:asset:)?(bundled:[a-z0-9-]+|[0-9a-f]{64})$/;
 /** FFprobe container names, as split from its comma list, and the format each is accepted as. */
 const AUDIO_CONTAINERS: Record<string, AudioFormat> = { wav: "wav", mp3: "mp3", m4a: "m4a", ogg: "ogg", flac: "flac" };
 
+/** Why a file isn't a sound, by why FFprobe failed on it. */
+const PROBE_FAILURES = {
+  NO_AUDIO: "It has no sound.",
+  UNREADABLE: "It can't be read as audio.",
+  FFMPEG_FAILED: "It can't be read as audio.",
+} satisfies Record<MediaError["code"], string>;
+
 /** FFprobe codec names of the raster formats images and logos accept. */
 const IMAGE_CODECS: Record<string, ImageFormat> = { png: "png", mjpeg: "jpeg", webp: "webp" };
 
@@ -145,10 +152,14 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       return { data: ofKind(sounds.map(({ slug, ...sound }) => ({ id: `${BUNDLED_PREFIX}${slug}`, ...sound }))), error: null };
     }
 
-    return inFolder(where, async (dir) => {
-      const sidecars = await sidecarsIn(dir);
+    return inFolder(where, async (dir): Promise<Result<Asset[], AssetsError>> => {
+      const { data: sidecars, error } = await sidecarsIn(dir);
 
-      return { data: ofKind(sidecars.flatMap((sidecar) => (sidecar.removed ? [] : [sidecar.asset]))), error: null };
+      if (error) {
+        return { data: null, error };
+      }
+
+      return { data: ofKind(sidecars.filter(({ removed }) => !removed).map(({ asset }) => asset)), error: null };
     });
   }
 
@@ -158,16 +169,28 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
    * copied into the Project is listed once, from the Project.
    */
   async function index(projectId: string): Promise<Result<IndexedAsset[], AssetsError>> {
-    const { data: inProject, error } = await projects.inFolder<IndexedAsset[], AssetsError>(projectId, async (projectDir) => ({
-      data: indexed(join(projectDir, ASSETS_DIR), await sidecarsIn(join(projectDir, ASSETS_DIR))),
-      error: null,
-    }));
+    const { data: inProject, error } = await projects.inFolder<IndexedAsset[], AssetsError>(projectId, async (projectDir) => {
+      const dir = join(projectDir, ASSETS_DIR);
+      const { data: sidecars, error: folderError } = await sidecarsIn(dir);
+
+      if (folderError) {
+        return { data: null, error: folderError };
+      }
+
+      return { data: indexed(dir, sidecars), error: null };
+    });
 
     if (error) {
       return { data: null, error };
     }
 
-    const library = indexed(libraryDir, (await inLibrary(() => sidecarsIn(libraryDir))).filter(({ removed }) => !removed));
+    const { data: inLibraryFolder, error: libraryError } = await inLibrary(() => sidecarsIn(libraryDir));
+
+    if (libraryError) {
+      return { data: null, error: libraryError };
+    }
+
+    const library = indexed(libraryDir, inLibraryFolder.filter(({ removed }) => !removed));
     const { sounds } = await bundledSet();
     const shipped = sounds.map(({ slug, ...sound }) => ({ id: `${BUNDLED_PREFIX}${slug}`, ...sound, file: join(bundledDir, `${slug}.${sound.format}`) }));
     const all = [...inProject, ...library, ...shipped];
@@ -181,7 +204,7 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       return { data: null, error: { code: "NOTES_REQUIRED", kind } };
     }
 
-    const { data: facts, error } = isSound(kind) ? await soundFacts(path, kind) : await imageFacts(path, kind);
+    const { data: facts, error } = await factsOf(path, kind);
 
     if (error) {
       return { data: null, error };
@@ -248,10 +271,20 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
         return { data: null, error: { code: "UNKNOWN_ASSET", id } };
       }
 
-      if (projectDir && (await usedByVersions(projectDir, id))) {
+      const { data: isUsed, error: usesError } = await usedByVersions(projectDir, id);
+
+      if (usesError) {
+        return { data: null, error: usesError };
+      }
+
+      if (isUsed) {
         const { error } = await saveSidecar(dir, sidecar.asset, { removed: true });
 
-        return error ? { data: null, error } : { data: null, error: null };
+        if (error) {
+          return { data: null, error };
+        }
+
+        return { data: null, error: null };
       }
 
       // The sidecar goes first: bytes left behind by a crash are never listed, and a new import overwrites them.
@@ -265,7 +298,11 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       const file = join(dir, `${id}.${sidecar.asset.format}`);
       const { error: rmError } = await fileStep(file, () => rm(file, { force: true }));
 
-      return rmError ? { data: null, error: rmError } : { data: null, error: null };
+      if (rmError) {
+        return { data: null, error: rmError };
+      }
+
+      return { data: null, error: null };
     });
   }
 
@@ -288,13 +325,21 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     if (where.scope === "bundled") {
       const sound = (await bundledSet()).sounds.find(({ slug }) => `${BUNDLED_PREFIX}${slug}` === id);
 
-      return sound ? { data: join(bundledDir, `${sound.slug}.${sound.format}`), error: null } : { data: null, error: { code: "UNKNOWN_ASSET", id } };
+      if (!sound) {
+        return { data: null, error: { code: "UNKNOWN_ASSET", id } };
+      }
+
+      return { data: join(bundledDir, `${sound.slug}.${sound.format}`), error: null };
     }
 
     return inFolder(where, async (dir): Promise<Result<string, AssetsError>> => {
       const sidecar = await readListed(dir, id);
 
-      return sidecar ? { data: join(dir, `${id}.${sidecar.asset.format}`), error: null } : { data: null, error: { code: "UNKNOWN_ASSET", id } };
+      if (!sidecar) {
+        return { data: null, error: { code: "UNKNOWN_ASSET", id } };
+      }
+
+      return { data: join(dir, `${id}.${sidecar.asset.format}`), error: null };
     });
   }
 
@@ -302,7 +347,11 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
   async function libraryFolder(): Promise<Result<string, FileError>> {
     const { error } = await fileStep(libraryDir, () => mkdir(libraryDir, { recursive: true }));
 
-    return error ? { data: null, error } : { data: libraryDir, error: null };
+    if (error) {
+      return { data: null, error };
+    }
+
+    return { data: libraryDir, error: null };
   }
 
   /**
@@ -321,7 +370,11 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       const { error } = await inLibrary(async (): Promise<Result<unknown, FileError>> => {
         const sidecar = await readListed(libraryDir, id);
 
-        return sidecar ? copyAsset(sidecar.asset, libraryDir, dir) : { data: null, error: null };
+        if (!sidecar) {
+          return { data: null, error: null };
+        }
+
+        return copyAsset(sidecar.asset, libraryDir, dir);
       });
 
       if (error) {
@@ -341,22 +394,36 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       const { data: versions, error } = await savedVersions(projectDir);
 
       if (error) {
-        return { data: null, error: error.code === "FILE_FAILED" ? error : { code: "FILE_FAILED", path: error.path, message: error.message } };
+        return { data: null, error: { code: "FILE_FAILED", path: error.path, message: error.message } };
       }
 
       const projectSet = Math.max(INITIAL_BUNDLED_SET, ...versions.map(({ bundledSet: set }) => set ?? INITIAL_BUNDLED_SET));
-      const slugs = versions.flatMap(assetUses).flatMap((id) => (id.startsWith(BUNDLED_PREFIX) ? [id.slice(BUNDLED_PREFIX.length)] : []));
+      const slugs = versions
+        .flatMap(assetUses)
+        .filter((id) => id.startsWith(BUNDLED_PREFIX))
+        .map((id) => id.slice(BUNDLED_PREFIX.length));
       const missing = [...new Set(slugs)].filter((slug) => !shipped.has(slug)).sort();
 
       return { data: { projectSet, appSet, missing }, error: null };
     });
   }
 
+  /** A sound effect can be shorter than the 400 ms integrated loudness gates on, so it is measured at its loudest. */
+  const LOUDNESS = { music: media.loudness, sfx: media.momentaryMax } satisfies Record<SoundAsset["kind"], (path: string) => ReturnType<Media["loudness"]>>;
+
+  function factsOf(path: string, kind: AssetKind): Promise<Result<Facts, AssetsError>> {
+    if (isSound(kind)) {
+      return soundFacts(path, kind);
+    }
+
+    return imageFacts(path, kind);
+  }
+
   async function soundFacts(path: string, kind: SoundAsset["kind"]): Promise<Result<Facts, AssetsError>> {
     const { data: info, error } = await media.probe(path);
 
     if (error) {
-      return unsupported(path, kind, error.code === "NO_AUDIO" ? "It has no sound." : "It can't be read as audio.");
+      return unsupported(path, kind, PROBE_FAILURES[error.code]);
     }
 
     const format = audioFormat(info);
@@ -369,8 +436,7 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       return { data: null, error: { code: "ASSET_TOO_LONG", path, duration: info.duration, maxSeconds: MAX_SOUND_SECONDS } };
     }
 
-    // A sound effect can be shorter than the 400 ms integrated loudness gates on, so it is measured at its loudest.
-    const { data: loudness, error: loudnessError } = kind === "music" ? await media.loudness(path) : await media.momentaryMax(path);
+    const { data: loudness, error: loudnessError } = await LOUDNESS[kind](path);
 
     if (loudnessError) {
       return unsupported(path, kind, "It can't be decoded.");
@@ -434,10 +500,14 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     // shortcut: the Project is the Voiceover's folder, as a source names no Project; pass the Project when sources carry one.
     const projectAssets = voiceover && join(dirname(voiceover), ASSETS_DIR);
     const found = await Promise.all([...new Set(ids)].map(async (id) => [id, await soundFile(id, projectAssets)] as const));
-    const files = Object.fromEntries(found.flatMap(([id, file]) => (file ? [[id, file]] : [])));
+    const files = Object.fromEntries(found.filter((entry): entry is readonly [string, SoundFile] => entry[1] !== undefined));
     const plan = planSound({ storyboard, transcript, sound: preset.sound, files, voice: await voiceLoudness(voiceover) });
 
-    return plan.bed && voiceover ? { ...plan, bed: await carved(plan.bed, voiceover) } : plan;
+    if (!plan.bed || !voiceover) {
+      return plan;
+    }
+
+    return { ...plan, bed: await carved(plan.bed, voiceover) };
   }
 
   /** The bed carved under the Voiceover, worked out once per bed and Voiceover as planned: it decodes both whole. */
@@ -446,10 +516,14 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     const key = JSON.stringify([voiceover, bed]);
     const done =
       carves.get(key) ??
-      Promise.all([media.pcm(voiceover, CARVE_SAMPLE_RATE), media.pcm(bed.file, CARVE_SAMPLE_RATE)]).then(([voice, music]) =>
+      Promise.all([media.pcm(voiceover, CARVE_SAMPLE_RATE), media.pcm(bed.file, CARVE_SAMPLE_RATE)]).then(([voice, music]) => {
         // A file that can't be decoded plays uncarved rather than not at all.
-        voice.data && music.data ? carveBed(bed, voice.data, music.data, CARVE_SAMPLE_RATE) : bed,
-      );
+        if (!voice.data || !music.data) {
+          return bed;
+        }
+
+        return carveBed(bed, voice.data, music.data, CARVE_SAMPLE_RATE);
+      });
     carves.set(key, done);
 
     return done;
@@ -462,12 +536,15 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       return sound && { file: join(bundledDir, `${sound.slug}.${sound.format}`), name: sound.name, duration: sound.duration, loudness: sound.loudness };
     }
 
-    for (const dir of [projectAssets, libraryDir]) {
-      const sidecar = dir && /^[0-9a-f]{64}$/.test(id) ? await readSidecar(join(dir, `${id}.json`)) : undefined;
-      const asset = sidecar?.asset;
+    if (!/^[0-9a-f]{64}$/.test(id)) {
+      return undefined;
+    }
+
+    for (const dir of [projectAssets, libraryDir].filter((folder) => folder !== undefined)) {
+      const asset = (await readSidecar(join(dir, `${id}.json`)))?.asset;
 
       if (asset && "loudness" in asset) {
-        return { file: join(dir!, `${id}.${asset.format}`), name: asset.name, duration: asset.duration, loudness: asset.loudness };
+        return { file: join(dir, `${id}.${asset.format}`), name: asset.name, duration: asset.duration, loudness: asset.loudness };
       }
     }
 
@@ -524,11 +601,26 @@ export function assetUses({ storyboard, preset }: Pick<VideoContent, "storyboard
   return [...uses];
 }
 
-/** Whether any saved Version uses the Asset; a Version that can't be read might, so its bytes are kept. */
-async function usedByVersions(projectDir: string, id: string) {
-  const { data: versions } = await savedVersions(projectDir);
+/**
+ * Whether any saved Version uses the Asset; a Version that isn't valid might, so its bytes are kept. A Library Asset
+ * (no Project folder) has no Versions: every Project that used it has its own copy.
+ */
+async function usedByVersions(projectDir: string | undefined, id: string): Promise<Result<boolean, FileError>> {
+  if (!projectDir) {
+    return { data: false, error: null };
+  }
 
-  return !versions || versions.some((version) => assetUses(version).includes(id));
+  const { data: versions, error } = await savedVersions(projectDir);
+
+  if (error?.code === "INVALID_DOCUMENT") {
+    return { data: true, error: null };
+  }
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  return { data: versions.some((version) => assetUses(version).includes(id)), error: null };
 }
 
 /** Copies an Asset's file and sidecar from one Asset folder to another. */
@@ -542,7 +634,11 @@ async function copyAsset(asset: Asset, from: string, to: string): Promise<Result
   const file = `${asset.id}.${asset.format}`;
   const { error } = await copyHashed(join(from, file), join(to, file));
 
-  return error ? { data: null, error } : saveSidecar(to, asset);
+  if (error) {
+    return { data: null, error };
+  }
+
+  return saveSidecar(to, asset);
 }
 
 /** The sidecar of a listed Asset, or undefined for an id that isn't a sha256, an unknown one or a removed one. */
@@ -553,15 +649,28 @@ async function readListed(dir: string, id: string): Promise<Sidecar | undefined>
 
   const sidecar = await readSidecar(join(dir, `${id}.json`));
 
-  return sidecar?.removed ? undefined : sidecar;
+  if (sidecar?.removed) {
+    return undefined;
+  }
+
+  return sidecar;
 }
 
 /** The sidecars of an Asset folder; none when it doesn't exist yet. */
-async function sidecarsIn(dir: string): Promise<Sidecar[]> {
-  const { data: names } = await fileStep(dir, () => readdir(dir));
-  const sidecars = await Promise.all((names ?? []).filter((name) => name.endsWith(".json")).map((name) => readSidecar(join(dir, name))));
+async function sidecarsIn(dir: string): Promise<Result<Sidecar[], FileError>> {
+  const { data: names, error } = await fileStep(dir, () => readdir(dir));
 
-  return sidecars.filter((sidecar) => sidecar !== undefined);
+  if (error?.message.includes("ENOENT")) {
+    return { data: [], error: null };
+  }
+
+  if (error) {
+    return { data: null, error };
+  }
+
+  const sidecars = await Promise.all(names.filter((name) => name.endsWith(".json")).map((name) => readSidecar(join(dir, name))));
+
+  return { data: sidecars.filter((sidecar) => sidecar !== undefined), error: null };
 }
 
 /** A folder's Assets as an index holds them: with their files, and marked when removed. */
@@ -587,7 +696,11 @@ async function saveSidecar(dir: string, asset: Asset, { removed = false } = {}):
   const path = join(dir, `${asset.id}.json`);
   const { error } = await writeAtomically(path, `${JSON.stringify({ schemaVersion: 1, ...asset, ...(removed && { removed }) }, null, 2)}\n`);
 
-  return error ? { data: null, error } : { data: asset, error: null };
+  if (error) {
+    return { data: null, error };
+  }
+
+  return { data: asset, error: null };
 }
 
 function isSound(kind: AssetKind): kind is SoundAsset["kind"] {
@@ -610,15 +723,18 @@ function audioFormat({ container, codec, isVideo }: MediaInfo): AudioFormat | un
     return undefined;
   }
 
-  return format === "ogg" && codec === "opus" ? "opus" : format;
+  if (format === "ogg" && codec === "opus") {
+    return "opus";
+  }
+
+  return format;
 }
 
 /** Plain or px `width` and `height`, else the viewBox's. */
 function svgSize(attributes: string): { width: number; height: number } | undefined {
   const attribute = (name: string) => new RegExp(`\\b${name}\\s*=\\s*["']([^"']*)["']`).exec(attributes)?.[1];
-  const length = (value: string | undefined) => (value && /^\s*\d*\.?\d+\s*(px)?\s*$/.test(value) ? Number.parseFloat(value) : undefined);
-  const width = length(attribute("width"));
-  const height = length(attribute("height"));
+  const width = svgLength(attribute("width"));
+  const height = svgLength(attribute("height"));
 
   if (width && height) {
     return { width, height };
@@ -626,7 +742,20 @@ function svgSize(attributes: string): { width: number; height: number } | undefi
 
   const [, , boxWidth = 0, boxHeight = 0] = (attribute("viewBox") ?? "").trim().split(/[\s,]+/).map(Number);
 
-  return boxWidth > 0 && boxHeight > 0 ? { width: boxWidth, height: boxHeight } : undefined;
+  if (boxWidth <= 0 || boxHeight <= 0) {
+    return undefined;
+  }
+
+  return { width: boxWidth, height: boxHeight };
+}
+
+/** A plain or px length; a percentage or other unit has no size of its own. */
+function svgLength(value: string | undefined): number | undefined {
+  if (!value || !/^\s*\d*\.?\d+\s*(px)?\s*$/.test(value)) {
+    return undefined;
+  }
+
+  return Number.parseFloat(value);
 }
 
 function unsupported(path: string, kind: AssetKind, detail: string): Result<never, AssetsError> {

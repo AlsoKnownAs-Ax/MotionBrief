@@ -2,7 +2,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { CoreClient, Project, RevisionStatus, UnitCode, VideoRef } from "../contract";
+import type { CoreClient, IndexedAsset, Project, RevisionStatus, UnitCode, VideoRef } from "../contract";
+import { planRebuild } from "../modules/revision";
+import type { Storyboard } from "../modules/storyboard";
+import horizontal from "./fixtures/storyboard/horizontal.json";
+import transcript from "./fixtures/storyboard/transcript.json";
 import { BROWSER_TIMEOUT_MS } from "./test-support/checker";
 import { connect, follow, generate, newProject, sha256, storyboard as stacked, submitsCode, submitsStoryboard, unitCode } from "./test-support/generation";
 import { picture } from "./test-support/media";
@@ -87,9 +91,10 @@ describe("swapping an image in a Scene", () => {
     project = await newProject(core, dir);
     video = { projectId: project.id, format: "horizontal" };
 
+    const kinds = { shot: "image", similar: "image", wide: "image", logo: "logo" } as const;
+
     for (const [name, path] of Object.entries(files)) {
-      const kind = name === "logo" ? "logo" : "image";
-      await core.assets.import({ scope: "project", projectId: project.id, path, name, kind, notes: `The ${name}` });
+      await core.assets.import({ scope: "project", projectId: project.id, path, name, kind: kinds[name as keyof typeof kinds], notes: `The ${name}` });
     }
 
     await generate(core, video);
@@ -149,5 +154,34 @@ describe("swapping an image in a Scene", () => {
 
     expect(opened.preview?.timeline.scenes[0]?.assets).toEqual([{ field: "content.media.asset", id: ids.wide }]);
     expect(opened.preview?.timeline.scenes[1]?.assets).toBeUndefined();
+  });
+});
+
+describe("swapping an Asset the unit shows in more than one place", () => {
+  const logo = (id: string): IndexedAsset => ({ id, kind: "logo", name: id, notes: "", format: "png", width: 16, height: 16, transparent: true, file: `${id}.png` });
+  const [ACME, GLOBEX, INITECH] = ["a", "b", "c"].map((letter) => letter.repeat(64)) as [string, string, string];
+  const assets = [logo(ACME), logo(GLOBEX), logo(INITECH)];
+
+  /** The fixture with s07's first two list items showing `icons`. */
+  function withIcons(icons: [string, string]): Storyboard {
+    const storyboard = structuredClone(horizontal) as unknown as Storyboard;
+    const items = (storyboard.scenes.find(({ id }) => id === "s07")!.content as { items: { icon: string }[] }).items;
+    icons.forEach((icon, index) => {
+      items[index]!.icon = `asset:${icon}`;
+    });
+
+    return storyboard;
+  }
+
+  const s07 = (next: [string, string]) =>
+    planRebuild({ current: withIcons([ACME, ACME]), next: withIcons(next), transcript, instructions: {}, captionsChanged: false, assets }).find(({ unit }) => unit.id === "s07")!;
+
+  it("only re-renders when every place swaps it for the same Asset", () => {
+    expect(s07([GLOBEX, GLOBEX])).toMatchObject({ rebuild: "rerender", swaps: [{ from: ACME, to: GLOBEX }, { from: ACME, to: GLOBEX }] });
+  });
+
+  it("regenerates when only one place swaps it, or two places swap it for different Assets: its code can't tell them apart", () => {
+    expect(s07([GLOBEX, ACME]).rebuild).toBe("regenerate");
+    expect(s07([GLOBEX, INITECH]).rebuild).toBe("regenerate");
   });
 });

@@ -80,9 +80,16 @@ async function askToUpdateForBundledSounds(projectId: string) {
   const count = check?.missing.length ?? 0;
 
   if (count > 0) {
-    const sounds = count === 1 ? "1 bundled sound" : `${count} bundled sounds`;
-    useToast.getState().show({ text: `This Project uses ${sounds} this version of MotionBrief doesn't have. Update MotionBrief to hear them.` });
+    useToast.getState().show({ text: `This Project uses ${bundledSounds(count)} this version of MotionBrief doesn't have. Update MotionBrief to hear them.` });
   }
+}
+
+function bundledSounds(count: number) {
+  if (count === 1) {
+    return "1 bundled sound";
+  }
+
+  return `${count} bundled sounds`;
 }
 
 function noticeOf(video: VideoRef, frameUpdate: FrameUpdate | undefined) {

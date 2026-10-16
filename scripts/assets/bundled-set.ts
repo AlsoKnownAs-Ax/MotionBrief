@@ -188,7 +188,11 @@ const { module: mediaModule } = await runnerImport<MediaModule>(join(ROOT, "src"
 const { module: native } = await runnerImport<NativeModule>(join(ROOT, "src", "core", "native.ts"), { root: ROOT, configFile: false, logLevel: "error" });
 const media = mediaModule.createMedia({ ffmpegPath: native.ffmpegPath(), ffprobePath: native.ffprobePath() });
 const work = await mkdtemp(join(tmpdir(), "motionbrief-bundled-"));
-const usedPacks = new Set(SOUNDS.flatMap(({ source }) => ("pack" in source ? [source.pack] : [])));
+const usedPacks = new Set(
+  SOUNDS.map(({ source }) => source)
+    .filter((source) => "pack" in source)
+    .map(({ pack }) => pack),
+);
 
 for (const pack of usedPacks) {
   const { zip, sha256 } = PACKS[pack];
@@ -213,8 +217,7 @@ const manifest = [];
 
 for (const { slug, role, name, notes, source } of SOUNDS) {
   const file = join(OUT, `${slug}.opus`);
-  const input = "pack" in source ? ["-i", join(work, source.pack, "Audio", source.file)] : ["-filter_complex", source.graph];
-  const run = spawnSync(native.ffmpegPath(), ["-hide_banner", "-loglevel", "error", "-y", ...input, "-ar", String(RATE), "-c:a", "opus", "-strict", "-2", "-b:a", "96k", ...BIT_EXACT, file]);
+  const run = spawnSync(native.ffmpegPath(), ["-hide_banner", "-loglevel", "error", "-y", ...inputOf(source), "-ar", String(RATE), "-c:a", "opus", "-strict", "-2", "-b:a", "96k", ...BIT_EXACT, file]);
 
   if (run.status !== 0) {
     throw new Error(`${slug}: ${String(run.stderr)}`);
@@ -237,10 +240,25 @@ await rm(work, { recursive: true, force: true });
 const bytes = (await Promise.all((await readdir(OUT)).map(async (name) => (await stat(join(OUT, name))).size))).reduce((sum, size) => sum + size, 0);
 console.log(`${SOUNDS.length} sounds, ${(bytes / 1024 / 1024).toFixed(2)} MB in ${OUT}`);
 
+/** FFmpeg's input for a sound: the pack's file, or the graph that makes it. */
+function inputOf(source: Source): string[] {
+  if ("pack" in source) {
+    return ["-i", join(work, source.pack, "Audio", source.file)];
+  }
+
+  return ["-filter_complex", source.graph];
+}
+
+function provenanceRow({ slug, source }: Sound): string {
+  if ("pack" in source) {
+    return `| \`${slug}\` | Kenney, ${PACKS[source.pack].title}: \`Audio/${source.file}\` | ${PACKS[source.pack].page} |`;
+  }
+
+  return `| \`${slug}\` | Made with the bundled FFmpeg: ${source.recipe} | scripts/assets/bundled-set.ts |`;
+}
+
 function provenance() {
-  const rows = SOUNDS.map(({ slug, source }) =>
-    "pack" in source ? `| \`${slug}\` | Kenney, ${PACKS[source.pack].title}: \`Audio/${source.file}\` | ${PACKS[source.pack].page} |` : `| \`${slug}\` | Made with the bundled FFmpeg: ${source.recipe} | scripts/assets/bundled-set.ts |`,
-  );
+  const rows = SOUNDS.map(provenanceRow);
   const packs = [...usedPacks].map((pack) => `- ${PACKS[pack].title}: ${PACKS[pack].page} (download ${PACKS[pack].zip}, sha256 \`${PACKS[pack].sha256}\`)`);
 
   return [

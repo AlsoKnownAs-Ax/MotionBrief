@@ -93,6 +93,18 @@ describe("the music bed", () => {
     passes.forEach(({ automation }) => expect(JSON.parse(automation)).toMatchObject({ lanes: [{ target: "volume" }] }));
   });
 
+  it("starts the final pass of a looped bed by the last Scene, so the fade-out over it is one pass's and continuous", async () => {
+    const { client, bed } = await withBed(22);
+    const passes = await bedOf((await client.preview.open(source({ music: bed }))).url);
+
+    // A second 22 s pass would end at 42, inside s09 (41.45 to 45.5): it ends as s09 starts, the final one crossfading in under it.
+    expect(passes.map(({ start, duration, fadeIn, fadeOut }) => ({ start, duration, fadeIn, fadeOut }))).toEqual([
+      { start: 0, duration: 22, fadeIn: 1, fadeOut: 2 },
+      { start: 20, duration: 21.45, fadeIn: 2, fadeOut: 2 },
+      { start: 39.45, duration: 6.05, fadeIn: 2, fadeOut: 4.05 },
+    ]);
+  });
+
   it("plays no bed with music none, or one that isn't an Asset", async () => {
     const { client } = await withBed(60);
     const none = await client.preview.open(source({ music: "none" }));

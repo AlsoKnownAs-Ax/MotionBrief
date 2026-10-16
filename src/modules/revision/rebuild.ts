@@ -62,7 +62,7 @@ export function planRebuild({ current, next, transcript, instructions, captionsC
     const swaps = unit.scenes.flatMap((scene) => rerenderSwaps(scene, scenesBefore.get(scene.id), index).filter((swap) => swap !== undefined));
     const plan = { unit, previous, instructions: unitInstructions, swaps };
 
-    if (regenerated.has(unit.id)) {
+    if (regenerated.has(unit.id) || isAmbiguous(swaps, previous)) {
       return { ...plan, rebuild: "regenerate", isInstructionOnly: isInstructionOnly(unit, previous, unitInstructions, timingChanged) };
     }
 
@@ -110,18 +110,27 @@ function rewrittenScenes(current: Storyboard, next: Storyboard, instructions: Re
  * for one of the same kind whose aspect ratio is within about 15%. None when the Scene's Asset places changed.
  */
 function rerenderSwaps(scene: Scene, previous: Scene | undefined, index: Map<string, IndexedAsset>): (Swap | undefined)[] {
+  if (!previous) {
+    return [];
+  }
+
   const now = assetsOf(scene);
-  const was = previous ? assetsOf(previous) : [];
+  const was = assetsOf(previous);
 
   if (now.length !== was.length || now.some(({ field }, place) => field !== was[place]!.field)) {
     return [];
   }
 
-  return now.map(({ id: to }, place) => {
-    const from = was[place]!.id;
+  return now.map(({ id: to }, place) => rerenderSwap(was[place]!.id, to, index));
+}
 
-    return from !== to && isLikeForLike(index.get(from), index.get(to)) ? { from, to } : undefined;
-  });
+/** The swap of `from` for `to`, if they differ and a re-render alone shows it. */
+function rerenderSwap(from: string, to: string, index: Map<string, IndexedAsset>): Swap | undefined {
+  if (from === to || !isLikeForLike(index.get(from), index.get(to))) {
+    return undefined;
+  }
+
+  return { from, to };
 }
 
 function isLikeForLike(from: IndexedAsset | undefined, to: IndexedAsset | undefined): boolean {
@@ -132,10 +141,33 @@ function isLikeForLike(from: IndexedAsset | undefined, to: IndexedAsset | undefi
   return Math.abs(from.width / from.height / (to.width / to.height) - 1) <= ASPECT_TOLERANCE;
 }
 
-/** A unit's code pointing at the Assets swapped in, wherever it names one through `asset(id)`. */
+/**
+ * Whether `swappedCode` can't rewrite the unit's code: it rewrites every `asset(id)` of an Asset, so each place the
+ * previous unit showed one swapped must swap it for the same Asset.
+ */
+function isAmbiguous(swaps: Swap[], previous: Unit | undefined): boolean {
+  const places = (previous?.scenes ?? []).flatMap((scene) => assetsOf(scene));
+
+  return swaps.some(({ from, to }) => places.filter(({ id }) => id === from).length > swaps.filter((swap) => swap.from === from && swap.to === to).length);
+}
+
+/** A unit's code pointing at the Assets swapped in, wherever it names one through `asset(id)`; with none, the same code. */
 export function swappedCode(code: UnitCode, swaps: Swap[]): UnitCode {
+  if (swaps.length === 0) {
+    return code;
+  }
+
   const to = new Map(swaps.map((swap) => [swap.from, swap.to]));
-  const swap = (part: string) => part.replace(/(asset\(\s*["']?)([^"')\s]+)/g, (call, start: string, id: string) => (to.has(id) ? `${start}${to.get(id)}` : call));
+  const swap = (part: string) =>
+    part.replace(/(asset\(\s*["']?)([^"')\s]+)/g, (call, start: string, id: string) => {
+      const swappedIn = to.get(id);
+
+      if (swappedIn === undefined) {
+        return call;
+      }
+
+      return `${start}${swappedIn}`;
+    });
 
   return { css: swap(code.css), html: swap(code.html), js: swap(code.js) };
 }

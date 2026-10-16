@@ -1,7 +1,7 @@
 import type { AssetKind, Format, IndexedAsset, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
 import { assetsOf, copyOf, elementsOf, type SceneAsset } from "./content";
 import type { Scene, SceneType, Storyboard, Transition, TransitionType } from "./schema";
-import { placedSounds } from "./sounds";
+import { placedSounds, sfxCapsText } from "./sounds";
 import { sceneTimings } from "./timing";
 
 /** What every check sees: a Storyboard that already fits the schema, and what it is checked against. */
@@ -456,6 +456,8 @@ const ASSET_SLOTS: Record<SceneAsset["slot"], { kinds: AssetKind[]; says: string
   media: { kinds: ["image", "logo"], says: "Media shows only an image or a logo" },
 };
 
+const ASSET_KIND_NAMES = { sfx: "a sfx", music: "a music", image: "an image", logo: "a logo" } satisfies Record<AssetKind, string>;
+
 /** Every Asset a Scene names is in the Asset index, and of a kind its place shows. */
 function checkAssets({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   const index = new Map((rules.assets ?? []).map((asset) => [asset.id, asset]));
@@ -477,7 +479,7 @@ function checkAssets({ storyboard, rules }: CheckInput): StoryboardIssue[] {
             broken: kind !== undefined && !ASSET_SLOTS[slot].kinds.includes(kind),
             code: "ASSET",
             field,
-            message: `"${id}" is ${kind === "image" ? "an" : "a"} ${kind}. ${ASSET_SLOTS[slot].says}.`,
+            message: `"${id}" is ${kind && ASSET_KIND_NAMES[kind]}. ${ASSET_SLOTS[slot].says}.`,
           },
         ] satisfies SceneRule[];
       }),
@@ -485,9 +487,12 @@ function checkAssets({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   );
 }
 
-/** Whether the agent may place an Asset as a sound: an impact or sting, never a Transition sound or music. */
+/**
+ * Whether the agent may place an Asset as a sound: an impact or sting, never a Transition sound or music. A sound
+ * effect the creator imported has no role and is an impact: the Preset's Transition sounds are picked, not placed.
+ */
 export function isPlaceableSound(asset: IndexedAsset): boolean {
-  return asset.kind === "sfx" && asset.role === "impact";
+  return asset.kind === "sfx" && asset.role !== "transition";
 }
 
 /**
@@ -516,7 +521,7 @@ function checkSounds({ storyboard, transcript, rules }: CheckInput): StoryboardI
         message: `Word ${at} is outside the Scene (words ${scene.from}-${scene.to}); a sound plays on a word of its own Scene.`,
       },
       {
-        broken: rules.sfx !== undefined && !fits,
+        broken: rules.sfx !== undefined && !fits && (rules.cappedScenes?.includes(sceneId) ?? true),
         code: "SOUND",
         field: `sounds[${position}]`,
         message: soundCapMessage(rules.sfx),
@@ -527,9 +532,7 @@ function checkSounds({ storyboard, transcript, rules }: CheckInput): StoryboardI
 
 function soundCapMessage(sfx: CheckInput["rules"]["sfx"]): string {
   if (sfx === "subtle" || sfx === "lively") {
-    const caps = sfx === "subtle" ? "at most 1 per Scene and about 1 per 20 s" : "at most 2 per Scene and about 1 per 8 s";
-
-    return `Too many sound effects: ${sfx} allows ${caps}. Keep only the ones on the moments that matter most.`;
+    return `Too many sound effects: ${sfx} allows ${sfxCapsText(sfx)}. Keep only the ones on the moments that matter most.`;
   }
 
   return "Sound effects are off for this video; place no sounds.";

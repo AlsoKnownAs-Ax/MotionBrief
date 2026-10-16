@@ -164,7 +164,7 @@ describe("Export MP4", () => {
     "plays the Transition sounds the preview plays",
     async () => {
       const client = connect({ appDataDir: await mkdtemp(join(workDir, "app-data-")) });
-      const crossfade = { ...storyboard, scenes: storyboard.scenes.map((scene, index) => (index === 0 ? { ...scene, transition: { type: "crossfade" } } : scene)) };
+      const crossfade = { ...storyboard, scenes: [{ ...storyboard.scenes[0]!, transition: { type: "crossfade" } }, ...storyboard.scenes.slice(1)] };
       const { id: previewId } = await client.preview.open({ ...(await source()), storyboard: crossfade });
       const target = join(workDir, "With sound.mp4");
 

@@ -61,20 +61,22 @@ describe("Storyboard validation of the agent's sounds", () => {
     expect(await validate(withSounds({ s05: [{ asset: PUNCH, at: 56 }], s09: [{ asset: BONG, at: 110 }] }), "subtle")).toEqual([]);
   });
 
-  it("takes only agent-placeable sound effects from the index: no unknown ids, Transition sounds, unmarked sounds or images", async () => {
+  it("takes only agent-placeable sound effects from the index: no unknown ids, Transition sounds or images", async () => {
     const storyboard = withSounds({
       s01: [{ asset: "bundled:no-such-sound", at: 3 }],
       s02: [{ asset: WHOOSH, at: 12 }],
-      s04: [{ asset: USER_POP, at: 40 }],
       s05: [{ asset: SHOT, at: 56 }],
     });
 
     expect(await validate(storyboard)).toEqual([
       { code: "SOUND", sceneId: "s01", field: "sounds[0].asset" },
       { code: "SOUND", sceneId: "s02", field: "sounds[0].asset" },
-      { code: "SOUND", sceneId: "s04", field: "sounds[0].asset" },
       { code: "SOUND", sceneId: "s05", field: "sounds[0].asset" },
     ]);
+  });
+
+  it("takes a sound effect the creator imported as an impact", async () => {
+    expect(await validate(withSounds({ s04: [{ asset: USER_POP, at: 40 }] }))).toEqual([]);
   });
 
   it("places each sound on a word of its own Scene", async () => {
@@ -120,7 +122,11 @@ describe("the agent's sounds in the page", () => {
     const loudness = (id: string) => {
       const asset = bundled.find((candidate) => candidate.id === id);
 
-      return asset && "loudness" in asset ? asset.loudness : NaN;
+      if (!asset || !("loudness" in asset)) {
+        return NaN;
+      }
+
+      return asset.loudness;
     };
 
     expect(preview.timeline.sounds).toContainEqual({ start: transcript.words[56]!.start, name: "Punch", source: "agent" });
@@ -130,7 +136,7 @@ describe("the agent's sounds in the page", () => {
   it("replaces a Transition sound it lands within 0.15 s of, and leaves the others", async () => {
     const storyboard = withSounds({ s04: [{ asset: PUNCH, at: 52 }], s07: [{ asset: BONG, at: 82 }] });
     // s04's last word, 0.05 s before the push into s05 starts.
-    const words = transcript.words.map((word, index) => (index === 52 ? { ...word, start: 21.4 } : word));
+    const words = transcript.words.with(52, { ...transcript.words[52]!, start: 21.4 });
 
     expect(await timelineOf(storyboard, "subtle", words)).toEqual([
       { start: 10.25, name: "Soft click", source: "transition" },
@@ -169,10 +175,10 @@ function submitsPatch(scenes: StackedScene[], summary: string): AgentEvent[] {
 }
 
 /** Sends a request and waits for the Revision to end, approving its cost if it asks. */
-async function revise(core: CoreClient, video: VideoRef, message: string): Promise<RevisionStatus> {
+async function revise(core: CoreClient, video: VideoRef, message: string, scope: string[] = []): Promise<RevisionStatus> {
   const statuses = await follow((signal) => core.video.revision(video, { signal }));
   void statuses.until(({ state }) => state === "approval").then(() => core.video.approveRevision(video));
-  await core.video.revise({ ...video, message, scope: [] });
+  await core.video.revise({ ...video, message, scope });
   const ended = await statuses.until(({ state, request }) => ["answered", "done", "failed", "stopped"].includes(state) && request?.message === message);
   statuses.stop();
 
@@ -189,6 +195,7 @@ describe("a video with the agent's sounds", () => {
   let generated: GenerationStatus;
   let revision: RevisionStatus;
   let silenced: RevisionStatus;
+  let scoped: RevisionStatus;
   let words: { start: number }[];
   let sceneCodeByRevision: number;
 
@@ -199,7 +206,11 @@ describe("a video with the agent's sounds", () => {
       root: dir,
       script: {
         storyboard: [submitsStoryboard(generatedWith)],
-        revision: [submitsPatch(patch, "Moved the punch onto the definition."), [{ type: "turn-completed", status: "completed", text: "Sound effects are off." }]],
+        revision: [
+          submitsPatch(patch, "Moved the punch onto the definition."),
+          [{ type: "turn-completed", status: "completed", text: "Sound effects are off." }],
+          submitsPatch(stacked.scenes.filter(({ id }) => id === "s04"), "Took the punch off the definition."),
+        ],
       },
     }));
     project = await newProject(core, dir);
@@ -210,6 +221,7 @@ describe("a video with the agent's sounds", () => {
     sceneCodeByRevision = sceneCode() - byGeneration;
     await core.video.changeStyle({ ...video(project), preset: { ...BLUEPRINT, sound: { ...BLUEPRINT.sound!, sfx: "off" } } });
     silenced = await revise(core, video(project), "Add an impact on the last line");
+    scoped = await revise(core, video(project), "Take the punch off", ["s04"]);
     const transcription = await follow((signal) => core.project.transcription({ projectId: project.id }, { signal }));
     words = (await transcription.until(({ state }) => state === "done")).words;
     transcription.stop();
@@ -263,5 +275,11 @@ describe("a video with the agent's sounds", () => {
     expect(silenced.state).toBe("answered");
     expect(system).not.toContain(`${PUNCH} sfx`);
     expect(system).not.toContain("Sound effects are");
+  });
+
+  it("holds a scoped Revision to the lowered density only in the Scenes it may change", () => {
+    // s05's Bong is past the cap with sound effects off, but outside the scope the agent can't take it off.
+    expect(scoped).toMatchObject({ state: "done", version: 4 });
+    expect(scoped.units.map(({ id, rebuild }) => [id, rebuild])).toEqual([["s04", "rerender"]]);
   });
 });

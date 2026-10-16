@@ -1,5 +1,5 @@
 import { ORPCError } from "@orpc/client";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { FolderOpenIcon, ImageIcon, LibraryIcon, MusicIcon, PlayIcon, SearchIcon, SparklesIcon, SquareIcon, UploadIcon, Volume2Icon, XIcon, type LucideIcon } from "lucide-react";
 import { useEffect, useState, type KeyboardEvent } from "react";
 import { create } from "zustand";
@@ -10,14 +10,14 @@ import { cn } from "@renderer/lib/utils";
 import { costLabel } from "@renderer/new-project/generate-bar";
 import { projectErrorMessage } from "@renderer/new-project/project-errors";
 import { Select } from "@renderer/style/controls";
-import type { AssetKind, AssetScope, CostRange } from "../../../contract";
+import type { AssetKind, AssetScope, CostRange, SoundAsset } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
 import { sceneName } from "./labels";
 import { assetFacts, filterAssets, isSound, KIND_ORDER, kindCounts, listKey, swapTargets, type KindFilter, type LibraryAsset, type ScopeFilter, type SwapTarget } from "./library";
 import { useOpenVideo } from "./open-video";
 import { isRevising, nameOf, useRevision } from "./revision";
-import { useVideoSound } from "./sound";
 import { Splitter } from "./splitter";
+import { useAssets, useProjectScope, useVideoSound } from "./video-assets";
 
 const KINDS: Record<AssetKind, { label: string; plural: string; icon: LucideIcon }> = {
   sfx: { label: "Sound effect", plural: "Sound effects", icon: Volume2Icon },
@@ -27,6 +27,8 @@ const KINDS: Record<AssetKind, { label: string; plural: string; icon: LucideIcon
 };
 
 const SCOPES: Record<AssetScope, string> = { project: "This Project", library: "Your Library", bundled: "Bundled" };
+
+const SCOPE_FILTERS: Record<ScopeFilter, string> = { all: "Anywhere", ...SCOPES };
 
 /** The drawer needs about this much to keep its three columns; double-clicking its edge goes back to it. */
 const DRAWER_WIDTH = 720;
@@ -40,16 +42,30 @@ type Drawer = { isOpen: boolean; width: number; set: (patch: Partial<Pick<Drawer
 
 const useDrawer = create<Drawer>((set) => ({ isOpen: false, width: DRAWER_WIDTH, set }));
 
-/** The open Project's Asset inputs, or none for a video that isn't a stored Project, such as the fixture. */
-function useProjectScope() {
-  const projectId = useOpenVideo((state) => state.projectId);
-  const isStored = useOpenVideo((state) => state.isStored);
+function urlInput({ scope, id }: LibraryAsset): Parameters<typeof core.assets.url>[0] {
+  if (scope === "project") {
+    return { scope, projectId: useOpenVideo.getState().projectId, id };
+  }
 
-  return isStored ? projectId : undefined;
+  return { scope, id };
 }
 
-function urlInput({ scope, id }: LibraryAsset): Parameters<typeof core.assets.url>[0] {
-  return scope === "project" ? { scope, projectId: useOpenVideo.getState().projectId, id } : { scope, id };
+/** Where a user Asset lives, for the calls that change it; bundled Assets are read-only and never get here. */
+function userScopeOf({ scope }: LibraryAsset, projectId: string) {
+  if (scope === "project") {
+    return { scope, projectId } as const;
+  }
+
+  return { scope: "library" } as const;
+}
+
+/** Imports go into the open Project, or the Library when no Project is open. */
+function importScopeOf(projectId: string | undefined) {
+  if (projectId) {
+    return { scope: "project", projectId } as const;
+  }
+
+  return { scope: "library" } as const;
 }
 
 /* ───────────────────────── audition: one <audio> for the whole drawer ───────────────────────── */
@@ -70,7 +86,14 @@ const useAudition = create<Audition>((set, get) => ({
     audio?.pause();
     set({ id: undefined, started: undefined });
   },
-  toggle: (asset) => (get().id === asset.id ? get().stop() : void get().play(asset)),
+  toggle: (asset) => {
+    if (get().id === asset.id) {
+      get().stop();
+      return;
+    }
+
+    void get().play(asset);
+  },
   play: async (asset) => {
     audio ??= new Audio();
     const player = audio;
@@ -97,49 +120,29 @@ const useAudition = create<Audition>((set, get) => ({
 
 /* ───────────────────────── data ───────────────────────── */
 
-/** Every Asset the drawer can show: the open Project's, the Library's and the bundled set. */
-export function useAssets() {
-  const projectId = useProjectScope();
-  const results = useQueries({
-    queries: [
-      { ...orpc.assets.list.queryOptions({ input: { scope: "project", projectId: projectId ?? "" } }), enabled: projectId !== undefined },
-      orpc.assets.list.queryOptions({ input: { scope: "library" } }),
-      orpc.assets.list.queryOptions({ input: { scope: "bundled" } }),
-    ],
-  });
-  const scopes = ["project", "library", "bundled"] as const;
-  const assets: LibraryAsset[] = results.flatMap(({ data }, index) => (data ?? []).map((asset) => ({ ...asset, scope: scopes[index]! })));
-
-  return { assets, error: results.find(({ error }) => error)?.error };
-}
-
 function refreshAssets() {
   return queryClient.invalidateQueries({ queryKey: orpc.assets.list.key() });
 }
 
-/** One sentence the creator can act on, per error code the Asset calls answer with. */
+type AssetErrorData = { path?: string; kind?: AssetKind; detail?: string; maxBytes?: number; maxSeconds?: number };
+
+/** One sentence the creator can act on, per error code of the Asset calls; `file` is the file's name. */
+const ASSET_MESSAGES: Record<string, (data: AssetErrorData, file: string) => string> = {
+  UNSUPPORTED_FORMAT: ({ kind, detail }, file) => `${file} can't be used as ${(kind && KINDS[kind].label.toLowerCase()) ?? "an Asset"}. ${detail ?? ""}`,
+  ASSET_TOO_LARGE: ({ maxBytes = 0 }, file) => `${file} is over ${Math.round(maxBytes / 1024 / 1024)} MB. Export a smaller image and try again.`,
+  ASSET_TOO_LONG: ({ maxSeconds = 0 }, file) => `${file} is over ${Math.round(maxSeconds / 60)} minutes. Trim it and try again.`,
+  NOTES_REQUIRED: () => "Images and logos need notes saying what they show, so the agent never guesses.",
+  UNKNOWN_ASSET: () => "That Asset isn't there any more.",
+};
+
 function assetErrorMessage(error: unknown) {
-  if (!(error instanceof ORPCError) || !error.defined) {
+  if (!(error instanceof ORPCError) || !error.defined || !ASSET_MESSAGES[error.code]) {
     return projectErrorMessage(error);
   }
 
-  const data = (error.data ?? {}) as { path?: string; kind?: AssetKind; detail?: string; maxBytes?: number; maxSeconds?: number };
-  const file = data.path?.split(/[\\/]/).at(-1) ?? "This file";
+  const data = (error.data ?? {}) as AssetErrorData;
 
-  switch (error.code) {
-    case "UNSUPPORTED_FORMAT":
-      return `${file} can't be used as ${data.kind ? KINDS[data.kind].label.toLowerCase() : "an Asset"}. ${data.detail ?? ""}`;
-    case "ASSET_TOO_LARGE":
-      return `${file} is over ${Math.round((data.maxBytes ?? 0) / 1024 / 1024)} MB. Export a smaller image and try again.`;
-    case "ASSET_TOO_LONG":
-      return `${file} is over ${Math.round((data.maxSeconds ?? 0) / 60)} minutes. Trim it and try again.`;
-    case "NOTES_REQUIRED":
-      return "Images and logos need notes saying what they show, so the agent never guesses.";
-    case "UNKNOWN_ASSET":
-      return "That Asset isn't there any more.";
-    default:
-      return projectErrorMessage(error);
-  }
+  return ASSET_MESSAGES[error.code]!(data, data.path?.split(/[\\/]/).at(-1) ?? "This file");
 }
 
 /* ───────────────────────── the drawer ───────────────────────── */
@@ -161,7 +164,13 @@ export function LibraryDrawer() {
   }, []);
 
   // Closing the drawer or leaving the editor ends the audition.
-  useEffect(() => (isOpen ? stop : undefined), [isOpen, stop]);
+  useEffect(() => {
+    if (!isOpen) {
+      return undefined;
+    }
+
+    return stop;
+  }, [isOpen, stop]);
 
   if (!isOpen) {
     return (
@@ -318,7 +327,7 @@ function PlayButton({ asset }: { asset: LibraryAsset }) {
     <Button
       variant="ghost"
       size="icon-sm"
-      aria-label={`${isPlaying ? "Stop" : "Play"} ${asset.name}`}
+      aria-label={auditionLabel(isPlaying, asset)}
       aria-pressed={isPlaying}
       className={cn(isPlaying && "text-primary")}
       onClick={(event) => {
@@ -331,9 +340,26 @@ function PlayButton({ asset }: { asset: LibraryAsset }) {
   );
 }
 
+function auditionLabel(isPlaying: boolean, { name }: LibraryAsset) {
+  if (isPlaying) {
+    return `Stop ${name}`;
+  }
+
+  return `Play ${name}`;
+}
+
+/** When the asset's audition started; never while another sound auditions. */
+function startedOf({ id, started }: Audition, asset: LibraryAsset) {
+  if (id !== asset.id) {
+    return undefined;
+  }
+
+  return started;
+}
+
 /** A waveform that fills while the sound auditions; its bars are decoration, the same for an Asset every time. */
-function AuditionWave({ asset, bars = 40 }: { asset: LibraryAsset; bars?: number }) {
-  const started = useAudition((state) => (state.id === asset.id ? state.started : undefined));
+function AuditionWave({ asset, bars = 40 }: { asset: LibraryAsset & SoundAsset; bars?: number }) {
+  const started = useAudition((state) => startedOf(state, asset));
   const seed = [...asset.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
 
   return (
@@ -345,7 +371,7 @@ function AuditionWave({ asset, bars = 40 }: { asset: LibraryAsset; bars?: number
         <span
           key={started}
           className="absolute inset-y-0 left-0 bg-primary/25 mix-blend-screen"
-          style={{ animation: `library-wave-fill ${isSound(asset) ? asset.duration : 0}s linear forwards` }}
+          style={{ animation: `library-wave-fill ${asset.duration}s linear forwards` }}
         />
       ) : null}
       <style>{"@keyframes library-wave-fill { from { width: 0 } to { width: 100% } }"}</style>
@@ -385,7 +411,7 @@ function KindNav({
   hasProject: boolean;
 }) {
   const item = (isOn: boolean) => cn("flex h-7 items-center gap-2 rounded-md px-2 text-left text-app-sm text-ink-muted transition-colors hover:text-ink", isOn && "bg-surface-2 text-ink");
-  const scopes: ScopeFilter[] = hasProject ? ["all", "project", "library", "bundled"] : ["all", "library", "bundled"];
+  const scopes = (["all", "project", "library", "bundled"] as const).filter((value) => hasProject || value !== "project");
 
   return (
     <nav aria-label="Filter Assets" className="flex w-[148px] shrink-0 flex-col gap-0.5">
@@ -408,7 +434,7 @@ function KindNav({
       <span className="mt-3 mb-1 px-2 text-app-xs text-ink-muted">From</span>
       {scopes.map((value) => (
         <button key={value} type="button" aria-pressed={scope === value} className={item(scope === value)} onClick={() => onScope(value)}>
-          {value === "all" ? "Anywhere" : SCOPES[value]}
+          {SCOPE_FILTERS[value]}
         </button>
       ))}
     </nav>
@@ -423,7 +449,7 @@ function Detail({ asset }: { asset: LibraryAsset }) {
   const image = useQuery({ ...orpc.assets.url.queryOptions({ input: urlInput(asset) }), staleTime: Infinity, enabled: !isSound(asset) });
   const projectId = useOpenVideo((state) => state.projectId);
   // Bundled Assets are read-only: nothing below runs for them.
-  const where = asset.scope === "project" ? ({ scope: "project", projectId } as const) : ({ scope: "library" } as const);
+  const where = userScopeOf(asset, projectId);
   const save = useMutation({ mutationFn: () => core.assets.update({ ...where, id: asset.id, notes }), onSuccess: refreshAssets });
   const remove = useMutation({ mutationFn: () => core.assets.remove({ ...where, id: asset.id }), onSuccess: refreshAssets });
   const addToLibrary = useMutation({ mutationFn: () => core.assets.addToLibrary({ projectId, id: asset.id }), onSuccess: refreshAssets });
@@ -431,10 +457,20 @@ function Detail({ asset }: { asset: LibraryAsset }) {
   const error = save.error ?? remove.error ?? addToLibrary.error;
   const isMusic = music.sound?.music === asset.id;
 
+  // Remove asks once more first.
+  function onRemove() {
+    if (isRemoving) {
+      remove.mutate();
+      return;
+    }
+
+    setIsRemoving(true);
+  }
+
   return (
     <section aria-label="Selected Asset" className="flex w-[220px] shrink-0 flex-col gap-2 overflow-y-auto">
       <span className="grid aspect-video w-full shrink-0 place-items-center overflow-hidden rounded-md bg-surface-1">
-        {isSound(asset) ? <PlayButton asset={asset} /> : image.data ? <img src={image.data} alt={asset.name} className="size-full object-contain" /> : <KindMark kind={asset.kind} />}
+        {isSound(asset) ? <PlayButton asset={asset} /> : <ImagePreview asset={asset} url={image.data} />}
       </span>
       <p className="text-app-sm font-medium">{asset.name}</p>
       <p className="text-app-xs text-ink-muted tabular-nums">
@@ -452,7 +488,7 @@ function Detail({ asset }: { asset: LibraryAsset }) {
         readOnly={isBundled}
         onChange={(event) => setNotes(event.target.value)}
         onBlur={() => notes.trim() !== asset.notes && save.mutate()}
-        className="resize-none rounded-md bg-surface-2 px-2.5 py-1.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)] read-only:opacity-60"
+        className="resize-none rounded-md bg-surface-2 px-2.5 py-1.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)] read-only:bg-surface-1 read-only:text-ink-muted"
       />
       {isBundled ? null : <p className="text-app-xs text-ink-muted">Notes steer later generations; videos already made keep their Assets.</p>}
       {error ? (
@@ -469,23 +505,56 @@ function Detail({ asset }: { asset: LibraryAsset }) {
       <div className="flex flex-wrap gap-2">
         {asset.kind === "music" && music.sound ? (
           <Button size="sm" disabled={music.isBusy || isMusic} onClick={() => music.set({ music: asset.id })}>
-            {isMusic ? "This video's music" : "Use as music"}
+            {musicButtonLabel(isMusic)}
           </Button>
         ) : null}
         {asset.scope === "project" ? (
           <Button size="sm" disabled={addToLibrary.isPending || addToLibrary.isSuccess} onClick={() => addToLibrary.mutate()}>
-            {addToLibrary.isSuccess ? "In your Library" : "Add to Library"}
+            {addToLibraryLabel(addToLibrary.isSuccess)}
           </Button>
         ) : null}
         {isBundled ? null : (
-          <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={() => (isRemoving ? remove.mutate() : setIsRemoving(true))} onBlur={() => setIsRemoving(false)}>
-            {isRemoving ? "Click again to remove" : "Remove"}
+          <Button size="sm" variant="ghost" disabled={remove.isPending} onClick={onRemove} onBlur={() => setIsRemoving(false)}>
+            {removeLabel(isRemoving)}
           </Button>
         )}
       </div>
       <p className="mt-auto text-app-xs text-ink-muted">↑/↓ to audition as you go, Space to replay.</p>
     </section>
   );
+}
+
+/** The image itself once its URL is known, its kind's mark until then. */
+function ImagePreview({ asset, url }: { asset: LibraryAsset; url: string | undefined }) {
+  if (!url) {
+    return <KindMark kind={asset.kind} />;
+  }
+
+  return <img src={url} alt={asset.name} className="size-full object-contain" />;
+}
+
+function musicButtonLabel(isMusic: boolean) {
+  if (isMusic) {
+    return "This video's music";
+  }
+
+  return "Use as music";
+}
+
+function addToLibraryLabel(isAdded: boolean) {
+  if (isAdded) {
+    return "In your Library";
+  }
+
+  return "Add to Library";
+}
+
+function removeLabel(isRemoving: boolean) {
+  if (isRemoving) {
+    return "Click again to remove";
+  }
+
+  return "Remove";
 }
 
 /** A swap waiting for the creator's go-ahead: it regenerates these Scenes with the agent. */
@@ -523,7 +592,7 @@ function SwapInto({ asset }: { asset: LibraryAsset }) {
     return <p className="text-app-xs text-ink-muted">Select a Scene with an image or logo in the timeline to swap this in.</p>;
   }
 
-  const error = swap.error instanceof ORPCError && swap.error.code === "SWAP_UNCONFIRMED" ? undefined : swap.error;
+  const error = shownSwapError(swap.error);
 
   return (
     <div className="flex flex-col gap-2">
@@ -541,7 +610,7 @@ function SwapInto({ asset }: { asset: LibraryAsset }) {
           </p>
           <p className="text-app-sm leading-[1.45] text-ink-muted">
             {asset.name} doesn't fit the place of what it replaces, so the agent rewrites the Scene for it.
-            {pending.costUsd ? ` About ${costLabel(pending.costUsd)} on your API key.` : ""}
+            {pending.costUsd ? ` About ${costLabel(pending.costUsd)} on your API key.` : null}
           </p>
           <div className="flex gap-2">
             <Button size="sm" onClick={() => setPending(undefined)}>
@@ -562,6 +631,15 @@ function SwapInto({ asset }: { asset: LibraryAsset }) {
   );
 }
 
+/** The swap's error to show: an unconfirmed swap asks for confirmation instead. */
+function shownSwapError(error: Error | null) {
+  if (error instanceof ORPCError && error.code === "SWAP_UNCONFIRMED") {
+    return null;
+  }
+
+  return error;
+}
+
 function swapErrorMessage(error: unknown) {
   if (error instanceof ORPCError && error.code === "INVALID_SWAP") {
     return (error.data as { message: string }).message;
@@ -579,12 +657,12 @@ function ImportDialog({ path, projectId, onDone }: { path: string; projectId: st
   const fileName = path.split(/[\\/]/).at(-1) ?? path;
   const extension = fileName.split(".").at(-1)?.toLowerCase() ?? "";
   const [name, setName] = useState(fileName.replace(/\.[^.]+$/, ""));
-  const [kind, setKind] = useState<AssetKind>(IMAGE_EXTENSIONS.includes(extension) ? "image" : "sfx");
+  const [kind, setKind] = useState<AssetKind>(() => kindOf(extension));
   const [notes, setNotes] = useState("");
   const needsNotes = kind === "image" || kind === "logo";
-  const destination = projectId ? "This Project" : "Your Library";
+  const where = importScopeOf(projectId);
   const importAsset = useMutation({
-    mutationFn: () => core.assets.import({ ...(projectId ? { scope: "project", projectId } : { scope: "library" }), path, name, kind, notes }),
+    mutationFn: () => core.assets.import({ ...where, path, name, kind, notes }),
     onSuccess: async () => {
       await refreshAssets();
       onDone();
@@ -606,7 +684,7 @@ function ImportDialog({ path, projectId, onDone }: { path: string; projectId: st
           }}
         >
           <p className="text-app-xs text-ink-muted">
-            {fileName} is copied into {destination}. The original file is never used again, so you can move or delete it.
+            {fileName} is copied into {SCOPES[where.scope]}. The original file is never used again, so you can move or delete it.
           </p>
           <input value={name} onChange={(event) => setName(event.target.value)} aria-label="Name" className="h-control-sm rounded-md bg-surface-2 px-2.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]" />
           <Select id="import-kind" value={kind} options={KIND_ORDER.map((value) => ({ value, label: KINDS[value].label }))} onChange={setKind} />
@@ -615,7 +693,7 @@ function ImportDialog({ path, projectId, onDone }: { path: string; projectId: st
             onChange={(event) => setNotes(event.target.value)}
             rows={3}
             aria-label="Notes for the agent"
-            placeholder={needsNotes ? "What it shows and when to use it (required)" : "When to use it (optional)"}
+            placeholder={notesPlaceholder(needsNotes)}
             className="resize-none rounded-md bg-surface-2 px-2.5 py-1.5 text-app-sm outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]"
           />
           {importAsset.error ? (
@@ -628,11 +706,36 @@ function ImportDialog({ path, projectId, onDone }: { path: string; projectId: st
               Cancel
             </Button>
             <Button size="sm" variant="primary" type="submit" disabled={importAsset.isPending || !name.trim() || (needsNotes && !notes.trim())}>
-              {importAsset.isPending ? "Importing…" : "Import"}
+              {importLabel(importAsset.isPending)}
             </Button>
           </div>
         </form>
       </DialogContent>
     </Dialog>
   );
+}
+
+/** A file is taken for an image by its extension, else for a sound effect; the creator can pick another kind. */
+function kindOf(extension: string): AssetKind {
+  if (IMAGE_EXTENSIONS.includes(extension)) {
+    return "image";
+  }
+
+  return "sfx";
+}
+
+function notesPlaceholder(needsNotes: boolean) {
+  if (needsNotes) {
+    return "What it shows and when to use it (required)";
+  }
+
+  return "When to use it (optional)";
+}
+
+function importLabel(isPending: boolean) {
+  if (isPending) {
+    return "Importing…";
+  }
+
+  return "Import";
 }

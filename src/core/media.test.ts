@@ -19,9 +19,16 @@ beforeAll(async () => {
 
 afterAll(() => rm(root, { recursive: true, force: true, maxRetries: 5 }));
 
+const FACTS = {
+  image: { format: "png", width: 16, height: 10, transparent: false },
+  logo: { format: "png", width: 16, height: 10, transparent: true },
+  sfx: { format: "wav", duration: 0.3, loudness: -20 },
+  music: { format: "wav", duration: 0.3, loudness: -20 },
+} satisfies Record<IndexedAsset["kind"], object>;
+
 /** An indexed Asset as the Storyboard rules carry it; validation never reads its file. */
 function indexed(id: string, kind: IndexedAsset["kind"], extra: Partial<IndexedAsset> = {}): IndexedAsset {
-  const facts = kind === "image" || kind === "logo" ? { format: "png", width: 16, height: 10, transparent: kind === "logo" } : { format: "wav", duration: 0.3, loudness: -20 };
+  const facts = FACTS[kind];
 
   return { id, kind, name: id, notes: `Notes on ${id}`, file: `${id}.${facts.format}`, ...facts, ...extra } as IndexedAsset;
 }
@@ -121,7 +128,7 @@ describe("a generation with the creator's images and logos", () => {
       ...stacked,
       scenes: [
         { ...first, content: { ...first!.content, media: { id: "shot", asset: image, at: 7 } } },
-        { ...second, content: { ...second!.content, items: second!.content.items.map((item: object, index: number) => (index === 0 ? { ...item, icon: `asset:${logo}` } : item)) } },
+        { ...second, content: { ...second!.content, items: second!.content.items.with(0, { ...second!.content.items[0], icon: `asset:${logo}` }) } },
         ...rest,
       ],
     };

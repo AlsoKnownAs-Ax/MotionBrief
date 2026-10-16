@@ -31,7 +31,7 @@ export async function assetLint(unit: string, code: UnitCode, assets: IndexedAss
     ...unknown.map((id) => finding("UNKNOWN_ASSET", `There is no Asset "${id}" in this unit. ${SHOW}`)),
     ...foreignImages.map(([tag]) => finding("FOREIGN_IMAGE", `${tag} isn't an Asset. ${SHOW}`)),
     ...urls.map(() => finding("FOREIGN_IMAGE", `CSS url() can't show images. ${SHOW}`)),
-    ...(DATA_IMAGE.test(all) ? [finding("INLINED_ASSET", `The code inlines an image as a data: URL. ${SHOW}`)] : []),
+    ...[DATA_IMAGE].filter((pattern) => pattern.test(all)).map(() => finding("INLINED_ASSET", `The code inlines an image as a data: URL. ${SHOW}`)),
     ...inlined.map(({ name }) => finding("INLINED_ASSET", `The code copies the markup of "${name}". ${SHOW}`)),
   ];
 }

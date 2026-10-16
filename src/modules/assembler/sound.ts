@@ -68,20 +68,20 @@ export function planSound({ storyboard, transcript, sound, files, voice }: Sound
     return { sfx: [], bed };
   }
 
-  const planned = (asset: string, start: number, db: number, source: PlannedSound["source"]): PlannedSound[] => {
-    const file = files[asset];
+  const planned = (asset: string | undefined, start: number, db: number, source: PlannedSound["source"]): PlannedSound[] => {
+    const file = asset && files[asset];
 
-    return file ? [{ asset, file: file.file, name: file.name, start, duration: file.duration, volume: gain(voice + db + sound.sfxLevel - file.loudness), source }] : [];
+    if (!asset || asset === NO_ASSET || !file) {
+      return [];
+    }
+
+    return [{ asset, file: file.file, name: file.name, start, duration: file.duration, volume: gain(voice + db + sound.sfxLevel - file.loudness), source }];
   };
   const agent = placedSounds(storyboard, transcript.duration, sound.sfx)
     .filter(({ fits }) => fits)
     .flatMap(({ asset, at }) => planned(asset, transcript.words[at]?.start ?? 0, AGENT_SFX_DB, "agent"));
   const transitions = planUnits(storyboard, transcript)
-    .flatMap(({ start, transitionIn }) => {
-      const asset = transitionIn && sound.transitionSfx[transitionIn];
-
-      return asset && asset !== NO_ASSET ? planned(asset, start, TRANSITION_SFX_DB, "transition") : [];
-    })
+    .flatMap(({ start, transitionIn }) => planned(transitionIn && sound.transitionSfx[transitionIn], start, TRANSITION_SFX_DB, "transition"))
     .filter(({ start }) => !agent.some((placed) => Math.abs(placed.start - start) <= COLLIDE_SECONDS + 1e-9));
 
   return { sfx: [...transitions, ...agent].sort((a, b) => a.start - b.start), bed };
@@ -92,9 +92,9 @@ export function planSound({ storyboard, transcript, sound, files, voice }: Sound
  * while the bed is shorter than the video, and a fade-out over the last Scene. No music, or a missing file, has none.
  */
 function planBed({ storyboard, transcript, sound, files, voice }: SoundPlanOptions): PlannedBed | undefined {
-  const file = sound.music === NO_ASSET ? undefined : files[sound.music];
+  const file = files[sound.music];
 
-  if (!file) {
+  if (sound.music === NO_ASSET || !file) {
     return undefined;
   }
 
@@ -102,18 +102,29 @@ function planBed({ storyboard, transcript, sound, files, voice }: SoundPlanOptio
   const length = transcript.duration;
   const crossfade = Math.min(BED_CROSSFADE, file.duration / 4);
   const passes: BedPass[] = [];
+  // The final pass starts by the last Scene, so it alone plays the fade-out over it.
+  // shortcut: a bed shorter than the last Scene plus a crossfade still overlaps two passes there; fade by automation if that shows up.
+  const finalStart = Math.max(lastScene - crossfade, length - file.duration);
+  let start = 0;
 
-  for (let start = 0; start < length; start = seconds(start + file.duration - crossfade)) {
-    passes.push({ start, duration: seconds(Math.min(file.duration, length - start)), fadeIn: start === 0 ? BED_FADE_IN : crossfade, fadeOut: crossfade });
-
-    if (start + file.duration >= length) {
-      break;
-    }
+  while (start + file.duration < length) {
+    const next = seconds(Math.min(start + file.duration - crossfade, finalStart));
+    passes.push({ start, duration: seconds(next + crossfade - start), fadeIn: fadeInAt(start, crossfade), fadeOut: crossfade });
+    start = next;
   }
 
-  passes.at(-1)!.fadeOut = seconds(length - lastScene);
+  passes.push({ start, duration: seconds(length - start), fadeIn: fadeInAt(start, crossfade), fadeOut: seconds(length - lastScene) });
 
   return { asset: sound.music, file: file.file, name: file.name, volume: gain(voice + sound.musicLevel - file.loudness), passes };
+}
+
+/** The bed rises at the video's start; every later pass crossfades in. */
+function fadeInAt(start: number, crossfade: number): number {
+  if (start === 0) {
+    return BED_FADE_IN;
+  }
+
+  return crossfade;
 }
 
 /**

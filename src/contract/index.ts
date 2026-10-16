@@ -183,6 +183,8 @@ export const StoryboardRulesSchema = z.object({
    * a saved Storyboard keeps sounds past a lowered density, and the sound plan drops them when it plays.
    */
   sfx: SfxDensitySchema.optional(),
+  /** The Scenes the caps hold in: a scoped Revision can't take sounds off the rest. Absent, every Scene. */
+  cappedScenes: z.array(z.string()).optional(),
 });
 
 /** The part of a Transcript a Storyboard is checked against. Word references are indexes into `words`. */
@@ -902,7 +904,7 @@ export const SoundRoleSchema = z.enum(["transition", "impact"]);
 export const SoundAssetSchema = z.object({
   ...assetWritten,
   kind: z.enum(["sfx", "music"]),
-  /** Bundled sound effects only. */
+  /** Bundled sound effects only; one the creator imported is an impact. */
   role: SoundRoleSchema.optional(),
   format: AudioFormatSchema,
   /** Seconds. */

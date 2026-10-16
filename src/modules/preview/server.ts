@@ -133,9 +133,14 @@ async function serve(root: string, shared: Map<string, string>, request: Incomin
 
 /** A shared file never runs script, even an SVG opened on its own. */
 async function serveShared(file: string | undefined, request: IncomingMessage, response: ServerResponse) {
-  const info = file === undefined ? undefined : await stat(file).catch(() => undefined);
+  if (!file) {
+    notFound(response);
+    return;
+  }
 
-  if (!file || !info?.isFile()) {
+  const info = await stat(file).catch(() => undefined);
+
+  if (!info?.isFile()) {
     notFound(response);
     return;
   }

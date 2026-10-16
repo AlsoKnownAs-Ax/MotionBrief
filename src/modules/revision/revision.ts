@@ -467,7 +467,7 @@ export function createRevisions({ connector, checker, previews, stills, projects
     const code: Record<string, UnitCode> = Object.fromEntries(
       plans
         .filter(({ previous }) => previous && current.code[previous.id])
-        .map(({ unit, previous, swaps }) => [unit.id, swaps.length > 0 ? swappedCode(current.code[previous!.id]!, swaps) : current.code[previous!.id]!]),
+        .map(({ unit, previous, swaps }) => [unit.id, swappedCode(current.code[previous!.id]!, swaps)]),
     );
 
     publish(run, { state: "rebuilding", affected: affectedScenes(current.storyboard, plans), units: [...progress.values()], summary });
@@ -764,16 +764,18 @@ export function createRevisions({ connector, checker, previews, stills, projects
 /** The Storyboard with the Asset at `field` of Scene `sceneId` swapped for `asset`. */
 function swapped(storyboard: Storyboard, sceneId: string, field: string, asset: string): Result<Storyboard, { code: "INVALID_SWAP"; message: string }> {
   // The run's scope already holds only Scenes of the Storyboard.
-  const scene = storyboard.scenes.find(({ id }) => id === sceneId)!;
+  const position = storyboard.scenes.findIndex(({ id }) => id === sceneId);
+  const scene = storyboard.scenes[position]!;
   const places = assetsOf(scene);
+  const place = places.findIndex(({ field: candidate }) => candidate === field);
 
-  if (!places.some(({ field: place }) => place === field)) {
+  if (place < 0) {
     return { data: null, error: { code: "INVALID_SWAP", message: `Scene ${sceneId} shows no Asset at ${field}.` } };
   }
 
-  const ids = places.map(({ id, field: place }) => (place === field ? asset : id));
+  const ids = places.map(({ id }) => id).with(place, asset);
 
-  return { data: { ...storyboard, scenes: storyboard.scenes.map((candidate) => (candidate === scene ? withAssets(scene, ids) : candidate)) }, error: null };
+  return { data: { ...storyboard, scenes: storyboard.scenes.with(position, withAssets(scene, ids)) }, error: null };
 }
 
 function rebuildOf(need: UnitRebuild["rebuild"]): RevisionUnit["rebuild"] {

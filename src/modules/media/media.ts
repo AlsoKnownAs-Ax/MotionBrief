@@ -122,7 +122,11 @@ export function createMedia({ ffmpegPath, ffprobePath }: MediaOptions) {
 
     const integrated = Number(/I:\s+(-?[\d.]+) LUFS/.exec(log.split("Summary:")[1] ?? "")?.[1]);
 
-    return { data: Number.isFinite(integrated) ? integrated : SILENCE_LUFS, error: null };
+    if (!Number.isFinite(integrated)) {
+      return { data: SILENCE_LUFS, error: null };
+    }
+
+    return { data: integrated, error: null };
   }
 
   /**

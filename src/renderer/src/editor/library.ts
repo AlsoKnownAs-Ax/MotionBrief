@@ -17,7 +17,10 @@ export function isSound(asset: Asset): asset is SoundAsset {
 
 /** The Assets of the kind and source picked whose name or notes hold every word searched for. */
 export function filterAssets<T extends LibraryAsset>(assets: T[], { kind, scope, query }: LibraryFilter): T[] {
-  return assets.filter((asset) => (kind === "all" || asset.kind === kind) && (scope === "all" || asset.scope === scope) && matches(asset, query));
+  return assets
+    .filter((asset) => kind === "all" || asset.kind === kind)
+    .filter((asset) => scope === "all" || asset.scope === scope)
+    .filter((asset) => matches(asset, query));
 }
 
 export function matches(asset: Asset, query: string) {
@@ -40,7 +43,12 @@ export function swapTargets(asset: Asset, scenes: TimelineScene[], selection: st
 
   return scenes
     .filter(({ id }) => selection.includes(id))
-    .flatMap((scene) => (scene.assets ?? []).filter(({ id, field }) => id !== asset.id && (asset.kind === "logo" || !field.endsWith(".icon"))).map(({ field }) => ({ scene, field })));
+    .flatMap((scene) =>
+      (scene.assets ?? [])
+        .filter(({ id }) => id !== asset.id)
+        .filter(({ field }) => asset.kind === "logo" || !field.endsWith(".icon"))
+        .map(({ field }) => ({ scene, field })),
+    );
 }
 
 /** How many of the Assets are of each kind, and in all. */
@@ -60,15 +68,20 @@ export function listKey<T extends Asset>(key: string, rows: T[], selectedId: str
   const step = { ArrowDown: 1, ArrowUp: -1 }[key];
 
   if (step) {
-    const next = rows[index < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, index + step))];
+    // With nothing selected (-1), ↓ lands on the first row and ↑ stays there.
+    const next = rows[Math.max(0, Math.min(rows.length - 1, index + step))];
 
     return next && { select: next.id, ...(isSound(next) && { play: next }) };
   }
 
   const selected = rows[index];
 
+  if (key === " " && selected && isSound(selected)) {
+    return { play: selected };
+  }
+
   if (key === " " && selected) {
-    return isSound(selected) ? { play: selected } : {};
+    return {};
   }
 
   return undefined;
@@ -80,7 +93,13 @@ export function assetFacts(asset: Asset) {
     return `${length(asset.duration)} · −${Math.round(Math.abs(asset.loudness))} LUFS`;
   }
 
-  return [`${asset.width}×${asset.height}`, asset.format.toUpperCase(), ...(asset.transparent ? ["transparent"] : [])].join(" · ");
+  const facts = [`${asset.width}×${asset.height}`, asset.format.toUpperCase()];
+
+  if (asset.transparent) {
+    return [...facts, "transparent"].join(" · ");
+  }
+
+  return facts.join(" · ");
 }
 
 /** Under a minute in tenths of a second, else m:ss. */

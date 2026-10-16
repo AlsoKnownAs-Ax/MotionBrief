@@ -8,6 +8,13 @@ const SFX_CAPS: Record<SfxDensity, { perScene: number; period: number }> = {
   lively: { perScene: 2, period: 8 },
 };
 
+/** A density's caps as the agent is told them, such as "at most 1 per Scene and about 1 per 20 s". */
+export function sfxCapsText(sfx: Exclude<SfxDensity, "off">): string {
+  const { perScene, period } = SFX_CAPS[sfx];
+
+  return `at most ${perScene} per Scene and about 1 per ${period} s`;
+}
+
 /** A sound effect the agent placed, where it sits, and whether it fits the density's caps. */
 export type PlacedSound = { sceneId: string; index: number; asset: string; at: number; fits: boolean };
 
@@ -16,8 +23,8 @@ export type PlacedSound = { sceneId: string; index: number; asset: string; at: n
  * don't, so stepping the density down drops the extra ones and stepping it up keeps them all.
  */
 export function placedSounds(storyboard: Storyboard, duration: number, sfx: SfxDensity): PlacedSound[] {
-  const { perScene, period } = SFX_CAPS[sfx];
-  const total = perScene === 0 ? 0 : Math.max(1, Math.round(duration / period));
+  const { perScene } = SFX_CAPS[sfx];
+  const total = totalSounds(sfx, duration);
   let kept = 0;
 
   return storyboard.scenes.flatMap((scene) => {
@@ -31,4 +38,15 @@ export function placedSounds(storyboard: Storyboard, duration: number, sfx: SfxD
       return { sceneId: scene.id, index, asset, at, fits };
     });
   });
+}
+
+/** How many sound effects the whole video may play: about one per period, and at least one unless they are off. */
+function totalSounds(sfx: SfxDensity, duration: number): number {
+  const { perScene, period } = SFX_CAPS[sfx];
+
+  if (perScene === 0) {
+    return 0;
+  }
+
+  return Math.max(1, Math.round(duration / period));
 }

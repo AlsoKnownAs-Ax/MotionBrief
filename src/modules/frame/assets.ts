@@ -1,4 +1,4 @@
-import type { IndexedAsset } from "../../contract";
+import type { ImageAsset, IndexedAsset } from "../../contract";
 
 /** `<img src="asset(<id>)" ..>`, the only way Scene code shows an Asset. */
 const ASSET_IMAGE = /<img\b([^>]*?)\ssrc=["']asset\(\s*["']?([^"')\s]+)["']?\s*\)["']([^>]*)>/g;
@@ -35,11 +35,23 @@ export function placeAssets(html: string, assets: IndexedAsset[] = []): PlacedAs
     const attributes = `${before} ${after}`.replace(/\/\s*$/, "");
     const classes = /\bclass=["']([^"']*)["']/.exec(attributes)?.[1] ?? "";
     const others = attributes.replace(/\bclass=["'][^"']*["']/, "").replace(/\s+/g, " ").trim();
-    const treatment = asset.kind === "image" ? "mb-media mb-image" : `mb-media mb-logo${asset.transparent ? "" : " mb-logo-chip"}`;
-    const aspect = asset.kind === "image" ? `data-mb-aspect="${asset.width / asset.height}"` : "";
+    const { treatment, aspect } = treatmentOf(asset);
 
     return `${["<img", others, `src="${assetPath(asset)}"`, `class="${`${treatment} ${classes}`.trim()}"`, aspect].filter(Boolean).join(" ")}>`;
   });
 
   return { html: placed, unknownAssets: [...unknownAssets] };
+}
+
+/** The frame's classes for an image or logo, and the aspect an image is fitted to its slot by. */
+function treatmentOf(asset: ImageAsset): { treatment: string; aspect: string } {
+  if (asset.kind === "image") {
+    return { treatment: "mb-media mb-image", aspect: `data-mb-aspect="${asset.width / asset.height}"` };
+  }
+
+  if (asset.transparent) {
+    return { treatment: "mb-media mb-logo", aspect: "" };
+  }
+
+  return { treatment: "mb-media mb-logo mb-logo-chip", aspect: "" };
 }
