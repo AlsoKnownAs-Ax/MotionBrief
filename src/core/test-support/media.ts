@@ -37,6 +37,14 @@ export async function video(dir: string, name: string, { stretches = [{ tone: 3 
   return path;
 }
 
+/** A one-frame image of a flat color, such as `red` or the see-through `red@0.0`; the extension picks the format. */
+export async function picture(dir: string, name: string, { color = "red", width = 4, height = 2 } = {}) {
+  const path = join(dir, name);
+  await ffmpeg(["-f", "lavfi", "-i", `color=c=${color}:s=${width}x${height},format=rgba`, "-frames:v", "1", path]);
+
+  return path;
+}
+
 type Stream = { codec_type: string; sample_rate?: string; channels?: number };
 
 /** The streams of a media file, as FFprobe reports them. */

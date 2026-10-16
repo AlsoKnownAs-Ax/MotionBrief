@@ -996,6 +996,17 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     return enqueue(project, () => step(project.dir));
   }
 
+  /** Runs another module's step in the Project folder after its earlier changes, wherever the folder is by then. */
+  function inFolder<T, E>(projectId: string, step: (dir: string) => Promise<Result<T, E>>): Promise<Result<T, E | { code: "UNKNOWN_PROJECT"; projectId: string }>> {
+    const project = open.get(projectId);
+
+    if (!project) {
+      return Promise.resolve({ data: null, error: { code: "UNKNOWN_PROJECT", projectId } });
+    }
+
+    return enqueue(project, () => step(project.dir));
+  }
+
   /** The job holding each video, by `projectId format`. */
   const reservations = new Map<string, object>();
 
@@ -1101,6 +1112,7 @@ export function createProjects({ projectsDir, appDataDir, appVersion, media, tra
     appendChat: (projectId: string, format: Format, line: ChatLine) => write(projectId, (dir) => appendChat(dir, format, line)),
     /** The video's chat entries, as its log adds up. */
     readChat: (projectId: string, format: Format) => read(projectId, (dir) => readChat(dir, format)),
+    inFolder,
     whenClosing,
     admits,
     reserve,

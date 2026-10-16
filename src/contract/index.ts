@@ -842,6 +842,63 @@ const WORD_FIX_ERRORS = {
   FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
 };
 
+/** What an Asset is for: a sound effect, a music bed, an image or a logo. */
+export const AssetKindSchema = z.enum(["sfx", "music", "image", "logo"]);
+
+export const AudioFormatSchema = z.enum(["wav", "mp3", "m4a", "ogg", "opus", "flac"]);
+
+export const ImageFormatSchema = z.enum(["png", "jpeg", "webp", "svg"]);
+
+/** What the creator writes about an Asset; the agent reads the notes to decide where it goes. */
+const assetWritten = {
+  /** A user Asset's sha256. */
+  id: z.string(),
+  name: z.string(),
+  notes: z.string(),
+};
+
+/** A sound effect or music bed, with the facts measured on import. */
+export const SoundAssetSchema = z.object({
+  ...assetWritten,
+  kind: z.enum(["sfx", "music"]),
+  format: AudioFormatSchema,
+  /** Seconds. */
+  duration: z.number(),
+  /** LUFS: integrated for music, the loudest padded 400 ms for a sound effect, so a short one never reads as silence. */
+  loudness: z.number(),
+});
+
+/** An image or logo, with the facts read on import. */
+export const ImageAssetSchema = z.object({
+  ...assetWritten,
+  kind: z.enum(["image", "logo"]),
+  format: ImageFormatSchema,
+  width: z.number(),
+  height: z.number(),
+  /** Some pixels are see-through, so a logo can sit bare on the Scene. */
+  transparent: z.boolean(),
+});
+
+export const AssetSchema = z.union([SoundAssetSchema, ImageAssetSchema]);
+
+/** A name and notes as the creator writes them; notes are required for images and logos. */
+const AssetNameSchema = z.string().trim().min(1);
+
+/** Why an Asset change was refused; UI copy maps the codes to messages. */
+const ASSET_ERRORS = {
+  UNKNOWN_PROJECT,
+  /** The file isn't one of the formats its kind accepts, or can't be read as one. */
+  UNSUPPORTED_FORMAT: { data: z.object({ path: z.string(), kind: AssetKindSchema, detail: z.string() }) },
+  /** An image over the size cap. */
+  ASSET_TOO_LARGE: { data: z.object({ path: z.string(), bytes: z.number(), maxBytes: z.number() }) },
+  /** A sound over the length cap. */
+  ASSET_TOO_LONG: { data: z.object({ path: z.string(), duration: z.number(), maxSeconds: z.number() }) },
+  /** Images and logos need notes saying what they show. */
+  NOTES_REQUIRED: { data: z.object({ kind: AssetKindSchema }) },
+  UNKNOWN_ASSET: { data: z.object({ id: z.string() }) },
+  FILE_FAILED: PROJECT_ERRORS.FILE_FAILED,
+};
+
 const ProjectPathInput = z.object({ path: z.string() });
 
 const LockedPathInput = ProjectPathInput.extend({
@@ -1314,6 +1371,28 @@ export const coreContract = {
     /** Deletes everything in the cache that isn't in use right now. */
     clear: oc.output(CacheStatusSchema),
   },
+  assets: {
+    /** The open Project's Assets, optionally of one kind, by name. */
+    list: oc
+      .errors({ UNKNOWN_PROJECT, FILE_FAILED: PROJECT_ERRORS.FILE_FAILED })
+      .input(ProjectIdInput.extend({ kind: AssetKindSchema.optional() }))
+      .output(z.array(AssetSchema)),
+    /**
+     * Copies a file into the open Project as a Project Asset; the original is never read again. Importing the same
+     * bytes again gives the same Asset, with what the creator wrote this time.
+     */
+    import: oc
+      .errors(ASSET_ERRORS)
+      .input(ProjectIdInput.extend({ path: z.string(), name: AssetNameSchema, kind: AssetKindSchema, notes: z.string() }))
+      .output(AssetSchema),
+    /** Renames an Asset or rewrites its notes; notes steer only later generations. */
+    update: oc
+      .errors(ASSET_ERRORS)
+      .input(ProjectIdInput.extend({ id: z.string(), name: AssetNameSchema.optional(), notes: z.string().optional() }))
+      .output(AssetSchema),
+    /** Hides an Asset from listings and the agent; its bytes go once no Version uses them. */
+    remove: oc.errors(ASSET_ERRORS).input(ProjectIdInput.extend({ id: z.string() })),
+  },
 };
 
 export type CoreContract = typeof coreContract;
@@ -1321,6 +1400,12 @@ export type CoreClient = ContractRouterClient<CoreContract>;
 export type CoreInfo = z.infer<typeof CoreInfoSchema>;
 export type Heartbeat = z.infer<typeof HeartbeatSchema>;
 export type Format = z.infer<typeof FormatSchema>;
+export type AssetKind = z.infer<typeof AssetKindSchema>;
+export type AudioFormat = z.infer<typeof AudioFormatSchema>;
+export type ImageFormat = z.infer<typeof ImageFormatSchema>;
+export type SoundAsset = z.infer<typeof SoundAssetSchema>;
+export type ImageAsset = z.infer<typeof ImageAssetSchema>;
+export type Asset = z.infer<typeof AssetSchema>;
 export type PresetTransition = z.infer<typeof PresetTransitionSchema>;
 export type CanvasPreference = z.infer<typeof CanvasPreferenceSchema>;
 export type StoryboardRules = z.infer<typeof StoryboardRulesSchema>;

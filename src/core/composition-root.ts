@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import deps from "../../deps.json";
+import { createAssets } from "../modules/assets";
 import { createCache, DEFAULT_CACHE_CAP_BYTES } from "../modules/cache";
 import { createChecker } from "../modules/checker";
 import { createClaudeConnector, memoryConnectionStore, type ConnectionStore } from "../modules/claude";
@@ -121,10 +122,11 @@ export function createCore({
   const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
   const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
   const history = createHistory({ projects, revisions, generation, clock });
+  const assets = createAssets({ media, projects });
   const sample = sampleIn(sampleDir);
 
   return {
-    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, usage, settings, history }),
+    router: createCoreRouter({ system, checker, connector, transcriptionModel, previews, exporter, sample, projects, cache, presets, stills, generation, revisions, usage, settings, history, assets }),
     /** A window's connection closed: its Project is closed and unlocked. */
     disconnect: (connection: string) => projects.disconnect(connection),
     /** The app is quitting: every open Project is closed and unlocked. */

@@ -1,5 +1,6 @@
 import { implement, ORPCError } from "@orpc/server";
 import { coreContract, type CheckerUnavailable, type SetupResult, type VideoSource } from "../../contract";
+import type { Assets, AssetsError } from "../assets";
 import type { Cache } from "../cache";
 import type { Checker, CheckerError } from "../checker";
 import type { GenerateError, Generation, OpenVideoError, RegenerateError, RetryError, StyleChangeError } from "../generation";
@@ -36,6 +37,7 @@ export type CoreRouterDeps = {
   usage: Usage;
   settings: SettingsStore;
   history: History;
+  assets: Assets;
 };
 
 export type CoreRouter = ReturnType<typeof createCoreRouter>;
@@ -61,6 +63,7 @@ export function createCoreRouter({
   usage,
   settings,
   history,
+  assets,
 }: CoreRouterDeps) {
   const api = implement(coreContract).$context<CoreContext>();
 
@@ -266,6 +269,14 @@ export function createCoreRouter({
       status: api.cache.status.handler(() => cache.status()),
       clear: api.cache.clear.handler(() => cache.clear()),
     },
+    assets: {
+      list: api.assets.list.handler(async ({ input: { projectId, kind } }) => dataOrThrow(await assets.list(projectId, { kind }))),
+      import: api.assets.import.handler(async ({ input: { projectId, ...asset } }) => dataOrThrow(await assets.import(projectId, asset))),
+      update: api.assets.update.handler(async ({ input: { projectId, id, ...changes } }) => dataOrThrow(await assets.update(projectId, id, changes))),
+      remove: api.assets.remove.handler(async ({ input: { projectId, id } }) => {
+        dataOrThrow(await assets.remove(projectId, id));
+      }),
+    },
   });
 }
 
@@ -283,7 +294,7 @@ type CodedResult =
   | { data: unknown; error: null }
   | {
       data: null;
-      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | UsageError | SettingsError | HistoryError;
+      error: ProjectsError | PresetStoreError | GenerateError | OpenVideoError | RetryError | StyleChangeError | RegenerateError | ReviseError | UsageError | SettingsError | HistoryError | AssetsError;
     };
 
 /** A sample is drawn in the same pinned browser as the Checker, so it fails the same ways. */
