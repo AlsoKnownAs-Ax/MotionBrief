@@ -7,6 +7,7 @@ import type { AgentEvent } from "../modules/connector";
 import { FRAME_CONTRACT_VERSION } from "../modules/frame";
 import { BUNDLED_PALETTES, bundledPreset, FONT_PAIRINGS } from "../modules/style";
 import type { ReplayScript } from "./fixtures/replay-connector";
+import { voiceover } from "./test-support/media";
 import { connect, failsWith, newProject, sha256, storyboard, submitsCode, submitsReview, submitsStoryboard, unitCode, watch } from "./test-support/generation";
 
 // A restyle checks every unit it regenerates in the pinned chrome-headless-shell.
@@ -245,6 +246,22 @@ describe("classifying a style change", () => {
 
     expect(change).toBe("swap");
     expect(await newestVersion(core, video)).toBe((before ?? 0) + 1);
+  });
+
+  it("picks a Library music bed for this video alone, kept with its Version and copied into the Project", async () => {
+    const { core, dir, project, video } = connected;
+    const path = await voiceover(dir, "Bed.wav", [{ tone: 3 }]);
+    const bed = await core.assets.import({ scope: "library", path, name: "Bed", kind: "music", notes: "" });
+    const { preset: current } = await readVersion(project, (await newestVersion(core, video))!);
+    const preset = { ...current, sound: { ...current.sound!, music: bed.id } };
+
+    const changed = await core.video.changeStyle({ ...video, preset });
+    const version = (await newestVersion(core, video))!;
+
+    expect(changed).toMatchObject({ change: "swap", video: { preset } });
+    expect(changed.video?.preview?.timeline.music).toMatchObject({ name: "Bed" });
+    expect(await readVersion(project, version)).toMatchObject({ origin: "style", style: "Music", preset });
+    expect(await core.assets.list({ scope: "project", projectId: project.id })).toEqual([bed]);
   });
 });
 

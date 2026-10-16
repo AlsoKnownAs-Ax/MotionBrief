@@ -1,12 +1,13 @@
-import { SlidersHorizontalIcon, Volume2Icon } from "lucide-react";
+import { MusicIcon, SlidersHorizontalIcon, Volume2Icon } from "lucide-react";
 import { useState } from "react";
 import { Button } from "@renderer/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@renderer/components/ui/popover";
 import { cn } from "@renderer/lib/utils";
 import { Row, Segmented, Slider } from "@renderer/style/controls";
 import { usePresets } from "@renderer/style/presets";
-import type { PresetSound, SfxDensity, StylePreset, TimelineSound } from "../../../contract";
+import { NO_ASSET, type PresetSound, type SfxDensity, type StylePreset, type TimelineMusic, type TimelineSound } from "../../../contract";
 import { isGenerating, useGeneration } from "./generation";
+import { useAssets } from "./library-drawer";
 import { isRevising, useRevision } from "./revision";
 import { useStyleChange } from "./style-tab";
 
@@ -16,21 +17,33 @@ const SFX_OPTIONS: { value: SfxDensity; label: string }[] = [
   { value: "lively", label: "Lively" },
 ];
 
-/** The timeline's sound controls: each change is a swap, a re-render with no agent that saves a Version. */
-export function SoundButton() {
+/**
+ * The video's sound and a way to change it. Each change is a swap, a re-render with no agent that saves a Version, so
+ * a music bed picked here is this video's alone.
+ */
+export function useVideoSound() {
   const video = useGeneration((state) => state.video);
   const preset = useGeneration((state) => state.stored?.preset);
   const generating = useGeneration((state) => isGenerating(state.status));
   const revising = useRevision((state) => isRevising(state.status));
   const { change, isChanging, error } = useStyleChange(video);
   const sound = useSoundOf(preset);
+  const set = (changes: Partial<PresetSound>) => {
+    if (preset && sound) {
+      void change({ preset: { ...preset, sound: { ...sound, ...changes } } });
+    }
+  };
 
-  if (!preset || !sound) {
+  return { sound, set, isBusy: generating || revising || isChanging, error };
+}
+
+/** The timeline's sound controls. */
+export function SoundButton() {
+  const { sound, set, isBusy, error } = useVideoSound();
+
+  if (!sound) {
     return null;
   }
-
-  const isBusy = generating || revising || isChanging;
-  const set = (changes: Partial<PresetSound>) => void change({ preset: { ...preset, sound: { ...sound, ...changes } } });
 
   return (
     <Popover>
@@ -79,6 +92,74 @@ function LevelSlider({ id, value, min, max, onCommit }: { id: string; value: num
     <span className="contents" onPointerUp={commit} onKeyUp={commit}>
       <Slider id={id} value={draft ?? value} min={min} max={max} unit=" dB" onChange={setDraft} />
     </span>
+  );
+}
+
+/** The Music lane's height, under the Transcript. */
+export const MUSIC_LANE = 22;
+
+/** The Music lane: the bed under the whole video with its fade shape; clicking it picks another bed, or None. */
+export function MusicLane({ music, duration, px, top }: { music: TimelineMusic | null; duration: number; px: number; top: number }) {
+  const { sound, set, isBusy, error } = useVideoSound();
+  const { assets } = useAssets();
+  // The same bed can be in this Project and in the Library.
+  const beds = [...new Map(assets.filter(({ kind }) => kind === "music").map((asset) => [asset.id, asset])).values()];
+
+  if (!sound) {
+    return null;
+  }
+
+  const choices = [{ id: NO_ASSET, name: "None" }, ...beds];
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={music ? `Music: ${music.name}. Pick another bed` : "No music. Pick a bed"}
+          className="absolute left-0 flex items-center rounded-sm text-left text-[11px] text-ink-muted outline-none focus-visible:shadow-[0_0_0_1px_var(--brand)]"
+          style={{ top, height: MUSIC_LANE, width: duration * px }}
+        >
+          {music ? (
+            <span
+              title={`${music.name}: fades in, ducked under the Voiceover, fades out over the last Scene`}
+              className="flex size-full items-center gap-1 overflow-hidden bg-surface-3 px-2 whitespace-nowrap"
+              style={{ clipPath: `polygon(0 100%, ${music.fadeIn * px}px 0, calc(100% - ${music.fadeOut * px}px) 0, 100% 100%)` }}
+            >
+              <MusicIcon className="size-3 shrink-0" aria-hidden="true" />
+              {music.name}
+            </span>
+          ) : (
+            <span className="flex items-center gap-1 px-1.5">
+              <MusicIcon className="size-3" aria-hidden="true" />
+              No music
+            </span>
+          )}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="flex w-[280px] flex-col gap-2">
+        <p className="text-app-xs text-ink-muted">Music for this video. No agent run and no cost; it saves a Version.</p>
+        {error ? (
+          <p role="alert" className="text-app-xs text-status-fallback-ink">
+            {error}
+          </p>
+        ) : null}
+        <fieldset disabled={isBusy} aria-label="Music bed" className="flex max-h-[240px] flex-col gap-0.5 overflow-y-auto disabled:opacity-40">
+          {choices.map(({ id, name }) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={sound.music === id}
+              onClick={() => sound.music !== id && set({ music: id })}
+              className={cn("flex h-7 items-center rounded-md px-2 text-left text-app-sm text-ink-muted hover:text-ink", sound.music === id && "bg-surface-2 text-ink")}
+            >
+              <span className="truncate">{name}</span>
+            </button>
+          ))}
+        </fieldset>
+        {beds.length === 0 ? <p className="text-app-xs text-ink-muted">Import music in the Library to use it here.</p> : null}
+      </PopoverContent>
+    </Popover>
   );
 }
 

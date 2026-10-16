@@ -467,6 +467,19 @@ describe("a Revision", () => {
     await core.project.close({ projectId: project.id });
   }, 60_000);
 
+  it("tells the agent music isn't its to change, so a music request is pointed to the music picker", async () => {
+    const reply = "Music isn't changed by prompt: click the Music lane in the timeline to pick a bed or None.";
+    const { core, replay, project, video } = await connect({ revision: [replies(reply)] });
+    await generatedGood(project);
+
+    const { ended } = await revise(core, video, "Add some upbeat music");
+
+    expect(replay.asked[0]?.options.systemPrompt).toMatch(/music bed.*Music lane/);
+    expect(ended).toMatchObject({ state: "answered", reply });
+    expect(await versions(project)).toEqual(["1.json"]);
+    await core.project.close({ projectId: project.id });
+  }, 60_000);
+
   it(
     "regenerates the whole Canvas when anything inside it changes",
     async () => {

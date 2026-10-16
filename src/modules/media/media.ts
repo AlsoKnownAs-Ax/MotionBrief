@@ -188,7 +188,33 @@ export function createMedia({ ffmpegPath, ffprobePath }: MediaOptions) {
     return { data: null, error: null };
   }
 
-  return { probe, probeImage, loudness, momentaryMax, toWhisperAudio, silences, cut };
+  /** The first audio stream as mono 32-bit float samples at `sampleRate`, for analysing a mix. */
+  function pcm(path: string, sampleRate: number): Promise<Result<Float32Array, MediaError>> {
+    const args = ["-hide_banner", "-loglevel", "error", "-i", path, "-map", "0:a:0", "-ac", "1", "-ar", String(sampleRate), "-f", "f32le", "-"];
+
+    return new Promise((resolve) => {
+      const child = spawn(ffmpegPath, args, { windowsHide: true });
+      const chunks: Buffer[] = [];
+      let stderr = "";
+      child.stdout.on("data", (chunk: Buffer) => chunks.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+      });
+      child.on("error", (error) => resolve({ data: null, error: { code: "FFMPEG_FAILED", path, detail: String(error) } }));
+      child.on("close", (exitCode) => {
+        if (exitCode !== 0) {
+          resolve({ data: null, error: { code: "FFMPEG_FAILED", path, detail: stderr.trim() || `exited with ${exitCode}` } });
+          return;
+        }
+
+        const bytes = Buffer.concat(chunks);
+        // Copied out, so the samples start 4-byte aligned whatever offset the pooled Buffer had.
+        resolve({ data: new Float32Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength - (bytes.byteLength % 4))), error: null });
+      });
+    });
+  }
+
+  return { probe, probeImage, loudness, momentaryMax, pcm, toWhisperAudio, silences, cut };
 }
 
 /** The sample a time falls on; also how a cut chunk's start is turned back into seconds. */

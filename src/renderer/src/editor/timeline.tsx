@@ -12,7 +12,7 @@ import { SCENE_STATUS, SCENE_TYPE_LABELS, sceneName, TRANSITIONS, withNote } fro
 import { useOpenVideo } from "./open-video";
 import { formatTime, usePlayback } from "./playback";
 import { isRevising, nameOf, useRevision } from "./revision";
-import { SFX_LANE, SfxLane, SoundButton } from "./sound";
+import { MUSIC_LANE, MusicLane, SFX_LANE, SfxLane, SoundButton } from "./sound";
 
 /** How a Scene a Revision is working on reads, whatever its status in the current Version. */
 const REVISING = { label: "Revising, playing the current Version", badge: "working", badgeLabel: "Revising" } as const;
@@ -113,7 +113,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
   const canvases = useMemo(() => canvasesOf(timeline.scenes), [timeline.scenes]);
   const brackets = bracketsHeight(canvases);
   const cardTop = RULER + GAP + brackets;
-  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - SFX_LANE - 4 * GAP);
+  const cardHeight = Math.max(40, area - RULER - brackets - WORD_LANE - SFX_LANE - MUSIC_LANE - 5 * GAP);
   const wordTop = cardTop + cardHeight + GAP;
   const thumbnails = useThumbnails(preview.id);
   const fixError = useOpenVideo((state) => state.fixError);
@@ -184,6 +184,7 @@ export function Timeline({ preview, height }: { preview: Preview; height: number
           ))}
           <WordLane words={timeline.words} px={px} top={wordTop} />
           <SfxLane sounds={timeline.sounds} px={px} top={wordTop + WORD_LANE + GAP} />
+          <MusicLane music={timeline.music} duration={timeline.duration} px={px} top={wordTop + WORD_LANE + SFX_LANE + 2 * GAP} />
           <Playhead px={px} scrollRef={scrollRef} />
         </div>
       </div>

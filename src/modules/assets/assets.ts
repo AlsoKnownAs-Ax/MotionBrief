@@ -18,7 +18,7 @@ import {
   type StoryboardTranscript,
   type StylePreset,
 } from "../../contract";
-import { planSound, type SoundFile, type SoundPlan } from "../assembler";
+import { carveBed, planSound, type PlannedBed, type SoundFile, type SoundPlan } from "../assembler";
 import type { Media, MediaInfo } from "../media";
 import type { Storyboard } from "../storyboard";
 import { copyHashed, fileStep, renameRetrying, savedVersions, writeAtomically, type FileError, type Projects, type VideoContent } from "../projects";
@@ -109,6 +109,7 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
   let libraryQueue: Promise<unknown> = Promise.resolve();
   let bundled: Promise<z.infer<typeof BundledSetSchema>> | undefined;
   const voices = new Map<string, Promise<number>>();
+  const carves = new Map<string, Promise<PlannedBed>>();
 
   /** The bundled set's manifest, read once; a broken install fails loudly. */
   function bundledSet() {
@@ -427,13 +428,29 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
       return undefined;
     }
 
-    const ids = Object.values(preset.sound.transitionSfx).filter((id) => id !== NO_ASSET);
+    const ids = [...Object.values(preset.sound.transitionSfx), preset.sound.music].filter((id) => id !== NO_ASSET);
     // shortcut: the Project is the Voiceover's folder, as a source names no Project; pass the Project when sources carry one.
     const projectAssets = voiceover && join(dirname(voiceover), ASSETS_DIR);
     const found = await Promise.all([...new Set(ids)].map(async (id) => [id, await soundFile(id, projectAssets)] as const));
     const files = Object.fromEntries(found.flatMap(([id, file]) => (file ? [[id, file]] : [])));
+    const plan = planSound({ storyboard, transcript, sound: preset.sound, files, voice: await voiceLoudness(voiceover) });
 
-    return planSound({ storyboard, transcript, sound: preset.sound, files, voice: await voiceLoudness(voiceover) });
+    return plan.bed && voiceover ? { ...plan, bed: await carved(plan.bed, voiceover) } : plan;
+  }
+
+  /** The bed carved under the Voiceover, worked out once per bed and Voiceover as planned: it decodes both whole. */
+  function carved(bed: PlannedBed, voiceover: string): Promise<PlannedBed> {
+    // shortcut: kept in memory for the app run, like the Voiceover's loudness; persist it in the cache if reopening shows.
+    const key = JSON.stringify([voiceover, bed]);
+    const done =
+      carves.get(key) ??
+      Promise.all([media.pcm(voiceover, CARVE_SAMPLE_RATE), media.pcm(bed.file, CARVE_SAMPLE_RATE)]).then(([voice, music]) =>
+        // A file that can't be decoded plays uncarved rather than not at all.
+        voice.data && music.data ? carveBed(bed, voice.data, music.data, CARVE_SAMPLE_RATE) : bed,
+      );
+    carves.set(key, done);
+
+    return done;
   }
 
   async function soundFile(id: string, projectAssets: string | undefined): Promise<SoundFile | undefined> {
@@ -479,6 +496,9 @@ export type SoundSource = { storyboard: Storyboard; transcript: StoryboardTransc
 
 /** Speech's usual integrated loudness, for a video without a Voiceover. */
 const SPEECH_LUFS = -16;
+
+/** Enough to find the bands speech occupies, at half the memory of 48 kHz for a long Voiceover. */
+const CARVE_SAMPLE_RATE = 24_000;
 
 /**
  * The Assets a Version uses: every Asset reference in its Storyboard (sounds, media, `asset:` icons) and its Style
