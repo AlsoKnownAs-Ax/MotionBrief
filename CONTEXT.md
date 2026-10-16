@@ -23,7 +23,7 @@ _Avoid_: Script, captions, subtitles
 ### Look
 
 **Style Preset**:
-A named set of choices that steers how a video looks and moves, the same in either Format: a Palette, typography and other visual treatments, a Motion, a written direction, the Transitions a video may use, how readily it uses a Canvas, and how Captions look.
+A named set of choices that steers how a video looks, moves and sounds, the same in either Format: a Palette, typography and other visual treatments, a Motion, a written direction, the Transitions a video may use, how readily it uses a Canvas, how Captions look, how lively its sound effects are and which sound effects play on Transitions and element entrances, and its default music bed.
 _Avoid_: Theme, template, settings, tone
 
 **Palette**:
@@ -38,10 +38,24 @@ _Avoid_: Tone, animation style, energy
 The aspect ratio of a video: vertical (9:16) or horizontal (16:9).
 _Avoid_: Orientation, resolution, layout
 
+### Assets
+
+**Asset**:
+A sound or picture the user or the app provides for videos to use, of one kind: sound effect, music, image or logo; it carries a name and the user's notes on when to use it.
+_Avoid_: Media, file, resource, clip
+
+**Library**:
+The Assets every Project can use: those bundled with the app and those the user has added.
+_Avoid_: Asset store, collection, folder
+
+**Project Asset**:
+An Asset that belongs to one Project only, either imported into it or copied in from the Library when a Version uses it.
+_Avoid_: Local asset, attachment
+
 ### Structure
 
 **Storyboard**:
-The ordered Scenes of one video in one Format, with each Scene's Transcript span, Scene Type, content, and the words its elements appear on, plus the Transitions and Canvas groupings between them; written by the agent before any Scene is animated.
+The ordered Scenes of one video in one Format, with each Scene's Transcript span, Scene Type, content, and the words its elements appear on, the images and logos it shows, the sound effects the agent places on its words, plus the Transitions and Canvas groupings between them; written by the agent before any Scene is animated.
 _Avoid_: Plan, outline, script, timeline
 
 **Scene**:
