@@ -12,6 +12,7 @@ import { Select } from "@renderer/style/controls";
 import type { AssetKind, AssetScope } from "../../../contract";
 import { assetFacts, filterAssets, isSound, KIND_ORDER, kindCounts, listKey, type KindFilter, type LibraryAsset, type ScopeFilter } from "./library";
 import { useOpenVideo } from "./open-video";
+import { useVideoSound } from "./sound";
 import { Splitter } from "./splitter";
 
 const KINDS: Record<AssetKind, { label: string; plural: string; icon: LucideIcon }> = {
@@ -93,7 +94,7 @@ const useAudition = create<Audition>((set, get) => ({
 /* ───────────────────────── data ───────────────────────── */
 
 /** Every Asset the drawer can show: the open Project's, the Library's and the bundled set. */
-function useAssets() {
+export function useAssets() {
   const projectId = useProjectScope();
   const results = useQueries({
     queries: [
@@ -422,7 +423,9 @@ function Detail({ asset }: { asset: LibraryAsset }) {
   const save = useMutation({ mutationFn: () => core.assets.update({ ...where, id: asset.id, notes }), onSuccess: refreshAssets });
   const remove = useMutation({ mutationFn: () => core.assets.remove({ ...where, id: asset.id }), onSuccess: refreshAssets });
   const addToLibrary = useMutation({ mutationFn: () => core.assets.addToLibrary({ projectId, id: asset.id }), onSuccess: refreshAssets });
+  const music = useVideoSound();
   const error = save.error ?? remove.error ?? addToLibrary.error;
+  const isMusic = music.sound?.music === asset.id;
 
   return (
     <section aria-label="Selected Asset" className="flex w-[220px] shrink-0 flex-col gap-2 overflow-y-auto">
@@ -453,7 +456,17 @@ function Detail({ asset }: { asset: LibraryAsset }) {
           {assetErrorMessage(error)}
         </p>
       ) : null}
+      {music.error ? (
+        <p role="alert" className="text-app-xs text-status-fallback-ink">
+          {music.error}
+        </p>
+      ) : null}
       <div className="flex flex-wrap gap-2">
+        {asset.kind === "music" && music.sound ? (
+          <Button size="sm" disabled={music.isBusy || isMusic} onClick={() => music.set({ music: asset.id })}>
+            {isMusic ? "This video's music" : "Use as music"}
+          </Button>
+        ) : null}
         {asset.scope === "project" ? (
           <Button size="sm" disabled={addToLibrary.isPending || addToLibrary.isSuccess} onClick={() => addToLibrary.mutate()}>
             {addToLibrary.isSuccess ? "In your Library" : "Add to Library"}

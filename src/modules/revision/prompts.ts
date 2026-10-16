@@ -18,6 +18,7 @@ export function revisionSystem(rules: StoryboardRules, brief: PresetBrief): stri
 Read the request, then do exactly one of these:
 - If it is a question about the video, answer it in a sentence or two and hand in nothing.
 - If it is too vague to act on, ask one short clarifying question and hand in nothing.
+- If it asks to add, change, remove or level the music bed, hand in nothing: music isn't yours to change. Reply that the creator picks a bed or None by clicking the Music lane in the timeline (or "Use as music" in the Library), and sets its level with the timeline's Sound button.
 - Otherwise hand in a Storyboard patch with the ${PATCH_TOOL} tool, then end your turn.
 
 THE PATCH:

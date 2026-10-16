@@ -302,6 +302,8 @@ export const VideoTimelineSchema = z.object({
   words: z.array(z.object({ text: z.string(), start: z.number().nonnegative(), end: z.number().nonnegative() })),
   /** The sound effects the page plays, in time order: from a Transition rule of the Style Preset, or placed by the agent. */
   sounds: z.array(z.object({ start: z.number().nonnegative(), name: z.string(), source: z.enum(["transition", "agent"]) })),
+  /** The music bed under the whole video, with the seconds it fades in over and out over, or none. */
+  music: z.object({ name: z.string(), fadeIn: z.number().nonnegative(), fadeOut: z.number().nonnegative() }).nullable(),
 });
 
 /** An assembled video the player can load: `url` serves its root composition on this computer. */
@@ -1524,6 +1526,7 @@ export type VideoTimeline = z.infer<typeof VideoTimelineSchema>;
 export type TimelineScene = VideoTimeline["scenes"][number];
 export type TimelineWord = VideoTimeline["words"][number];
 export type TimelineSound = VideoTimeline["sounds"][number];
+export type TimelineMusic = NonNullable<VideoTimeline["music"]>;
 export type PresetSound = z.infer<typeof PresetSoundSchema>;
 export type SfxDensity = z.infer<typeof SfxDensitySchema>;
 export type Preview = z.infer<typeof PreviewSchema>;

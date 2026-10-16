@@ -1,10 +1,10 @@
 import { copyFile, link, mkdir, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, join } from "node:path";
-import type { Format, IndexedAsset, StoryboardTranscript, StylePreset, TimelineSound } from "../../contract";
+import type { Format, IndexedAsset, StoryboardTranscript, StylePreset, TimelineMusic, TimelineSound } from "../../contract";
 import { assetPath, fallbackCode, FRAME_SIZES, framePage, inlineIcons, placeAssets, wrapUnit, type PageAsset, type UnitCode } from "../frame";
 import { assetsOf, type Storyboard } from "../storyboard";
 import { captionsLayer } from "./captions";
-import type { PlannedSound, SoundPlan } from "./sound";
+import type { PlannedBed, PlannedSound, SoundPlan } from "./sound";
 import { planUnits, TRANSITION_SECONDS, type Unit } from "./units";
 
 export type AssembleOptions = {
@@ -34,6 +34,8 @@ export type AssembledPage = {
   units: Unit[];
   /** The sound effects the page plays, in time order. */
   sounds: TimelineSound[];
+  /** The music bed under the whole video, or none. */
+  music: TimelineMusic | null;
 };
 
 /**
@@ -71,11 +73,48 @@ export async function assemble({ dir, storyboard, transcript, preset, code, voic
   const sfx = sound?.sfx ?? [];
   await Promise.all([...new Set(sfx.map(({ file }) => file))].map((file) => placeFile(file, join(dir, sfxAsset(file)))));
 
+  const bed = sound?.bed;
+
+  if (bed) {
+    await placeFile(bed.file, join(dir, musicAsset(bed.file)));
+  }
+
   const layer = captionsWhenOn(captions, { transcript, format, preset });
 
-  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, sfx, page, captions: layer, background: preset.palette.colors.bg }));
+  await writeFile(join(dir, "index.html"), rootHtml({ width, height, duration, units, audio, sfx, bed, page, captions: layer, background: preset.palette.colors.bg }));
 
-  return { format, width, height, duration, units, sounds: sfx.map(({ start, name, source }) => ({ start, name, source })) };
+  return { format, width, height, duration, units, sounds: sfx.map(({ start, name, source }) => ({ start, name, source })), music: musicOf(bed) };
+}
+
+/** The bed as the timeline draws it: its name and fade shape. */
+function musicOf(bed: PlannedBed | undefined): TimelineMusic | null {
+  if (!bed) {
+    return null;
+  }
+
+  return { name: bed.name, fadeIn: bed.passes[0]!.fadeIn, fadeOut: bed.passes.at(-1)!.fadeOut };
+}
+
+/** The music bed takes tracks 11 and 12, alternating, so the passes of a looping bed can overlap. */
+const MUSIC_TRACK = 11;
+
+function musicAsset(file: string) {
+  return `assets/music/${basename(file)}`;
+}
+
+/** The music bed, one `<audio>` per pass through its file, each fading, carved and ducked under the Voiceover. */
+function bedTracks(bed: PlannedBed | undefined): string[] {
+  if (!bed) {
+    return [];
+  }
+
+  const chain = bed.chain ? ` data-fx-chain='${JSON.stringify(bed.chain)}'` : "";
+
+  return bed.passes.map(({ start, duration, fadeIn, fadeOut, automation }, index) => {
+    const lane = automation ? ` data-automation='${automation}'` : "";
+
+    return `<audio id="music-bed-${index}" src="${musicAsset(bed.file)}" data-start="${start}" data-duration="${duration}" data-track-index="${MUSIC_TRACK + (index % 2)}" data-volume="${bed.volume}" data-fade-in="${fadeIn}" data-fade-out="${fadeOut}"${chain}${lane}></audio>`;
+  });
 }
 
 /** Sound effects take a track each from here; Scenes use 1 and 2, the Voiceover 10. */
@@ -164,6 +203,7 @@ type RootOptions = {
   units: Unit[];
   audio?: string;
   sfx: PlannedSound[];
+  bed?: PlannedBed;
   /** What the frame puts in the head, before the root composition and at its end. */
   page: { head: string; defs: string; overlay: string };
   /** The Captions layer, when Captions are on. */
@@ -171,7 +211,7 @@ type RootOptions = {
   background: string;
 };
 
-function rootHtml({ width, height, duration, units, audio, sfx, page, captions, background }: RootOptions): string {
+function rootHtml({ width, height, duration, units, audio, sfx, bed, page, captions, background }: RootOptions): string {
   const clips = units.map(
     (unit, index) =>
       `<div id="el-${unit.id}" class="scene" data-composition-id="${unit.id}" data-composition-src="compositions/${unit.id}.html" data-start="${unit.start}" data-duration="${unit.duration}" data-track-index="${1 + (index % 2)}"></div>`,
@@ -195,7 +235,7 @@ ${captions?.css ?? ""}
 <body>
 ${page.defs}
 <div id="root" data-composition-id="main" data-start="0" data-duration="${duration}" data-width="${width}" data-height="${height}">
-${[...clips, ...voiceover, ...sfxTracks(sfx), captions?.html, page.overlay].filter(Boolean).join("\n")}
+${[...clips, ...voiceover, ...bedTracks(bed), ...sfxTracks(sfx), captions?.html, page.overlay].filter(Boolean).join("\n")}
 </div>
 <script>
 (function () {
