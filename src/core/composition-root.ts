@@ -121,8 +121,8 @@ export function createCore({
   const settings = createSettings({ appDataDir });
   const usage = createUsage({ connector, settings, projects, clock, appDataDir });
   const models = async () => (await settings.get()).models;
-  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
-  const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models });
+  const generation = createGeneration({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models, assets });
+  const revisions = createRevisions({ connector, checker, previews, stills, projects, clock, workDir: join(appDataDir, AGENT_DIR), usage, models, assets });
   const history = createHistory({ projects, revisions, generation, clock });
   const sample = sampleIn(sampleDir);
 

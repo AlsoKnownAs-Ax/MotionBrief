@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readdir, readFile, rm, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import { AssetSchema, SoundAssetSchema, SoundRoleSchema, type Asset, type AssetKind, type AudioFormat, type BundledCheck, type ImageAsset, type ImageFormat, type SoundAsset } from "../../contract";
+import { AssetSchema, SoundAssetSchema, SoundRoleSchema, type Asset, type AssetKind, type AudioFormat, type BundledCheck, type ImageAsset, type ImageFormat, type IndexedAsset, type SoundAsset } from "../../contract";
 import type { Media, MediaInfo } from "../media";
 import { copyHashed, fileStep, renameRetrying, savedVersions, writeAtomically, type FileError, type Projects, type VideoContent } from "../projects";
 
@@ -127,11 +127,33 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     }
 
     return inFolder(where, async (dir) => {
-      const { data: names } = await fileStep(dir, () => readdir(dir));
-      const sidecars = await Promise.all((names ?? []).filter((name) => name.endsWith(".json")).map((name) => readSidecar(join(dir, name))));
+      const sidecars = await sidecarsIn(dir);
 
-      return { data: ofKind(sidecars.flatMap((sidecar) => (sidecar && !sidecar.removed ? [sidecar.asset] : []))), error: null };
+      return { data: ofKind(sidecars.flatMap((sidecar) => (sidecar.removed ? [] : [sidecar.asset]))), error: null };
     });
+  }
+
+  /**
+   * The Asset index a video of the Project draws on: its Project Assets, removed ones marked so they still play but
+   * stay hidden from the agent, then the Library's and the bundled set's, each with its file. A Library Asset already
+   * copied into the Project is listed once, from the Project.
+   */
+  async function index(projectId: string): Promise<Result<IndexedAsset[], AssetsError>> {
+    const { data: inProject, error } = await projects.inFolder<IndexedAsset[], AssetsError>(projectId, async (projectDir) => ({
+      data: indexed(join(projectDir, ASSETS_DIR), await sidecarsIn(join(projectDir, ASSETS_DIR))),
+      error: null,
+    }));
+
+    if (error) {
+      return { data: null, error };
+    }
+
+    const library = indexed(libraryDir, (await inLibrary(() => sidecarsIn(libraryDir))).filter(({ removed }) => !removed));
+    const { sounds } = await bundledSet();
+    const shipped = sounds.map(({ slug, ...sound }) => ({ id: `${BUNDLED_PREFIX}${slug}`, ...sound, file: join(bundledDir, `${slug}.${sound.format}`) }));
+    const all = [...inProject, ...library, ...shipped];
+
+    return { data: all.filter((asset, position) => all.findIndex(({ id }) => id === asset.id) === position), error: null };
   }
 
   /** Validates and measures the file, then copies it into the scope's folder; the original is never read again. */
@@ -363,7 +385,7 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     return { data: { kind, format, width: image.width, height: image.height, transparent: image.transparent }, error: null };
   }
 
-  return { list, import: importAsset, update, remove, addToLibrary, libraryFolder, beforeVersionSave, bundledCheck };
+  return { list, index, import: importAsset, update, remove, addToLibrary, libraryFolder, beforeVersionSave, bundledCheck };
 }
 
 /**
@@ -418,6 +440,19 @@ async function readListed(dir: string, id: string): Promise<Sidecar | undefined>
   const sidecar = await readSidecar(join(dir, `${id}.json`));
 
   return sidecar?.removed ? undefined : sidecar;
+}
+
+/** The sidecars of an Asset folder; none when it doesn't exist yet. */
+async function sidecarsIn(dir: string): Promise<Sidecar[]> {
+  const { data: names } = await fileStep(dir, () => readdir(dir));
+  const sidecars = await Promise.all((names ?? []).filter((name) => name.endsWith(".json")).map((name) => readSidecar(join(dir, name))));
+
+  return sidecars.filter((sidecar) => sidecar !== undefined);
+}
+
+/** A folder's Assets as an index holds them: with their files, and marked when removed. */
+function indexed(dir: string, sidecars: Sidecar[]): IndexedAsset[] {
+  return sidecars.map(({ asset, removed }) => ({ ...asset, file: join(dir, `${asset.id}.${asset.format}`), ...(removed && { removed }) }));
 }
 
 /** A sidecar that isn't a valid Asset is left alone and not listed. */

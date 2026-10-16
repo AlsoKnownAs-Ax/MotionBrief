@@ -36,11 +36,11 @@ export type UnitTiming = {
 export type PageAsset = { path: string; from?: string; content?: string };
 
 /**
- * What the root page loads before any unit: GSAP, the anchor table and the Preset's Motion, the
- * `MB.*` runtime and the Preset's fonts; and what the frame puts around the root composition for
+ * What the root page loads before any unit: GSAP, the anchor table, the Preset's Motion and where the
+ * page holds each Asset, the `MB.*` runtime and the Preset's fonts; and what the frame puts around the root composition for
  * the Preset's treatments (`defs` before it, `overlay` at its end).
  */
-export async function framePage({ format, units, style }: { format: Format; units: UnitTiming[]; style: FrameStyle }) {
+export async function framePage({ format, units, style, assets: media = {} }: { format: Format; units: UnitTiming[]; style: FrameStyle; assets?: Record<string, string> }) {
   const { width, height, safe } = FRAME_SIZES[format];
   const fonts = await bundledFonts(style.typography);
   const treatments = rootTreatments(style.treatments);
@@ -54,6 +54,8 @@ export async function framePage({ format, units, style }: { format: Format; unit
     sceneLead: SCENE_LEAD_SECONDS,
     connector: { curve: style.treatments.connector.style === "curved", sketchy: style.treatments.line === "sketchy" },
     units: Object.fromEntries(units.map(({ id, ...timing }) => [id, timing])),
+    /** Asset id → the page's copy, for MB.asset. */
+    assets: media,
   };
   const assets: PageAsset[] = [
     { path: "assets/gsap.min.js", from: require.resolve("gsap/dist/gsap.min.js") },
@@ -96,6 +98,7 @@ export function wrapUnit({ unit, format, style, code }: { unit: UnitTiming; form
   const owned = [
     { adds: Object.keys(unit.sceneStarts).length > 1, js: `  MB.camera(tl, "${unit.id}");` },
     { adds: unit.carryIn !== undefined, js: `  MB.carry(tl, "${unit.id}");` },
+    { adds: code.html.includes("data-mb-aspect"), js: `  MB.fit(tl, "${unit.id}");` },
   ]
     .filter(({ adds }) => adds)
     .map(({ js }) => js);
@@ -115,6 +118,7 @@ ${withDeliberateLayering(code.html)}
 (function () {
   const S = MB.scene("${unit.id}");
   const at = S.at;
+  const asset = MB.asset;
   const tl = gsap.timeline({ paused: true });
 ${code.js}
 ${owned.join("\n")}

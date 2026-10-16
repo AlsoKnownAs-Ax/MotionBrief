@@ -14,6 +14,7 @@ import type {
   VideoRef,
   WordFixOffer,
 } from "../../contract";
+import type { Assets } from "../assets";
 import type { Checker } from "../checker";
 import type { Connector } from "../connector";
 import { endsRun, inParallel, reviewUnit, shownCaptions, writeUnitCode, type UnitOutcome } from "../generation";
@@ -52,6 +53,8 @@ export type RevisionsOptions = {
   usage: Usage;
   /** The model per agent role Settings choose; read as a Revision starts, so a change applies to the next one. */
   models?: () => Promise<RoleModels>;
+  /** The Asset index a Project's Storyboards draw on. None, they may name no Asset. */
+  assets?: Pick<Assets, "index">;
 };
 
 export type ReviseError =
@@ -93,9 +96,16 @@ type Regenerated = { code?: UnitCode; flag?: Flag };
  * (the rebuild rule), re-renders and checks what only moved in time, regenerates what changed, and saves the result
  * as the next Version. The current Version plays on meanwhile; Stop, or any failure, leaves it as it was.
  */
-export function createRevisions({ checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS }: RevisionsOptions) {
+export function createRevisions({ checker, previews, stills, projects, clock, workDir, usage, models = async () => DEFAULT_MODELS, assets }: RevisionsOptions) {
   const videos = new Map<string, Store>();
   const running = new Map<string, Job>();
+
+  /** The Project's Asset index; one that can't be read is empty. */
+  async function indexOf(projectId: string) {
+    const { data: index } = (await assets?.index(projectId)) ?? { data: [] };
+
+    return index ?? [];
+  }
 
   function storeOf({ projectId, format }: VideoRef) {
     const key = `${projectId} ${format}`;
@@ -291,7 +301,8 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
     const { preset, captions: writtenFor } = current.version;
     const { captions } = current;
     const brief = presetBrief(preset, ref.format);
-    const rulesFor = (withCaptions: boolean) => storyboardRules(preset, { format: ref.format, captions: withCaptions });
+    const index = await indexOf(ref.projectId);
+    const rulesFor = (withCaptions: boolean) => storyboardRules(preset, { format: ref.format, captions: withCaptions }, index);
     const { data: outcome, error } = await runRevisionAgent({
       connector: run.usage.connector("revision"),
       workDir,
@@ -355,7 +366,7 @@ export function createRevisions({ checker, previews, stills, projects, clock, wo
   async function rebuild(run: Run, { storyboard, plans, writtenFor, captions, summary, preset }: Rebuilt) {
     const { ref, transcript, current, job } = run;
     const signal = job.controller.signal;
-    const rules = storyboardRules(preset, { format: ref.format, captions: writtenFor });
+    const rules = storyboardRules(preset, { format: ref.format, captions: writtenFor }, await indexOf(ref.projectId));
     const brief = presetBrief(preset, ref.format);
     const working = plans.filter(({ rebuild: need }) => need !== "keep");
     const progress = new Map<string, RevisionUnit>(working.map(({ unit, rebuild: need }) => [unit.id, { id: unit.id, rebuild: rebuildOf(need), status: "queued", attempts: 0 }]));

@@ -14,7 +14,8 @@ export const SKETCH_FILTER = "mb-sketch";
 /**
  * The frame's CSS for one unit: the tokens as CSS variables on its root, the safe zone, and the
  * frame-owned classes Scene code builds with (`mb-safe`, `mb-card`, `mb-display`, `mb-title`,
- * `mb-body`, `mb-label`, `mb-mono`, `mb-accent`, `mb-icon`, `mb-wire`), drawn in the Preset's treatments.
+ * `mb-body`, `mb-label`, `mb-mono`, `mb-accent`, `mb-icon`, `mb-wire`, and `mb-media` on Asset images), drawn in the
+ * Preset's treatments.
  */
 export function frameCss(format: Format, { palette, typography, treatments }: FrameStyle): string {
   const { width, height, safe } = FRAME_SIZES[format];
@@ -45,6 +46,9 @@ ${SURFACES[treatments.surface]}
 .mb-accent { color: var(--accent); }
 .mb-icon { display: block; width: 1em; height: 1em; flex: none; }
 ${ICONS[treatments.icons]}
+.mb-media { display: block; object-fit: contain; }
+.mb-image { background: var(--surface); border-radius: var(--radius); ${MEDIA_FRAMES[treatments.surface]} }
+.mb-logo-chip { background: var(--surface); border-radius: var(--radius); padding: 8px; }
 .mb-wire { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
 .mb-wire path { fill: none; stroke: var(--line); stroke-width: var(--wire-w); stroke-linecap: round; stroke-linejoin: round; }
 ${sketchyCss(treatments)}`;
@@ -67,6 +71,13 @@ const SURFACES = {
   outlined: ".mb-card { position: relative; background: var(--surface); border: var(--border-w) solid var(--line); border-radius: var(--radius); }",
   elevated:
     ".mb-card { position: relative; background: var(--surface); border: var(--border-w) solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }",
+} satisfies Record<Treatments["surface"], string>;
+
+/** An image is framed like a card: a border when the surface is outlined, a border and shadow when elevated. */
+const MEDIA_FRAMES = {
+  flat: "",
+  outlined: "border: var(--border-w) solid var(--line);",
+  elevated: "border: var(--border-w) solid var(--line); box-shadow: var(--shadow);",
 } satisfies Record<Treatments["surface"], string>;
 
 /** Chips wrap the icon, so an icon takes the same 1em box in every icon treatment. */

@@ -98,6 +98,7 @@ export function createPreviews({ rootDir, chromePath }: PreviewsOptions) {
         code: source.code,
         voiceover: source.voiceover,
         captions: source.captions ?? source.rules.captions,
+        assets: source.rules.assets,
       });
 
       return { dir, page: assembled, timeline: timelineOf(storyboard, source.transcript, assembled, source.code), source };

@@ -23,6 +23,7 @@ ${elements.map((element, index) => lineHtml(scene, element, index === 0)).join("
     css: `.fb-stack { display: flex; flex-flow: column wrap; justify-content: center; align-content: center; gap: 24px 64px; }
 .fb-line { max-width: 100%; color: var(--ink); }
 .fb-code { padding: 28px 36px; margin: 0; white-space: pre; line-height: 1.4; }
+.fb-media { width: min(100%, 640px); height: 360px; flex: none; }
 .fb-world, .fb-region { position: absolute; left: 0; top: 0; }`,
     html: unitHtml(unit.id, scenes, stacks, format),
     js: blocks
@@ -80,6 +81,10 @@ function lineHtml(scene: Scene, element: SceneElement, leads: boolean): string {
 
   if (Array.isArray(lines) && lines.every((line) => typeof line === "string")) {
     return `<pre id="${id}" class="mb-card mb-mono fb-code">${escape(lines.join("\n"))}</pre>`;
+  }
+
+  if (typeof element.value.asset === "string") {
+    return `<img id="${id}" class="fb-media" src="asset(${element.value.asset})">`;
   }
 
   return `<div id="${id}" class="${lineClass(leads)}">${escape(textOf(scene, element.value))}</div>`;

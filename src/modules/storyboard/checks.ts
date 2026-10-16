@@ -1,5 +1,5 @@
-import type { Format, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
-import { copyOf, elementsOf } from "./content";
+import type { AssetKind, Format, PresetTransition, StoryboardIssue, StoryboardRules, StoryboardTranscript } from "../../contract";
+import { assetsOf, copyOf, elementsOf, type SceneAsset } from "./content";
 import type { Scene, SceneType, Storyboard, Transition, TransitionType } from "./schema";
 import { sceneTimings } from "./timing";
 
@@ -449,6 +449,41 @@ function checkCaptions({ storyboard, rules }: CheckInput): StoryboardIssue[] {
   );
 }
 
+/** The Asset kinds each place in a Scene shows. */
+const ASSET_SLOTS: Record<SceneAsset["slot"], { kinds: AssetKind[]; says: string }> = {
+  icon: { kinds: ["logo"], says: "An icon slot shows only a logo; put an image in a Scene's media" },
+  media: { kinds: ["image", "logo"], says: "Media shows only an image or a logo" },
+};
+
+/** Every Asset a Scene names is in the Asset index, and of a kind its place shows. */
+function checkAssets({ storyboard, rules }: CheckInput): StoryboardIssue[] {
+  const index = new Map((rules.assets ?? []).map((asset) => [asset.id, asset]));
+
+  return storyboard.scenes.flatMap((scene) =>
+    issuesFor(
+      scene.id,
+      assetsOf(scene).flatMap(({ id, slot, field }) => {
+        const kind = index.get(id)?.kind;
+
+        return [
+          {
+            broken: kind === undefined,
+            code: "ASSET",
+            field,
+            message: `There is no Asset "${id}"; use an id from the Asset index.`,
+          },
+          {
+            broken: kind !== undefined && !ASSET_SLOTS[slot].kinds.includes(kind),
+            code: "ASSET",
+            field,
+            message: `"${id}" is ${kind === "image" ? "an" : "a"} ${kind}. ${ASSET_SLOTS[slot].says}.`,
+          },
+        ] satisfies SceneRule[];
+      }),
+    ),
+  );
+}
+
 /** The rules a Storyboard must meet beyond its schema, in the order their issues are reported. */
 export const CHECKS: Check[] = [
   checkFormat,
@@ -461,4 +496,5 @@ export const CHECKS: Check[] = [
   checkTransitions,
   checkCanvases,
   checkCaptions,
+  checkAssets,
 ];

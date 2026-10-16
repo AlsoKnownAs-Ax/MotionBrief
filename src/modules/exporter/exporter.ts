@@ -82,6 +82,7 @@ export function createExporter({ workDir, chromePath, ffmpegPath, ffprobePath, l
         code: source.code,
         voiceover: source.voiceover,
         captions: source.captions ?? source.rules.captions,
+        assets: source.rules.assets,
       });
 
       const outcome = yield* renderMp4({ pageDir, output, chromePath, ffmpegPath, ffprobePath, signal });

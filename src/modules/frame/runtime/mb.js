@@ -311,6 +311,37 @@
       };
     },
 
+    /** Where the page holds an Asset's file, for an image's src; Scene code never writes Asset paths. */
+    asset: function (id) {
+      var path = (data().assets || {})[id];
+
+      if (!path) {
+        throw new Error("MB: no Asset " + id);
+      }
+
+      return path;
+    },
+
+    /**
+     * Fits each Asset image of a unit to its slot as the unit first plays, once its layout is final: cover when the
+     * slot's aspect is within about 15% of the image's, contain otherwise, so it is never stretched or badly cropped.
+     */
+    fit: function (tl, unitId) {
+      all('[data-composition-id="' + unitId + '"] img[data-mb-aspect]').forEach(function (img) {
+        tl.set(
+          img,
+          {
+            objectFit: function () {
+              var ratio = img.clientWidth / img.clientHeight / Number(img.getAttribute("data-mb-aspect"));
+
+              return Math.abs(ratio - 1) <= 0.15 ? "cover" : "contain";
+            },
+          },
+          0,
+        );
+      });
+    },
+
     /**
      * An entrance on the spoken word: it starts 50 ms early with the Motion's ease-out. Styles: rise,
      * drop, left, right, pop, fade, blur, wipe; the Motion picks one when none is given.

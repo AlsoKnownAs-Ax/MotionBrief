@@ -45,6 +45,33 @@ export function copyOf(scene: Scene): SceneCopy[] {
   return copy;
 }
 
+/** An Asset a Scene shows: a logo in an icon slot, or an image or logo as media. */
+export type SceneAsset = {
+  id: string;
+  slot: "icon" | "media";
+  /** Path of the reference within the Scene, such as `content.items[0].icon`. */
+  field: string;
+};
+
+const ASSET_ICON = "asset:";
+
+/** Every Asset a Scene's content shows, in content order. */
+export function assetsOf(scene: Scene): SceneAsset[] {
+  const assets: SceneAsset[] = [];
+
+  visit(scene.content, "content", (value, field) => {
+    if (typeof value.icon === "string" && value.icon.startsWith(ASSET_ICON)) {
+      assets.push({ id: value.icon.slice(ASSET_ICON.length), slot: "icon", field: `${field}.icon` });
+    }
+
+    if (typeof value.asset === "string") {
+      assets.push({ id: value.asset, slot: "media", field: `${field}.asset` });
+    }
+  });
+
+  return assets;
+}
+
 /** Calls `onObject` for every object nested in `value`, with its field path. */
 function visit(value: unknown, field: string, onObject: (value: Record<string, unknown>, field: string) => void) {
   if (Array.isArray(value)) {

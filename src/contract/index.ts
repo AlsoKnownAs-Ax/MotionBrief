@@ -149,12 +149,14 @@ export const TransitionTypeSchema = z.enum([
   "camera",
 ]);
 
-/** What a Storyboard is checked against: its video's Format and Captions, and the Style Preset's choices. */
+/** What a Storyboard is checked against: its video's Format and Captions, the Style Preset's choices and the Assets it may use. */
 export const StoryboardRulesSchema = z.object({
   format: FormatSchema,
   captions: z.boolean(),
   transitions: z.array(PresetTransitionSchema),
   canvas: CanvasPreferenceSchema,
+  /** The Asset index: every Asset a Storyboard may name, with its file for the page. Absent, it may name none. */
+  assets: z.array(z.lazy(() => IndexedAssetSchema)).optional(),
 });
 
 /** The part of a Transcript a Storyboard is checked against. Word references are indexes into `words`. */
@@ -179,6 +181,8 @@ export const StoryboardIssueSchema = z.object({
     "CAPTIONS",
     /** A Revision's patch changes Scenes outside the ones the creator selected. */
     "SCOPE",
+    /** An Asset that isn't in the index, or of a kind that doesn't belong where it is placed. */
+    "ASSET",
   ]),
   /** The Scene at fault; absent when the issue is with the Storyboard as a whole. */
   sceneId: z.string().optional(),
@@ -195,9 +199,9 @@ export const CheckFindingSchema = z.object({
   unit: z.string().optional(),
   /**
    * `hyperframes lint`, `hyperframes check`, the anchor contract, the token lint, icon inlining, or
-   * the Checker's own rules (an icon or image over text, a texture overlay too opaque).
+   * the Checker's own rules (an icon or image over text, a texture overlay too opaque), or how Scene code shows Assets.
    */
-  source: z.enum(["lint", "check", "contract", "tokens", "icons", "rules"]),
+  source: z.enum(["lint", "check", "contract", "tokens", "icons", "rules", "assets"]),
   code: z.string(),
   message: z.string(),
   selector: z.string().optional(),
@@ -886,6 +890,12 @@ export const ImageAssetSchema = z.object({
 
 export const AssetSchema = z.union([SoundAssetSchema, ImageAssetSchema]);
 
+/**
+ * An Asset in a video's Asset index: where its file is, and whether it is a Project Asset removed while a Version
+ * still uses it, which still plays but is hidden from the agent.
+ */
+export const IndexedAssetSchema = z.intersection(AssetSchema, z.object({ file: z.string(), removed: z.boolean().optional() }));
+
 /** A name and notes as the creator writes them; notes are required for images and logos. */
 const AssetNameSchema = z.string().trim().min(1);
 
@@ -1440,6 +1450,7 @@ export type ImageFormat = z.infer<typeof ImageFormatSchema>;
 export type SoundAsset = z.infer<typeof SoundAssetSchema>;
 export type ImageAsset = z.infer<typeof ImageAssetSchema>;
 export type Asset = z.infer<typeof AssetSchema>;
+export type IndexedAsset = z.infer<typeof IndexedAssetSchema>;
 export type AssetScope = z.infer<typeof AssetScopeSchema>;
 export type SoundRole = z.infer<typeof SoundRoleSchema>;
 export type BundledCheck = z.infer<typeof BundledCheckSchema>;

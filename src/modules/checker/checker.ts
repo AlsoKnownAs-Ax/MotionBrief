@@ -1,10 +1,11 @@
 import { access, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { CheckFinding, StoryboardIssue, StoryboardRules, StoryboardTranscript, StylePreset, UnitCode } from "../../contract";
+import type { CheckFinding, IndexedAsset, StoryboardIssue, StoryboardRules, StoryboardTranscript, StylePreset, UnitCode } from "../../contract";
 import { assemble, planUnits, type AssembledPage } from "../assembler";
 import { FRAME_CONTRACT_VERSION, inlineIcons } from "../frame";
-import { validateStoryboard } from "../storyboard";
+import { assetsOf, validateStoryboard } from "../storyboard";
+import { assetLint } from "./asset-lint";
 import { checkContract } from "./contract";
 import { runHyperframesCheck, type HyperframesError } from "./hyperframes";
 import { openFramePage, type FramePageError } from "./page";
@@ -74,7 +75,7 @@ export function createChecker({ chromePath }: CheckerOptions) {
 
     try {
       // With Captions on, they are checked as the viewer sees them: over the Scenes.
-      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, preset, code, captions: rules.captions });
+      const { data: assembled, error: assembleError } = await assembleIn(dir, { storyboard, transcript, preset, code, captions: rules.captions, assets: rules.assets });
 
       if (assembleError) {
         return { data: null, error: assembleError };
@@ -86,7 +87,9 @@ export function createChecker({ chromePath }: CheckerOptions) {
         return { data: null, error: pageError };
       }
 
-      const codeFindings = await Promise.all(Object.entries(code).map(([unit, unitCode]) => checkCode(unit, unitCode)));
+      const shown = new Set(storyboard.scenes.flatMap((scene) => assetsOf(scene).map(({ id }) => id)));
+      const assets = (rules.assets ?? []).filter(({ id }) => shown.has(id));
+      const codeFindings = await Promise.all(Object.entries(code).map(([unit, unitCode]) => checkCode(unit, unitCode, assets)));
 
       return { data: { frameContractVersion: FRAME_CONTRACT_VERSION, findings: [...codeFindings.flat(), ...pageFindings] }, error: null };
     } finally {
@@ -129,12 +132,13 @@ export function createChecker({ chromePath }: CheckerOptions) {
   return { check };
 }
 
-/** What can be checked in the code alone: tokens and icon names. */
-async function checkCode(unit: string, code: UnitCode): Promise<CheckFinding[]> {
+/** What can be checked in the code alone: tokens, icon names and how it shows Assets. */
+async function checkCode(unit: string, code: UnitCode, assets: IndexedAsset[]): Promise<CheckFinding[]> {
   const { unknownIcons } = await inlineIcons(code.html);
 
   return [
     ...tokenLint(unit, code),
+    ...(await assetLint(unit, code, assets)),
     ...unknownIcons.map((name) => ({
       unit,
       source: "icons" as const,
