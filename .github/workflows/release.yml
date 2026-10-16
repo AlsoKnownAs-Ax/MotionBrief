@@ -21,6 +21,7 @@ jobs:
   version:
     name: Read the version
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     outputs:
       version: ${{ steps.tag.outputs.version }}
       prerelease: ${{ steps.tag.outputs.prerelease }}
@@ -48,6 +49,7 @@ jobs:
             runner: windows-2025
             unpacked: dist/win-unpacked/resources
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
@@ -105,6 +107,7 @@ jobs:
     name: Draft the release
     needs: [version, package]
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:
