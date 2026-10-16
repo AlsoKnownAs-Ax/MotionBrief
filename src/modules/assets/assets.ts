@@ -259,6 +259,21 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     });
   }
 
+  /** The file of a listed Asset, for the Library to audition or show. */
+  async function file(where: Scope, id: string): Promise<Result<string, AssetsError>> {
+    if (where.scope === "bundled") {
+      const sound = (await bundledSet()).sounds.find(({ slug }) => `${BUNDLED_PREFIX}${slug}` === id);
+
+      return sound ? { data: join(bundledDir, `${sound.slug}.${sound.format}`), error: null } : { data: null, error: { code: "UNKNOWN_ASSET", id } };
+    }
+
+    return inFolder(where, async (dir): Promise<Result<string, AssetsError>> => {
+      const sidecar = await readListed(dir, id);
+
+      return sidecar ? { data: join(dir, `${id}.${sidecar.asset.format}`), error: null } : { data: null, error: { code: "UNKNOWN_ASSET", id } };
+    });
+  }
+
   /** The Library folder, made if it doesn't exist yet, so it can be shown. */
   async function libraryFolder(): Promise<Result<string, FileError>> {
     const { error } = await fileStep(libraryDir, () => mkdir(libraryDir, { recursive: true }));
@@ -433,7 +448,7 @@ export function createAssets({ media, projects, libraryDir, bundledDir }: Assets
     return measured;
   }
 
-  return { list, import: importAsset, update, remove, addToLibrary, libraryFolder, beforeVersionSave, bundledCheck, soundPlan };
+  return { list, import: importAsset, update, remove, addToLibrary, file, libraryFolder, beforeVersionSave, bundledCheck, soundPlan };
 }
 
 /** What a video's sound is planned from. */

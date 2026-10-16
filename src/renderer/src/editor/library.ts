@@ -1,0 +1,79 @@
+import type { Asset, AssetKind, AssetScope, SoundAsset } from "../../../contract";
+
+/** An Asset as the Library drawer lists it: with where it lives. */
+export type LibraryAsset = Asset & { scope: AssetScope };
+
+export type KindFilter = AssetKind | "all";
+
+export type ScopeFilter = AssetScope | "all";
+
+export type LibraryFilter = { kind: KindFilter; scope: ScopeFilter; query: string };
+
+export const KIND_ORDER: AssetKind[] = ["sfx", "music", "image", "logo"];
+
+export function isSound(asset: Asset): asset is SoundAsset {
+  return asset.kind === "sfx" || asset.kind === "music";
+}
+
+/** The Assets of the kind and source picked whose name or notes hold every word searched for. */
+export function filterAssets<T extends LibraryAsset>(assets: T[], { kind, scope, query }: LibraryFilter): T[] {
+  return assets.filter((asset) => (kind === "all" || asset.kind === kind) && (scope === "all" || asset.scope === scope) && matches(asset, query));
+}
+
+export function matches(asset: Asset, query: string) {
+  const text = `${asset.name} ${asset.notes}`.toLowerCase();
+
+  return query
+    .toLowerCase()
+    .split(/\s+/)
+    .every((word) => text.includes(word));
+}
+
+/** How many of the Assets are of each kind, and in all. */
+export function kindCounts(assets: Asset[]): Record<KindFilter, number> {
+  const counts = { all: assets.length, sfx: 0, music: 0, image: 0, logo: 0 };
+  assets.forEach(({ kind }) => (counts[kind] += 1));
+
+  return counts;
+}
+
+/**
+ * What a key does in the list: ↑/↓ move the selection and audition each sound landed on, Space replays the selected
+ * one. Undefined for a key the list leaves alone.
+ */
+export function listKey<T extends Asset>(key: string, rows: T[], selectedId: string | undefined): { select?: string; play?: T } | undefined {
+  const index = rows.findIndex(({ id }) => id === selectedId);
+  const step = { ArrowDown: 1, ArrowUp: -1 }[key];
+
+  if (step) {
+    const next = rows[index < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, index + step))];
+
+    return next && { select: next.id, ...(isSound(next) && { play: next }) };
+  }
+
+  const selected = rows[index];
+
+  if (key === " " && selected) {
+    return isSound(selected) ? { play: selected } : {};
+  }
+
+  return undefined;
+}
+
+/** A line of what was measured: a sound's length and loudness, an image's size, format and transparency. */
+export function assetFacts(asset: Asset) {
+  if (isSound(asset)) {
+    return `${length(asset.duration)} · −${Math.round(Math.abs(asset.loudness))} LUFS`;
+  }
+
+  return [`${asset.width}×${asset.height}`, asset.format.toUpperCase(), ...(asset.transparent ? ["transparent"] : [])].join(" · ");
+}
+
+/** Under a minute in tenths of a second, else m:ss. */
+function length(seconds: number) {
+  if (seconds < 60) {
+    return `${Math.round(seconds * 10) / 10} s`;
+  }
+
+  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+}
